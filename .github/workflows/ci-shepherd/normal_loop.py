@@ -591,9 +591,6 @@ def prepare(api, run, now, feed=None):
         if tracking["attention"] is not None:
             row["candidateAttention"] = tracking["attention"]
         api.persist()
-        if eligible(observed_items[item]):
-            candidate_fixes.publish(api, record)
-        observed_items[item] = source(api, record["control"]["issue"]["number"])
         if saved and saved["state"] == "sent":
             try:
                 task = execution.refresh(api, record, record["assignments"][-1])
@@ -604,6 +601,14 @@ def prepare(api, run, now, feed=None):
             row["chain"] = saved["imported_chain_id"]
         worklist.append(row)
     api.persist()
+    # Sibling retry items share an issue. Publish only after their inventories
+    # are refreshed, then capture source snapshots after all notice writes.
+    for record in api.ledger.get("workItems", []):
+        if record["id"] in observed_items and eligible(observed_items[record["id"]]):
+            candidate_fixes.publish(api, record)
+    for record in api.ledger.get("workItems", []):
+        if record["id"] in observed_items:
+            observed_items[record["id"]] = source(api, record["control"]["issue"]["number"])
     packets = []
     for _, observed, _ in incoming.values():
         if not any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):

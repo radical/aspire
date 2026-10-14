@@ -985,14 +985,23 @@ an existing cloud task.
 
 With current explicit issue-comment permission, the normal loop posts a concise
 notice on the **source issue** listing all tracked PRs and their ownership/state.
+Work items and explicit retries for the same immutable issue identity share one
+combined notice. The first currently authorized, unpaused item owns the send
+intent; ownership of each PR remains separate. The issue-bound marker and shared
+notice history prevent duplicate publication when that publisher changes.
 The notice has its own canonical send intent, independent of worker results and
 original intake freshness; it does not rewrite assignment evidence or relax
 repair/import guards. Identical relationships and states do not post again
 (head-only pushes are not notification-worthy). Lost receipts are reconciled
 against exact, operator-owned comment bodies before any new version is sent.
 Zero or ambiguous matches require human attention rather than blindly replaying
-a POST. Notice history is bounded to ten versions. A notice-induced issue
+a POST, including uncertain legacy notices on sibling items. Notice history is
+bounded to ten versions across the shared issue. A notice-induced issue
 timestamp change does not authorize bypassing existing source-freshness checks.
+Normal sweeps refresh all inventories before publication and capture all shared
+source snapshots after notice writes, so a retry's notice cannot invalidate an
+earlier item's follow-up snapshot in the same run. Subsequent source changes
+still fail the original strict freshness checks.
 
 Manual cloud work items without a settled normal intake are observed in normal
 sweeps, including candidate notices when authorized, but never dispatched or

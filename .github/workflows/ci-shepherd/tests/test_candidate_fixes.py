@@ -218,6 +218,67 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual("delivered", self.api.saved["workItems"][0]["candidate_fixes"]["notices"][0]["state"])
         self.assertIn("observation only", self.posted[0]["body"])
 
+    def sibling(self):
+        record = deepcopy(self.record)
+        record["id"] = record["control"]["id"] = "retry-item"
+        record["assignments"] = []
+        record["candidate_fixes"]["notices"] = []
+        self.api.ledger["workItems"].append(record)
+        self.api.persist()
+        return record
+
+    def test_sibling_inventory_is_combined_once_with_ownership_preserved(self):
+        self.pull(7)
+        self.pull(8)
+        self.pull(9)
+        self.refresh()
+        self.record["candidate_fixes"]["pulls"][0]["own"] = True
+        sibling = self.sibling()
+        sibling["candidate_fixes"]["pulls"][0]["own"] = False
+        sibling["candidate_fixes"]["pulls"][1]["own"] = True
+        self.api.observe_candidates = lambda record: deepcopy(record["candidate_fixes"])
+        self.api.persist()
+        for _ in range(2):
+            candidates.publish(self.api, sibling)
+            candidates.publish(self.api, self.record)
+        self.assertEqual(1, len(self.posted))
+        self.assertEqual(candidates.PREFIX + "\n"
+                         "<!-- ci-shepherd:candidates:radical/aspire:900:ISSUE900 -->\n"
+                         "- [#7](https://github.com/radical/aspire/pull/7): open, our task.\n"
+                         "- [#8](https://github.com/radical/aspire/pull/8): open, our task.\n"
+                         "- [#9](https://github.com/radical/aspire/pull/9): open, observation only.\n"
+                         "No additional Copilot repair will be launched. Already-started work is not cancelled.\n"
+                         "External PR branches are not managed by Shepherd. This is not an issue-resolution claim.",
+                         self.posted[0]["body"])
+        self.assertEqual([], sibling["candidate_fixes"]["notices"])
+        self.record["control"]["authority"]["issue_comment"] = False
+        self.api.persist()
+        candidates.publish(self.api, sibling)
+        self.assertEqual(1, len(self.posted))
+
+    def test_uncertain_legacy_sibling_notice_blocks_new_issue_notice(self):
+        self.pull()
+        self.refresh()
+        sibling = self.sibling()
+        sibling["candidate_fixes"]["notices"].append({
+            "body": candidates.body(sibling), "state": "uncertain", "id": None})
+        self.api.persist()
+        candidates.publish(self.api, self.record)
+        self.assertEqual([], self.posted)
+        self.assertIn("outcome unknown", self.record["candidate_fixes"]["attention"])
+
+    def test_sibling_control_change_before_post_blocks_publication(self):
+        self.pull()
+        self.refresh()
+        sibling = self.sibling()
+        def change(control):
+            self.api.saved["workItems"][-1]["control"]["action"] = "pause"
+        self.api.guard_candidates = change
+        with self.assertRaisesRegex(ValueError, "notice authority changed"):
+            candidates.publish(self.api, self.record)
+        self.assertEqual([], self.posted)
+        self.assertEqual("run", sibling["control"]["action"])
+
     def test_lost_notice_reconciles_before_reporting_new_inventory(self):
         self.pull()
         self.refresh()

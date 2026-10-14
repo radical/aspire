@@ -253,10 +253,39 @@ def guard_launch(api, record):
         raise execution.AdmissionDeferred(saved["attention"])
 
 
-def body(record):
-    value = record["candidate_fixes"]
+def related(ledger, record):
+    return [entry for entry in ledger["workItems"]
+            if entry["control"]["issue"] == record["control"]["issue"]]
+
+
+def publication_pins(records):
+    return deepcopy([{"id": entry["id"], "control": entry["control"],
+                      "tracking": entry.get("candidate_fixes")} for entry in records])
+
+
+def inventory(records):
+    pulls = {}
+    complete = True
+    for entry in records:
+        value = entry.get("candidate_fixes")
+        if value is None:
+            continue
+        complete &= value["complete"]
+        for pull in value["pulls"]:
+            if pull["number"] in pulls:
+                prior = pulls[pull["number"]]
+                if prior["node_id"] != pull["node_id"]:
+                    raise ValueError("sibling candidate identity mismatch")
+                pull = dict(pull, own=prior["own"] or pull["own"])
+            pulls[pull["number"]] = pull
+    return {"pulls": sorted(pulls.values(), key=lambda pull: pull["number"]), "complete": complete}
+
+
+def body(record, records=None):
+    value = inventory([record] if records is None else records)
     repository = record["control"]["issue"]["repository"]
-    lines = [PREFIX, f"<!-- ci-shepherd:candidates:{record['id']} -->"]
+    issue = record["control"]["issue"]
+    lines = [PREFIX, f"<!-- ci-shepherd:candidates:{repository}:{issue['number']}:{issue['node_id']} -->"]
     for pull in value["pulls"]:
         status = "merged; validation pending" if pull["merged"] else pull["state"]
         if not pull["linked"] and not pull["own"]:
@@ -272,16 +301,26 @@ def body(record):
 
 def publish(api, record):
     import normal_loop
+    records = related(api.ledger, record)
+    # One canonical publisher for a shared issue; retry records retain separate
+    # execution authority but must not emit competing partial inventories.
+    publishers = [entry for entry in records if "candidate_fixes" in entry
+                  and entry["control"]["action"] != "pause"
+                  and normal_loop.report_authorized(api, entry["control"])]
+    if not publishers or publishers[0]["id"] != record["id"]:
+        return
     control = record["control"]
     value = record["candidate_fixes"]
-    if (not any(not pull["own"] for pull in value["pulls"])
+    if (not any(not pull["own"] for pull in inventory(records)["pulls"])
             or not normal_loop.report_authorized(api, control) or control["action"] == "pause"):
         return
     notices = value["notices"]
     prefix = f"repos/{control['issue']['repository']}/issues/{control['issue']['number']}/comments"
     # Reconcile escaped intent before generating another version, even if the
     # inventory changed. Never blindly replay a missing/uncertain POST receipt.
-    for notice in notices:
+    all_notices = [notice for entry in records
+                   for notice in entry.get("candidate_fixes", {}).get("notices", [])]
+    for notice in all_notices:
         if notice["state"] == "delivered":
             continue
         matches = [comment for comment in api.api.pages(prefix, max_pages=2, max_bytes=MAX_BYTES)
@@ -292,33 +331,41 @@ def publish(api, record):
             return
         notice.update(state="delivered", id=matches[0]["id"])
         api.persist()
-    rendered = body(record)
-    if any(notice["body"] == rendered for notice in notices):
+    rendered = body(record, records)
+    if any(notice["body"] == rendered for notice in all_notices):
         return
-    if len(notices) >= MAX_NOTICES:
+    if len(all_notices) >= MAX_NOTICES:
         value["attention"] = "Candidate notice history bound; human attention required."
         api.persist()
         return
     notice = {"body": rendered, "state": "sending", "id": None}
     notices.append(notice)
+    pins = publication_pins(records)
     api.persist()
     api.guard_candidates(control)
     latest = api.read_authority()
     saved = next(entry for entry in latest["workItems"] if entry["id"] == record["id"])
     if (saved["control"] != control or saved.get("candidate_fixes") != value
+            or publication_pins(related(latest, record)) != pins
             or not normal_loop.report_authorized(api, control)):
         raise ValueError("candidate notice authority changed")
     # Relationship/state changes invalidate publication; ordinary head updates do not.
-    current = refresh(api, record)
-    if body(record) != rendered:
+    for entry in records:
+        if "candidate_fixes" in entry:
+            refresh(api, entry)
+    current = record["candidate_fixes"]
+    if body(record, records) != rendered:
         current["notices"].pop()
         current["attention"] = "Candidate inventory changed before notice; reconciliation required."
         api.persist()
         return
+    pins = publication_pins(records)
+    api.persist()
     api.guard_candidates(control)
     latest = api.read_authority()
     saved = next(entry for entry in latest["workItems"] if entry["id"] == record["id"])
     if (saved["control"] != control or saved["candidate_fixes"]["notices"][-1] != notice
+            or publication_pins(related(latest, record)) != pins
             or not normal_loop.report_authorized(api, control)):
         raise ValueError("candidate notice authority changed")
     request = {"endpoint": prefix, "body": {"body": rendered}}

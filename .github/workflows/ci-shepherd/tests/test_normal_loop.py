@@ -387,6 +387,45 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual([], self.saved()["chains"])
         self.assertEqual(1, len(self.issue_posts))
 
+    def test_sibling_notices_refresh_shared_source_before_terminal_followup(self):
+        self.terminal()
+        self.add_pr(0)["state"] = "closed"
+        self.policy()
+        self.external_candidate()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        retry = deepcopy(api.ledger["workItems"][0]["control"])
+        retry["id"] = "manual-retry"
+        execution.prepare_retry(api, lambda: retry, "TASK1")
+        original = live.HTTPTransport.__call__
+
+        def comments_update_issue(transport, method, endpoint, body):
+            response = original(transport, method, endpoint, body)
+            if method == "POST" and endpoint == self.prefix + "/issues/20872/comments":
+                self.issue["updated_at"] = f"2026-10-05T00:00:{len(self.issue_posts):02d}Z"
+            return response
+
+        with patch.object(live.HTTPTransport, "__call__", comments_update_issue):
+            packet = self.prepare()
+            self.assertEqual("worklist", packet["normal"])
+            self.assertEqual(1, len(packet["packets"]))
+            child = packet["packets"][0]
+            self.assertEqual("issue-assessment", child["normal"])
+            self.assertEqual(self.issue["updated_at"], child["context"]["issue"]["updatedAt"])
+            decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
+                        "decisions": [self.assessment(child)]}
+            receipt = self.settle(packet, decision)
+            self.assertEqual("processed", receipt["outcome"])
+            self.assertEqual(["assessed"], [item["outcome"] for item in receipt["items"]])
+            self.prepare()
+        notices = [body["body"] for body, _ in self.issue_posts if body["body"].startswith(
+            "[automated] **CI Shepherd: tracking candidate fixes**")]
+        self.assertEqual(1, len(notices))
+        self.assertIn("/pull/7", notices[0])
+        self.assertIn("/pull/8", notices[0])
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual(2, len(self.saved()["workItems"]))
+
     def test_hosted_import_and_candidate_rerun_have_fresh_chain_observations(self):
         self.launch()
         self.task("completed")
