@@ -929,7 +929,29 @@ authority writes are guarded PATCHes, not a cross-host atomic compare-and-swap.
 Execution persists credit reservation and `sending` before one task POST, then
 saves the returned task ID before detail reads. Unknown POST outcomes, missing
 response IDs, crashes and uncertain persistence never authorize a second POST.
-Re-entry reports uncertainty or the saved identity; a changed item ID/revision
+After saving the task ID, execution verifies the exact task's repository,
+creator, assignment correlation and unique worker session, then publishes
+`execution.session_id`. Only an explicitly zero-session queued/in-progress task
+is retried, at five-second intervals within a 60-second scheduling budget.
+HTTP and authority reads have separate timeouts, so this is not a hard
+wall-clock limit. Mismatched or malformed identities stop polling immediately.
+Startup timeout or lookup failure retains the sent task and credit hold, with
+an attention diagnostic in the ledger and execution receipt. Authority/control
+or approval changes stop publication; no second task is sent.
+
+The cloud worker may start before the task acknowledgement or session mapping
+is saved. Its instructions allow read-only diagnosis during a bounded
+180-second initialization wait, rereading the canonical ledger every five
+seconds. Writes require the saved session to match `COPILOT_AGENT_SESSION_ID`
+and the current exact assignment approval. Missing host identity, mismatch,
+revocation, unavailable authority or timeout remains fail-closed. Conversation
+history is not identity evidence; `HOST_VERIFIED_SESSION_ID` is only a result
+placeholder. Controller tests verify binding and persistence, not a model's
+compliance with the worker instructions.
+
+Re-entry retries session binding for a sent task whose mapping is still absent,
+without another POST; later reconciliation can also recover delayed startup.
+A changed item ID/revision
 cannot bypass unresolved same-issue work. Human reconciliation is required;
 do not reset receipts or authority to retry.
 
@@ -1106,6 +1128,16 @@ placeholder is bound only to the independently verified task session.
 The parser normalizes renderer whitespace, verifies canonical Base64 and
 limits decoded JSON to 16,000 bytes. Raw JSON framing is rejected because the
 audited CLI Markdown renderer can insert newlines inside JSON strings.
+The cloud prompt embeds the standalone `work_item_result.py` encoder so it is
+available even when the worker's target branch does not contain controller code.
+The worker saves JSON and runs the encoder in temporary scratch space. The
+encoder takes `worker_id` from `COPILOT_AGENT_SESSION_ID`, or uses the result-only
+host-verified placeholder when absent, checks size and Base64/JSON round-trip,
+and writes only a Base64 file. It does not print result envelopes in tool output.
+The final answer must copy that file unchanged inside one fenced envelope.
+Whitespace wrapping is accepted; word substitutions or edited encoded characters
+are not repaired or silently accepted. Tests cover generated encoding and parser
+behavior, not a model's compliance when copying the final answer.
 Missing, malformed, conflicting or foreign JSON remains unavailable; there is
 **no synthesis of worker JSON** from a host narrative. Rendered CLI logs mix
 assistant and tool text, so even schema-valid envelopes remain untrusted worker

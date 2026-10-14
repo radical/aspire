@@ -19,8 +19,20 @@ Before each write reread the canonical authority URL in the assignment context b
 item, assignment, approval and task identity, unchanged revision, run action and open source \
 issue with no hands-off. The authority comment can point to a memory branch; follow that \
 activation pointer and read the current canonical ledger, not a stale comment snapshot. \
-Find this assignment's saved task ID and verify your actual task/session identity. Stop writes \
-on unavailable/changed authority; report exactly which check failed. Stop after the draft. \
+For startup identity, read COPILOT_AGENT_SESSION_ID from the host environment. Shepherd verifies \
+the launched task through GitHub and publishes execution.task_id and execution.session_id \
+in this assignment's canonical ledger. The worker may start before those writes finish. \
+If this same unchanged approved assignment has execution.state=sending with task_id null, \
+or execution.state=sent with a task_id but session_id null, do read-only diagnosis while \
+waiting up to 180 seconds, rereading current canonical authority every 5 seconds. No source \
+edits, commits, pushes, PR publication or workflow dispatch until both IDs are populated \
+and execution.session_id exactly equals COPILOT_AGENT_SESSION_ID. Do not search conversation \
+history/SQL for identity, invent an ID, or treat HOST_VERIFIED_SESSION_ID as write authority. \
+Missing host session identity, any populated mismatch, changed/revoked approval or revision, \
+pause/hands-off, unavailable authority or startup timeout stops writes immediately; report \
+the specific blocker. Before each later write repeat the same canonical authority and \
+session checks. For final result worker_id use the exact COPILOT_AGENT_SESSION_ID; if unavailable \
+use the result-only placeholder described below. Stop after the draft. \
 Existing-PR follow-up uses a separate PR-bound repair assignment; never choose another PR \
 or start a competing implementation from an issue link.
 Return exactly one CSWORKITEMBEGIN<Base64>CSWORKITEMEND envelope in your final answer, never in \
@@ -51,6 +63,19 @@ same-context earlier passing receipt. This is worker-reported evidence, not host
 Use inconclusive when required validation is blocked, even if you have proposed code changes. \
 Use no_fix or inconclusive when no validated change exists; do not claim fixed from completion, \
 an empty draft, old-head CI or unverified tests. Keep JSON under 16000 UTF-8 bytes.
+
+To avoid mistyping the session ID or corrupting encoded text, save your result JSON \
+and the following standalone encoder under a temporary directory, outside the final diff. \
+Run `python3 <encoder.py> <result.json> <result.b64>`, then read the output file. \
+The encoder takes worker_id from COPILOT_AGENT_SESSION_ID, never from a copied UUID. \
+Its fallback placeholder is result attribution only, not write authorization. \
+It prints no envelope to tool output. Copy result.b64 verbatim into the single final \
+fenced text envelope; do not rewrite, translate, abbreviate or substitute words inside \
+the Base64. Only whitespace wrapping is permitted. Do not hand-encode the result.
+
+```python
+{{result_encoder}}
+```
 ## Route instructions
 {{specialist}}
 

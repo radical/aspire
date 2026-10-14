@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from github import LostResponse, RejectedEffect, Response
+from helpers import FakeClock
 import live
 import local
 import pilot_binding as bindings
@@ -34,10 +35,20 @@ class CloudAuthority(Authority):
     def __init__(self, saved=None):
         super().__init__(saved)
         self.posts = []
+        self.actor = {"id": 1472}
+        self.repository_id = work_item_github.REPOSITORY_IDS[self.repository]
+        self.task_transport = Transport()
+        self.api = live.API(self.task_transport, repository_id=self.repository_id)
 
     def start_task(self, body, before_send):
         before_send()
         self.posts.append((deepcopy(body), deepcopy(self.saved)))
+        self.task_transport.values[f"agents/repos/{self.repository}/tasks/TASK1"] = {
+            "id": "TASK1", "repository": {"id": self.repository_id}, "creator": self.actor,
+            "state": "in_progress", "session_count": 1, "artifacts": [], "sessions": [{
+                "id": "SESSION1", "task_id": "TASK1", "repository": {"id": self.repository_id},
+                "user": self.actor, "state": "in_progress", "base_ref": "main",
+                "head_ref": "copilot/repair", "prompt": body["prompt"]}]}
         return "TASK1"
 
     def reconcile_workers(self, *, adopt_children, acquisition):
@@ -64,6 +75,176 @@ class ExecutionTests(unittest.TestCase):
         self.assertIsNone(sent["task_id"])
         self.assertTrue(self.api.posts[0][0]["create_pull_request"])
         self.assertEqual("main", self.api.posts[0][0]["base_ref"])
+
+    def test_startup_timeout_retains_sent_task_and_reentry_binds_without_redispatch(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        original = self.api.start_task
+        task_path = f"agents/repos/{self.api.repository}/tasks/TASK1"
+        started = {}
+
+        def delayed(body, before_send):
+            task_id = original(body, before_send)
+            started.update(deepcopy(self.api.task_transport.values[task_path]))
+            self.api.task_transport.values[task_path].update(state="queued", session_count=0, sessions=[])
+            return task_id
+
+        clock = FakeClock()
+        with patch.object(self.api, "start_task", side_effect=delayed), \
+                patch.object(execution, "monotonic", side_effect=lambda: clock().timestamp()), \
+                patch.object(execution, "sleep", side_effect=lambda seconds: clock.advance(seconds=seconds)):
+            receipt = execution.execute(self.api, self.read, lambda: approval)
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sent", receipt["outcome"])
+        self.assertEqual("TASK1", receipt["task_id"])
+        self.assertEqual(saved["attention"], receipt["attention"])
+        self.assertIsNone(saved["session_id"])
+        self.assertIn("startup timed out", saved["attention"])
+        self.assertGreater(saved["worker_reserved"], 0)
+        self.assertEqual(12, len([call for call in self.api.task_transport.reads if call[1] == task_path]))
+        self.api.task_transport.values[task_path] = started
+        self.assertEqual({"outcome": "sent", "task_id": "TASK1"},
+                         execution.execute(self.api, self.read, lambda: approval))
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("SESSION1", saved["session_id"])
+        self.assertIsNone(saved["attention"])
+        self.assertEqual(1, len(self.api.posts))
+
+    def test_foreign_or_malformed_startup_never_retries_or_publishes_session(self):
+        for mutation in ({"id": "FOREIGN"}, {"creator": {"id": 1}}, {"repository": {"id": 1}},
+                         {"session_count": 2}, {"sessions": []}, {"state": "foreign"},
+                         {"state": "completed", "session_count": 0, "sessions": []}):
+            with self.subTest(mutation=mutation):
+                api = CloudAuthority()
+                approval = execution.prepare(api, self.read)["approval_template"]
+                original = api.start_task
+
+                def invalid(body, before_send):
+                    task_id = original(body, before_send)
+                    api.task_transport.values[f"agents/repos/{api.repository}/tasks/TASK1"].update(mutation)
+                    return task_id
+
+                with patch.object(api, "start_task", side_effect=invalid), patch.object(execution, "sleep") as wait:
+                    receipt = execution.execute(api, self.read, lambda: approval)
+                saved = api.saved["workItems"][0]["assignments"][0]["execution"]
+                self.assertEqual("sent", receipt["outcome"])
+                self.assertIsNone(saved["session_id"])
+                self.assertIn("binding blocked", saved["attention"])
+                wait.assert_not_called()
+                self.assertEqual(1, len(api.posts))
+
+    def test_startup_rejects_wrong_session_task_and_assignment_without_waiting(self):
+        for field, wrong in (("task_id", "FOREIGN"), ("prompt", "foreign assignment")):
+            with self.subTest(field=field):
+                api = CloudAuthority()
+                approval = execution.prepare(api, self.read)["approval_template"]
+                original = api.start_task
+
+                def invalid(body, before_send):
+                    task_id = original(body, before_send)
+                    api.task_transport.values[f"agents/repos/{api.repository}/tasks/TASK1"]["sessions"][0][field] = wrong
+                    return task_id
+
+                with patch.object(api, "start_task", side_effect=invalid), patch.object(execution, "sleep") as wait:
+                    receipt = execution.execute(api, self.read, lambda: approval)
+                saved = api.saved["workItems"][0]["assignments"][0]["execution"]
+                self.assertEqual("sent", receipt["outcome"])
+                self.assertIsNone(saved["session_id"])
+                self.assertIn("correlation mismatch", receipt["attention"])
+                wait.assert_not_called()
+                self.assertEqual(1, len(api.posts))
+
+    def test_startup_lookup_failure_retains_sent_task_and_hold_without_retrying(self):
+        for error in (live.IncompleteInventory("task lookup unavailable"), OSError("network unavailable")):
+            with self.subTest(error=type(error).__name__):
+                api = CloudAuthority()
+                approval = execution.prepare(api, self.read)["approval_template"]
+                with patch.object(api.api, "get", side_effect=error) as get, \
+                        patch.object(execution, "sleep") as wait:
+                    receipt = execution.execute(api, self.read, lambda: approval)
+                    self.assertEqual(receipt, execution.execute(api, self.read, lambda: approval))
+                saved = api.saved["workItems"][0]["assignments"][0]["execution"]
+                self.assertEqual("sent", saved["state"])
+                self.assertEqual("TASK1", saved["task_id"])
+                self.assertIsNone(saved["session_id"])
+                self.assertGreater(saved["worker_reserved"], 0)
+                self.assertIn(str(error), receipt["attention"])
+                self.assertEqual(2, get.call_count)
+                wait.assert_not_called()
+                self.assertEqual(1, len(api.posts))
+
+    def test_uncertain_session_publication_propagates_without_compensation_or_redispatch(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        original = self.api.persist
+        attempts = []
+
+        def persist():
+            saved = self.api.ledger["workItems"][0]["assignments"][0]["execution"]
+            if saved["session_id"] is not None:
+                attempts.append(deepcopy(saved))
+                raise pilot_github.AuthorityUncertain("session publication uncertain")
+            original()
+
+        with patch.object(self.api, "persist", side_effect=persist):
+            with self.assertRaisesRegex(pilot_github.AuthorityUncertain, "publication uncertain"):
+                execution.execute(self.api, self.read, lambda: approval)
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sent", saved["state"])
+        self.assertEqual("TASK1", saved["task_id"])
+        self.assertIsNone(saved["session_id"])
+        self.assertEqual(1, len(attempts))
+        self.assertEqual({"outcome": "sent", "task_id": "TASK1"},
+                         execution.execute(self.api, self.read, lambda: approval))
+        self.assertEqual(1, len(self.api.posts))
+
+    def test_startup_rechecks_control_approval_and_authority_after_wait(self):
+        for changed in ("control", "approval", "authority"):
+            with self.subTest(changed=changed):
+                api = CloudAuthority()
+                value = deepcopy(self.control)
+                approval = execution.prepare(api, lambda: value)["approval_template"]
+                original = api.start_task
+
+                def delayed(body, before_send):
+                    task_id = original(body, before_send)
+                    api.task_transport.values[f"agents/repos/{api.repository}/tasks/TASK1"].update(
+                        state="queued", session_count=0, sessions=[])
+                    return task_id
+
+                def revoke(seconds):
+                    if changed == "control":
+                        value["action"] = "pause"
+                    elif changed == "approval":
+                        approval["allow_branch_writes"] = False
+                    else:
+                        api.saved["workItems"][0]["control"]["action"] = "pause"
+
+                with patch.object(api, "start_task", side_effect=delayed), \
+                        patch.object(execution, "sleep", side_effect=revoke):
+                    with self.assertRaisesRegex(ValueError, "changed|revoked"):
+                        execution.execute(api, lambda: value, lambda: approval)
+                saved = api.saved["workItems"][0]["assignments"][0]["execution"]
+                self.assertEqual("sent", saved["state"])
+                self.assertEqual("TASK1", saved["task_id"])
+                self.assertIsNone(saved["session_id"])
+                self.assertEqual(1, len(api.posts))
+
+    def test_authority_changed_during_successful_lookup_never_publishes_session(self):
+        approval = execution.prepare(self.api, self.read)["approval_template"]
+        original = self.api.api.get
+
+        def changed(endpoint):
+            observed = original(endpoint)
+            self.api.saved["workItems"][0]["control"]["action"] = "pause"
+            return observed
+
+        with patch.object(self.api.api, "get", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "authority changed"):
+                execution.execute(self.api, self.read, lambda: approval)
+        saved = self.api.saved["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sent", saved["state"])
+        self.assertEqual("TASK1", saved["task_id"])
+        self.assertIsNone(saved["session_id"])
+        self.assertEqual(1, len(self.api.posts))
 
     def test_lost_post_response_never_retries_even_after_restart(self):
         prepared = execution.prepare(self.api, self.read)
@@ -678,6 +859,38 @@ class MappingTests(unittest.TestCase):
         self.assertEqual("TASK2", state.parse(self.transport.comments[0]["body"])["workItems"][0]["assignments"][0]["execution"]["task_id"])
         self.assertEqual("needs_human", execution.observe(self.api, self.read)["outcome"])
         self.assertEqual("sent", execution.execute(self.api, self.read, lambda: self.approval)["outcome"])
+        self.assertEqual(1, len([call for call in self.transport.writes if call[0] == "POST"]))
+
+    def test_dispatch_publishes_verified_session_after_delayed_startup(self):
+        record = self.api.ledger["workItems"][0]
+        saved = record["assignments"][0]["execution"]
+        saved.update(approval=None, state="reserved", task_id=None, worker_reserved=0)
+        self.api.persist()
+        original = Transport.__call__
+        reads = []
+
+        def transport(instance, method, endpoint, body):
+            if method == "POST" and endpoint == f"agents/repos/{self.repository}/tasks":
+                instance.writes.append((method, endpoint, body))
+                return Response({"id": "TASK1", "state": "queued"}, {}, 201)
+            if method == "GET" and endpoint == f"agents/repos/{self.repository}/tasks/TASK1":
+                current = state.parse(instance.comments[0]["body"])["workItems"][0]["assignments"][0]["execution"]
+                self.assertEqual("TASK1", current["task_id"])
+                self.assertEqual("sent", current["state"])
+                reads.append(endpoint)
+                if len(reads) == 1:
+                    pending = dict(self.task, state="queued", session_count=0, sessions=[])
+                    return Response(pending, {})
+            return original(instance, method, endpoint, body)
+
+        with patch.object(Transport, "__call__", transport), patch.object(execution, "sleep", create=True):
+            receipt = execution.execute(self.api, self.read, lambda: self.approval)
+        current = state.parse(self.transport.comments[0]["body"])["workItems"][0]["assignments"][0]["execution"]
+        self.assertEqual("sent", receipt["outcome"])
+        self.assertEqual("SESSION1", current["session_id"])
+        self.assertEqual("completed", current["task_state"])
+        self.assertIsNone(current["attention"])
+        self.assertEqual(2, len(reads))
         self.assertEqual(1, len([call for call in self.transport.writes if call[0] == "POST"]))
 
     def test_execution_refreshes_two_resumed_workers_before_admission(self):

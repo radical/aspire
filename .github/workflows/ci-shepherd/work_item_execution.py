@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 import sys
+from time import monotonic, sleep
 
 from github import LostResponse, RejectedEffect
 import candidate_fixes
@@ -25,10 +26,16 @@ import work_items as items
 
 CORRELATION = "ci-shepherd-work-item: "
 STATES = {"reserved", "sending", "sent", "uncertain", "no_send"}
+SESSION_STARTUP_BUDGET = 60
+SESSION_STARTUP_INTERVAL = 5
 
 
 class AdmissionDeferred(ValueError):
     """Known capacity or budget exhaustion before a task can be admitted."""
+
+
+class SessionPending(ValueError):
+    """The exact nonterminal task has not created its worker session yet."""
 
 
 def approval_template(record, assignment):
@@ -243,7 +250,8 @@ def request(api, record, assignment):
         authority=str(api.authority_id),
         evidence_json=json.dumps(assignment["basis"], sort_keys=True),
         diagnose_repair=prompt_templates.load("diagnose-repair"),
-        **({"result_json": json.dumps({
+        **({"result_encoder": (Path(__file__).with_name("work_item_result.py")).read_text(),
+            "result_json": json.dumps({
             "schema_version": 1, "item_id": record["id"], "assignment_id": assignment["id"],
             "evaluated_revision": assignment["revision"], "worker_id": "HOST_VERIFIED_SESSION_ID",
             "actual_classification": "inconclusive", "transience": "not_established",
@@ -264,7 +272,12 @@ def execute(api, read_control, read_approval):
         raise ValueError("prepare cloud assignment first")
     value = assignment["execution"]
     if value["state"] != "reserved":
-        return {"outcome": value["state"], "task_id": value["task_id"]}
+        if value["state"] == "sent" and value["session_id"] is None:
+            bind_startup_session(api, read_control, read_approval, control, record, assignment)
+        receipt = {"outcome": value["state"], "task_id": value["task_id"]}
+        if value["attention"] is not None:
+            receipt["attention"] = value["attention"]
+        return receipt
     approval = deepcopy(validate_approval(read_approval(), record, assignment))
     if (control["action"] != "run" or control["pr_review"] is not None
             or control["revision"] != assignment["revision"] or assignment["result"] is not None):
@@ -347,7 +360,48 @@ def execute(api, read_control, read_approval):
         return {"outcome": "uncertain", "task_id": None}
     value.update(state="sent", task_id=task_id)
     api.persist()
-    return {"outcome": "sent", "task_id": task_id}
+    bind_startup_session(api, read_control, read_approval, control, record, assignment)
+    receipt = {"outcome": "sent", "task_id": task_id}
+    if value["attention"] is not None:
+        receipt["attention"] = value["attention"]
+    return receipt
+
+
+def bind_startup_session(api, read_control, read_approval, control, record, assignment):
+    value = assignment["execution"]
+    approval = deepcopy(value["approval"])
+    deadline = monotonic() + SESSION_STARTUP_BUDGET
+
+    def guard():
+        receiver.fresh(api, read_control, control)
+        if (control["action"] != "run" or control["revision"] != assignment["revision"]
+                or assignment["result"] is not None):
+            raise ValueError("stale or revoked execution control")
+        if read_approval() != approval:
+            raise ValueError("cloud approval changed")
+
+    # The worker can start before the POST returns. Publish the task ID first,
+    # then verify its session through the existing mapping checks. HTTP/authority
+    # reads have their own timeouts; this deadline bounds scheduling, not their IO.
+    for attempt in range(SESSION_STARTUP_BUDGET // SESSION_STARTUP_INTERVAL + 1):
+        guard()
+        if attempt and monotonic() >= deadline:
+            value["attention"] = "Worker session startup timed out; reconcile this sent task, never redispatch."
+            api.persist()
+            return
+        try:
+            refresh(api, record, assignment)
+        except SessionPending:
+            remaining = deadline - monotonic()
+            if remaining > 0 and attempt < SESSION_STARTUP_BUDGET // SESSION_STARTUP_INTERVAL:
+                sleep(min(SESSION_STARTUP_INTERVAL, remaining))
+                continue
+            value["attention"] = "Worker session startup timed out; reconcile this sent task, never redispatch."
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
+            value["attention"] = f"Worker session binding blocked: {error}"[:1000]
+        guard()
+        api.persist()
+        return
 
 
 def task(api, record, assignment):
@@ -361,8 +415,13 @@ def task(api, record, assignment):
             or observed.get("creator", {}).get("id") != api.actor["id"]
             or observed.get("state") not in live.TASK_STATES
             or type(observed.get("session_count")) is not int
-            or observed["session_count"] != 1 or not isinstance(sessions, list) or len(sessions) != 1
+            or not isinstance(sessions, list)
             or not isinstance(observed.get("artifacts"), list)):
+        raise ValueError("task/session identity unavailable")
+    if (observed["session_count"] == 0 and sessions == []
+            and observed["state"] in {"queued", "in_progress"} and value["session_id"] is None):
+        raise SessionPending("Worker session not created yet")
+    if observed["session_count"] != 1 or len(sessions) != 1:
         raise ValueError("task/session identity unavailable")
     session = sessions[0]
     expected = next(line for line in request(api, record, assignment)["prompt"].splitlines()
