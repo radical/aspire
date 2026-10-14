@@ -19,6 +19,118 @@ Publishing to repository `main` or delivering changes upstream requires a
 separate explicit request. Disposable validation base and fixture branches are
 isolated from the product branch; do not merge them into `ci-shepherd`.
 
+## Tracking CLI
+
+`shepherd.py` provides saved-state inspection, optional GET-only live observations,
+and narrow, staged control changes. It uses Python's standard library and the
+existing selected GitHub credential; it never changes authentication.
+
+Choose the verified tracker issue, activation comment and immutable tracker node
+explicitly. For convenience, define a shell function from the repository root
+after setting `TRACKER`, `AUTHORITY` and `TRACKER_NODE` to those identities:
+
+```bash
+shepherd() {
+  python3 -B .github/workflows/ci-shepherd/shepherd.py \
+    --target upstream --tracker "$TRACKER" --authority "$AUTHORITY" \
+    --tracker-node "$TRACKER_NODE" "$@"
+}
+
+shepherd list
+shepherd list --all --json
+shepherd show ITEM_ID
+shepherd show https://github.com/microsoft/aspire/issues/ISSUE_NUMBER --live --json
+shepherd show https://github.com/microsoft/aspire/pull/PR_NUMBER
+```
+
+Replace uppercase placeholders with actual IDs or numbers. `--target fork`
+selects fork authority instead; there are no production tracker defaults.
+
+`list` shows work items and managed chains; `--all` includes paused work items.
+`show` accepts an exact item/chain ID or canonical issue/PR URL. Issue URLs can
+match multiple attempts. Details retain assignments, task/session identities,
+results, follow-ups, candidate fixes, related attempts, imported chains and credit
+holds. Candidate links do not grant ownership of another author's PR.
+
+Default output is concise text. Each subcommand accepts `--json` for sorted,
+versioned JSON. Exit codes are `0` for success, `1` for a rejected operation or
+unavailable evidence, and `2` for invalid command arguments. Errors go to stderr.
+Saved output identifies its authority generation and branch head; it is not a
+claim about current platform state.
+
+`show --live` verifies saved task/session correlation and current issue/PR
+identities, including a worker's PR that has not yet been imported. Saved records
+remain labeled separately from live observations. It does not checkpoint receipts,
+settle credits, adopt PRs, scan for new candidate fixes or change the authority.
+Missing or conflicting evidence fails explicitly rather than reporting saved
+state as current.
+
+### Staging and applying changes
+
+`add`, `edit` and `remove` write a new local proposal file and print a preview.
+They never update remote authority. Use an operator-owned directory outside worker
+workspaces; proposal files are created exclusively with mode `0600` and are not
+overwritten. `apply` rejects non-private files and symlink or group/world-writable
+paths using the existing operator-path checks.
+
+```bash
+mkdir -p -m 700 "$HOME/.copilot/ci-shepherd/changes"
+
+shepherd add https://github.com/microsoft/aspire/issues/ISSUE_NUMBER \
+  --id ITEM_ID --route product_bug --scope 'Investigate the linked failure' \
+  --out "$HOME/.copilot/ci-shepherd/changes/add.json"
+
+shepherd edit ITEM_ID --route flaky_test --scope 'Investigate only the pinned test' \
+  --out "$HOME/.copilot/ci-shepherd/changes/edit.json"
+
+shepherd remove ITEM_ID \
+  --out "$HOME/.copilot/ci-shepherd/changes/pause.json" --json
+
+shepherd apply "$HOME/.copilot/ci-shepherd/changes/pause.json" \
+  --expected-revision GENERATION_FROM_PREVIEW
+```
+
+Each example is a separate proposal, not a sequence to apply blindly.
+`--expected-revision` is the integer **authority generation** printed in the
+preview, not the work item's control revision.
+
+- **Add tracks only:** a new item is paused, has unknown classification, no pinned
+  occurrence and no effect permissions. It creates no assignment and launches no
+  task. Preparing actionable controls or granting execution authority remains a
+  separate existing work-item workflow.
+- **Edit is narrow:** only route and scope can change. The control revision
+  advances and PR-content approval is cleared; intake identity, permissions,
+  assignments, task IDs and credit holds are preserved.
+- **Remove means pause:** it stops new authorized effects without deleting
+  history, cancelling an existing worker, closing PRs or releasing reservations.
+  Paused items remain inspectable with `show` and `list --all`. The CLI has no
+  unpause/reset/retry shortcut. Adding another ID for an already tracked issue is
+  rejected; use the separately guarded explicit retry workflow.
+
+Every proposal validates the candidate ledger with existing record, result,
+follow-up and bidirectional imported-chain validators, plus retry
+issue/assignment/task references and cycle checks. `apply` reconstructs the
+allowed change, repeats validation, verifies relevant saved task/session and PR
+identities, and checks authority identity, generation and exact branch head.
+It rejects arbitrary field changes and stale or replayed proposals.
+
+Only `apply` can write remotely, and only to already activated branch authority.
+It holds the existing machine-wide authority lock and retains source-cleanliness,
+global-enable, hosted-idle, credential and expected-head publication guards.
+It cannot migrate authority, dispatch work, post comments, cancel tasks, close
+issues/PRs or enable hosted scheduling. Commit reviewed controller changes before
+using it for real effects; a dirty source tree deliberately blocks apply.
+
+Behavioral coverage uses synthetic authority and the existing in-memory Git
+storage fixture, never production mutations:
+
+```bash
+python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests -p test_shepherd.py
+mkdir -p artifacts/shepherd-cli-tmp
+TMPDIR="$PWD/artifacts/shepherd-cli-tmp" \
+  python3 -B -m unittest discover -s .github/workflows/ci-shepherd/tests
+```
+
 ## Reviewing launch instructions
 
 Embedded worker instructions live in `prompts/`, separately from transport,
