@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('Capture', 'Verify', 'Guard', 'Smoke', 'Compare')]
+    [ValidateSet('Capture', 'Verify', 'VerifySaved', 'Guard', 'Smoke', 'Compare')]
     [string]$Stage,
     [ValidateSet('win-x64', 'win-arm64')]
     [string]$Rid = 'win-x64',
@@ -75,6 +75,52 @@ function Assert-NativeMachine([string]$Directory) {
 }
 
 switch ($Stage) {
+    'VerifySaved' {
+        $identity = Get-Content (Join-Path $evidence 'identity.json') -Raw | ConvertFrom-Json
+        if ($identity.head -ne 'b4e053c2be8049823cf96303882d3360a3c30ebc' -or $identity.rid -ne $Rid -or $identity.configuration -ne $Configuration -or $identity.reuse -ne $Reuse.IsPresent) {
+            throw 'Saved payload identity does not match the approved original experiment.'
+        }
+        $archive = Join-Path $repo "artifacts/bundle/aspire-ci-bundlepayload-$Rid.tar.gz"
+        if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "Original bundle payload archive is missing: $archive"
+        }
+        $extracted = Join-Path $evidence 'bundle-extracted'
+        $null = New-Item -ItemType Directory -Force -Path $extracted
+        & tar -xzf $archive -C $extracted
+        if ($LASTEXITCODE -ne 0) { throw 'Could not extract the original bundle payload archive.' }
+        $bundleDashboard = Join-Path $extracted "$Rid/dashboard"
+        Assert-NativeMachine $bundleDashboard
+        $bundle = @(Get-Manifest $bundleDashboard)
+        $recorded = @(Get-Content (Join-Path $evidence 'final-dashboard.json') -Raw | ConvertFrom-Json)
+        if ((Compare-Manifests $recorded $bundle).Count -ne 0) {
+            throw 'Extracted original Dashboard differs from its original recorded complete content manifest.'
+        }
+        $first = @(Get-Content (Join-Path $evidence 'first-publish.json') -Raw | ConvertFrom-Json)
+        $package = @(Get-Content (Join-Path $evidence 'first-package.json') -Raw | ConvertFrom-Json)
+        $actualPackage = @(Get-Manifest (Join-Path $evidence 'dashboard-package/tools'))
+        if ((Compare-Manifests $package $actualPackage).Count -ne 0) {
+            throw 'Retained first Dashboard package payload differs from its original manifest.'
+        }
+        $cli = @(Get-Manifest (Join-Path $evidence 'cli-extracted'))
+        $recordedCli = @(Get-Content (Join-Path $evidence 'final-cli.json') -Raw | ConvertFrom-Json)
+        if ((Compare-Manifests $recordedCli $cli).Count -ne 0) {
+            throw 'Retained native CLI payload differs from its original manifest.'
+        }
+        if ($Reuse -and ((Compare-Manifests (Get-PayloadManifest $first) $bundle).Count -ne 0 -or (Compare-Manifests $package $bundle).Count -ne 0)) {
+            throw 'Reused original Dashboard differs from its first publish or package manifest.'
+        }
+        Save-Manifest (Get-Manifest (Join-Path $extracted $Rid)) 'complete-bundle.json'
+        [pscustomobject]@{
+            payloadSourceCommit = $identity.head
+            originalRun = '38630516871'
+            harnessCommit = (& git --no-pager rev-parse HEAD)
+            rid = $Rid
+            reuse = $Reuse.IsPresent
+            dashboardVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $bundleDashboard 'Aspire.Dashboard.exe')).ProductVersion
+            limitation = 'Original raw shipping archive containers are unavailable. Unpacked native CLI and first Dashboard package payloads and their original manifests are retained.'
+        } | ConvertTo-Json | Set-Content (Join-Path $evidence 'validation-identity.json')
+        "ASPIRE_NATIVE_DASHBOARD_PATH=$(Join-Path $bundleDashboard 'Aspire.Dashboard.exe')" >> $env:GITHUB_ENV
+    }
     'Capture' {
         Assert-NativeMachine $publish
         Save-Manifest (Get-Manifest $publish) 'first-publish.json'

@@ -3,6 +3,10 @@ name: Build native CLI archives
 on:
   workflow_dispatch:
     inputs:
+      previous_run_id:
+        description: 'Validate retained payloads from approved run 38630516871 without rebuilding native packages'
+        type: string
+        default: ''
       configuration:
         type: choice
         options: [Release]
@@ -52,6 +56,7 @@ permissions:
 jobs:
 
   build_cli_archives:
+    if: ${{ !inputs.previous_run_id }}
     name: Build CLI (${{ matrix.targets.rids }} ${{ matrix.targets.variant }})
     runs-on: ${{ matrix.targets.runner }}
     timeout-minutes: 90
@@ -411,9 +416,105 @@ jobs:
           name: cli-native-logs-${{ matrix.targets.rids }}${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/log/**
 
+  validate_saved_dashboard:
+    if: github.event_name == 'workflow_dispatch' && inputs.previous_run_id != ''
+    name: Validate saved Dashboard (${{ matrix.targets.rids }} ${{ matrix.targets.variant }})
+    runs-on: ${{ matrix.targets.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        targets: ${{ fromJson(inputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify original artifact run identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ('${{ inputs.previous_run_id }}' -ne '38630516871') {
+            throw 'Only approved original experiment run 38630516871 can be reused.'
+          }
+          $source = gh api 'repos/${{ github.repository }}/actions/runs/${{ inputs.previous_run_id }}' | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $source.head_sha -ne 'b4e053c2be8049823cf96303882d3360a3c30ebc' -or $source.status -ne 'completed') {
+            throw 'Original artifact run is unavailable or has a different source identity.'
+          }
+      - name: Download original payload and content evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dashboard-reuse-evidence-${{ matrix.targets.rids }}-${{ matrix.targets.variant }}
+          path: artifacts
+          run-id: ${{ inputs.previous_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download original build binlogs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cli-native-logs-${{ matrix.targets.rids }}-${{ matrix.targets.variant }}
+          path: artifacts/log
+          run-id: ${{ inputs.previous_run_id }}
+          github-token: ${{ github.token }}
+      - name: Restore repository toolchain
+        shell: pwsh
+        run: |
+          ./restore.cmd -ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify original payload and compiler execution
+        shell: pwsh
+        run: |
+          ./eng/scripts/validate-dashboard-reuse.ps1 -Stage VerifySaved -Rid '${{ matrix.targets.rids }}' -Configuration '${{ inputs.configuration }}' -Reuse:${{ matrix.targets.reuseDashboard && '$true' || '$false' }}
+          $log = 'artifacts/log/${{ inputs.configuration }}'
+          ./dotnet.cmd msbuild eng/scripts/dashboard-reuse-binlog.proj "/p:Binlog=$log/BuildBundleDeps.binlog" "/p:Report=$log/first-dashboard-compiler-tasks.txt" /p:ExpectDashboardCompiler=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Baseline parent binlogs record the child publish command, not its Csc/ILC events.
+          # Record comparable parent elapsed time, then verify the actual baseline child below.
+          ./dotnet.cmd msbuild eng/scripts/dashboard-reuse-binlog.proj "/p:Binlog=$log/BundlePayload.binlog" "/p:Report=$log/bundle-payload-tasks.txt" /p:ExpectDashboardCompiler=false /p:RecordOnly=${{ matrix.targets.reuseDashboard && 'false' || 'true' }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ('${{ matrix.targets.reuseDashboard }}' -eq 'true') {
+            if (Test-Path "$log/PublishDashboard.binlog") { throw 'Candidate produced a second Dashboard publish binlog.' }
+          }
+          else {
+            ./dotnet.cmd msbuild eng/scripts/dashboard-reuse-binlog.proj "/p:Binlog=$log/PublishDashboard.binlog" "/p:Report=$log/dashboard-compiler-tasks.txt" /p:ExpectDashboardCompiler=true
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Test original bundled native Dashboard HTTP assets SQLite and telemetry
+        shell: pwsh
+        run: ./eng/scripts/validate-dashboard-reuse.ps1 -Stage Smoke -Rid '${{ matrix.targets.rids }}' -Configuration '${{ inputs.configuration }}'
+      - name: Test Dashboard regular suite
+        shell: pwsh
+        run: |
+          ./dotnet.cmd test --project tests/Aspire.Dashboard.Tests/Aspire.Dashboard.Tests.csproj -c Release --no-launch-profile /p:ContinuousIntegrationBuild=true -- --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test original bundled native Dashboard browser interactivity
+        if: matrix.targets.rids == 'win-x64'
+        shell: pwsh
+        run: |
+          ./dotnet.cmd test --project tests/Aspire.Dashboard.Playwright.Tests/Aspire.Dashboard.Playwright.Tests.csproj -c Release --no-launch-profile /p:ContinuousIntegrationBuild=true /p:InstallBrowsersForPlaywright=true /p:RunOuterloopTests=true -- --filter-method "*.NativeDashboard_LoadsInteractivePageWithoutBrowserErrors" --filter-not-trait "quarantined=true" --report-trx --report-trx-filename dashboard-reuse-native.trx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $reports = @(Get-ChildItem artifacts -Recurse -File -Filter dashboard-reuse-native.trx)
+          if ($reports.Count -ne 1) { throw "Expected exactly one native browser test report, found $($reports.Count)." }
+          [xml]$report = Get-Content $reports[0].FullName
+          $counts = $report.TestRun.ResultSummary.Counters
+          if ($counts.total -ne '1' -or $counts.passed -ne '1' -or $counts.executed -ne '1' -or $counts.failed -ne '0') {
+            throw 'Expected exactly one passed native browser test, with no skips or failures.'
+          }
+      - name: Upload original payload validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-reuse-evidence-${{ matrix.targets.rids }}-${{ matrix.targets.variant }}
+          path: |
+            artifacts/log/dashboard-reuse/*.json
+            artifacts/log/dashboard-reuse/*.log
+            artifacts/log/dashboard-reuse/native-smoke/
+            artifacts/log/${{ inputs.configuration }}/*tasks.txt
+            artifacts/TestResults/
+          if-no-files-found: error
+          retention-days: 7
+
   compare_dashboard_reuse:
     if: always() && github.event_name == 'workflow_dispatch'
-    needs: build_cli_archives
+    needs: [build_cli_archives, validate_saved_dashboard]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

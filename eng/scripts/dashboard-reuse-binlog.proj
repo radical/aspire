@@ -5,6 +5,7 @@
       <Binlog ParameterType="System.String" Required="true" />
       <Report ParameterType="System.String" Required="true" />
       <ExpectDashboardCompiler ParameterType="System.Boolean" Required="true" />
+      <RecordOnly ParameterType="System.Boolean" />
     </ParameterGroup>
     <Task>
       <Using Namespace="Microsoft.Build.Framework" />
@@ -61,6 +62,10 @@
         Directory.CreateDirectory(Path.GetDirectoryName(Report));
         File.WriteAllLines(Report, new[] { "Seconds=" + (finished - started).TotalSeconds }.Concat(compilerTasks));
         Log.LogMessage(MessageImportance.High, "Dashboard compiler tasks in {0}: {1}", Binlog, string.Join(", ", compilerTasks));
+        if (RecordOnly)
+        {
+            return true;
+        }
         if (ExpectDashboardCompiler)
         {
             if (!compilerTasks.Contains("Csc") || !compilerTasks.Contains("Ilc"))
@@ -78,7 +83,14 @@
     </Task>
   </UsingTask>
   <Target Name="Verify">
-    <VerifyDashboardReuseBinlog Binlog="$(Binlog)" Report="$(Report)"
-                               ExpectDashboardCompiler="$(ExpectDashboardCompiler)" />
+    <PropertyGroup>
+      <!-- Workflow paths are repository-relative; MSBuild tasks run from this project's directory. -->
+      <_RepositoryRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..', '..'))</_RepositoryRoot>
+      <_BinlogPath>$([MSBuild]::NormalizePath('$(_RepositoryRoot)', '$(Binlog)'))</_BinlogPath>
+      <_ReportPath>$([MSBuild]::NormalizePath('$(_RepositoryRoot)', '$(Report)'))</_ReportPath>
+      <RecordOnly Condition="'$(RecordOnly)' == ''">false</RecordOnly>
+    </PropertyGroup>
+    <VerifyDashboardReuseBinlog Binlog="$(_BinlogPath)" Report="$(_ReportPath)"
+                               ExpectDashboardCompiler="$(ExpectDashboardCompiler)" RecordOnly="$(RecordOnly)" />
   </Target>
 </Project>
