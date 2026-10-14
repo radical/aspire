@@ -14,6 +14,7 @@
     Options:
     - SkipNativeBuild=true: Skip building native CLI (use pre-built from artifacts)
     - SkipManagedBuild=true: Skip building managed projects (use pre-built)
+    - ReuseDashboardPublish=true: Reuse the RID-specific Dashboard publish produced by dashboardpack
     - SkipTrayBuild=true: Use a pre-built native tray (required after official signing)
     - TrayAppPath: Override the pre-built macOS app directory
     - WindowsTrayPath: Override the pre-built Windows tray publish directory
@@ -122,10 +123,24 @@
     <Message Importance="high" Text="Publishing aspire-managed (self-contained)..." />
     <!-- Publish as self-contained single-file for the target RID -->
     <Exec Command="dotnet publish &quot;$(ManagedProjectPath)&quot; -c $(Configuration) -r $(TargetRid) --self-contained /p:GenerateDocumentationFile=false /p:EnforceCodeStyleInBuild=false $(_VersionSuffixArg) $(_ManagedBinlog)" />
-    <Message Importance="high" Text="Publishing Aspire Dashboard (Native AOT)..." />
-    <Exec Command="dotnet publish &quot;$(DashboardProjectPath)&quot; -c $(Configuration) -r $(TargetRid) /p:PlatformName=$(TargetRid) /p:GenerateDocumentationFile=false /p:EnforceCodeStyleInBuild=false $(_VersionSuffixArg) $(_DashboardBinlog)" />
+    <Message Importance="high" Text="Publishing Aspire Dashboard (Native AOT)..." Condition="'$(ReuseDashboardPublish)' != 'true'" />
+    <Exec Command="dotnet publish &quot;$(DashboardProjectPath)&quot; -c $(Configuration) -r $(TargetRid) /p:PlatformName=$(TargetRid) /p:GenerateDocumentationFile=false /p:EnforceCodeStyleInBuild=false $(_VersionSuffixArg) $(_DashboardBinlog)" Condition="'$(ReuseDashboardPublish)' != 'true'" />
     <Message Importance="high" Text="Publishing Aspire TerminalHost (Native AOT)..." />
     <Exec Command="dotnet publish &quot;$(TerminalHostProjectPath)&quot; -c $(Configuration) -r $(TargetRid) /p:GenerateDocumentationFile=false /p:EnforceCodeStyleInBuild=false $(_VersionSuffixArg) $(_TerminalHostBinlog)" />
+  </Target>
+
+  <!-- Opt-in only: standalone bundle builds must still publish their own Dashboard.
+       Require the same RID/configuration path used by dashboardpack and CreateLayout. -->
+  <Target Name="_ValidatePrebuiltDashboard" BeforeTargets="_PublishManagedProjects"
+          Condition="'$(ReuseDashboardPublish)' == 'true' and '$(SkipManagedBuild)' != 'true'">
+    <PropertyGroup>
+      <_PrebuiltDashboardPublishPath>$(ArtifactsDir)bin\Aspire.Dashboard\$(TargetRid)\$(Configuration)\net11.0\$(TargetRid)\publish</_PrebuiltDashboardPublishPath>
+      <_PrebuiltDashboardExecutable>Aspire.Dashboard</_PrebuiltDashboardExecutable>
+      <_PrebuiltDashboardExecutable Condition="$(TargetRid.StartsWith('win-'))">Aspire.Dashboard.exe</_PrebuiltDashboardExecutable>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_PrebuiltDashboardPublishPath)/$(_PrebuiltDashboardExecutable)')"
+           Text="Prebuilt Dashboard executable is missing: $(_PrebuiltDashboardPublishPath)/$(_PrebuiltDashboardExecutable)" />
+    <Message Importance="high" Text="Reusing prebuilt Dashboard publish: $(_PrebuiltDashboardPublishPath)" />
   </Target>
 
   <!-- SkipNativeBuild skips the outer CLI publish, not native payload components.

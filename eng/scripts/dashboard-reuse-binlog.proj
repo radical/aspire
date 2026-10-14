@@ -1,0 +1,84 @@
+<Project DefaultTargets="Verify">
+  <UsingTask TaskName="VerifyDashboardReuseBinlog" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Binlog ParameterType="System.String" Required="true" />
+      <Report ParameterType="System.String" Required="true" />
+      <ExpectDashboardCompiler ParameterType="System.Boolean" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="Microsoft.Build.Framework" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Code Type="Method" Language="cs"><![CDATA[
+      public override bool Execute()
+      {
+        // Use the host's reader through reflection: the inline task compiler targets
+        // netstandard, while this pinned SDK's Microsoft.Build.dll targets .NET 11.
+        var sourceType = Type.GetType("Microsoft.Build.Logging.BinaryLogReplayEventSource, Microsoft.Build", true);
+        var source = Activator.CreateInstance(sourceType);
+        var compilerTasks = new List<string>();
+        DateTime started = default;
+        DateTime finished = default;
+        sourceType.GetEvent("BuildStarted").AddEventHandler(source, new BuildStartedEventHandler((_, e) => started = e.Timestamp));
+        sourceType.GetEvent("BuildFinished").AddEventHandler(source, new BuildFinishedEventHandler((_, e) => finished = e.Timestamp));
+        sourceType.GetEvent("TaskStarted").AddEventHandler(source, new TaskStartedEventHandler((_, e) =>
+        {
+            if (e.ProjectFile.EndsWith("Aspire.Dashboard.csproj", StringComparison.OrdinalIgnoreCase) &&
+                (e.TaskName == "Csc" || e.TaskName == "Ilc" || e.TaskName == "LinkNative"))
+            {
+                compilerTasks.Add(e.TaskName);
+            }
+        }));
+        sourceType.GetEvent("MessageRaised").AddEventHandler(source, new BuildMessageEventHandler((_, e) =>
+        {
+            // ILC/linking are Exec tasks, for example:
+            //   "...runtime.win-x64.microsoft.dotnet.ilcompiler...\tools\ilc" @"...Aspire.Dashboard.ilc.rsp"
+            //   "...link.exe" @"...obj\Aspire.Dashboard\...\native\link.rsp"
+            if (e is TaskCommandLineEventArgs nativeCommand &&
+                nativeCommand.TaskName == "Exec" &&
+                nativeCommand.CommandLine.Contains("Aspire.Dashboard"))
+            {
+                if (nativeCommand.CommandLine.Contains("ilcompiler"))
+                {
+                    compilerTasks.Add("Ilc");
+                }
+                if (nativeCommand.CommandLine.Contains("link.exe"))
+                {
+                    compilerTasks.Add("LinkNative");
+                }
+            }
+            if (e is TaskCommandLineEventArgs command &&
+                command.TaskName == "Exec" &&
+                command.CommandLine.Contains("dotnet publish") &&
+                command.CommandLine.Contains("Aspire.Dashboard.csproj"))
+            {
+                compilerTasks.Add("Exec Dashboard publish");
+            }
+        }));
+        sourceType.GetMethod("Replay", new[] { typeof(string) }).Invoke(source, new object[] { Binlog });
+        Directory.CreateDirectory(Path.GetDirectoryName(Report));
+        File.WriteAllLines(Report, new[] { "Seconds=" + (finished - started).TotalSeconds }.Concat(compilerTasks));
+        Log.LogMessage(MessageImportance.High, "Dashboard compiler tasks in {0}: {1}", Binlog, string.Join(", ", compilerTasks));
+        if (ExpectDashboardCompiler)
+        {
+            if (!compilerTasks.Contains("Csc") || !compilerTasks.Contains("Ilc"))
+            {
+                Log.LogError("Baseline must execute Dashboard Csc and Ilc, not reuse an earlier publish.");
+            }
+        }
+        else if (compilerTasks.Count != 0)
+        {
+            Log.LogError("Candidate unexpectedly executes Dashboard compiler tasks.");
+        }
+        return !Log.HasLoggedErrors;
+      }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <Target Name="Verify">
+    <VerifyDashboardReuseBinlog Binlog="$(Binlog)" Report="$(Report)"
+                               ExpectDashboardCompiler="$(ExpectDashboardCompiler)" />
+  </Target>
+</Project>
