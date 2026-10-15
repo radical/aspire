@@ -158,14 +158,54 @@ def locate(api, read_control):
     return control, receiver.record_for(api, control)
 
 
+def predecessors(ledger, record):
+    """Resolve exact retry receipts without treating unrelated history as permission."""
+    result = []
+    seen = {record["id"]}
+    current = record
+    while "retry_of" in current:
+        receipt = current["retry_of"]
+        previous = next((entry for entry in ledger.get("workItems", []) if entry["id"] == receipt["item_id"]), None)
+        if previous is None or previous["id"] in seen or previous["control"]["issue"] != record["control"]["issue"]:
+            raise ValueError("retry reference missing, cyclic or different issue")
+        assignments = [entry for entry in previous["assignments"] if entry["id"] == receipt["assignment_id"]]
+        if len(assignments) != 1 or assignments[0].get("execution", {}).get("task_id") != receipt["task_id"]:
+            raise ValueError("retry assignment/task identity mismatch")
+        result.append((previous, assignments[0]))
+        seen.add(previous["id"])
+        current = previous
+    return result
+
+
+def superseded(ledger, record):
+    return any(other.get("retry_of", {}).get("item_id") == record["id"]
+               for other in ledger.get("workItems", []))
+
+
 def available(api, record):
     issue = record["control"]["issue"]
+    history = predecessors(api.ledger, record)
+    receipts = {(previous["id"], assignment["id"]) for previous, assignment in history}
+    ancestors = {previous["id"] for previous, _ in history}
+    if superseded(api.ledger, record):
+        raise ValueError("retry already superseded this attempt")
+    if any(other is not record and other["control"]["issue"] == issue and "retry_of" in other
+           and other["id"] not in ancestors for other in api.ledger.get("workItems", [])):
+        raise ValueError("unrelated retry already owns this issue")
+    if history and any("execution" not in assignment
+                       for other in api.ledger.get("workItems", [])
+                       if other is not record and other["control"]["issue"] == issue
+                       for assignment in other["assignments"]):
+        raise ValueError("retry requires reconciled execution history, not packet assignments")
+    if history and any(other is not record and other["control"]["issue"] == issue
+                       and other["control"]["action"] != "pause" and not other["assignments"]
+                       for other in api.ledger.get("workItems", [])):
+        raise ValueError("unassigned same-issue work requires reconciliation")
     for other, assignment, saved in executions(api.ledger):
         if other is record or other["control"]["issue"] != issue:
             continue
         if saved["state"] != "no_send":
-            expected = {"item_id": other["id"], "assignment_id": assignment["id"], "task_id": saved["task_id"]}
-            if record.get("retry_of") != expected:
+            if (other["id"], assignment["id"]) not in receipts:
                 raise ValueError("issue already has cloud execution; human reconciliation required")
             retryable(api, other, assignment)
 
@@ -178,8 +218,8 @@ def retryable(api, record, assignment):
     if observed["state"] not in state.TERMINAL or saved["worker_reserved"] or saved["worker_actual"] is None:
         raise ValueError("retry requires terminal task and known billing")
     pr = observe_task_pr(api, observed)
-    if pr["state"] != "closed" or pr["merged"] or pr["changed_files"] != 0:
-        raise ValueError("retry requires closed unmerged zero-change PR")
+    if pr["state"] != "closed" or pr["merged"] or pr["changed_files"] != 0 or pr.get("draft") is not True:
+        raise ValueError("retry requires closed unmerged zero-change PR that remains a draft")
     if any(label.get("name") == "shepherd-hands-off" for label in pr.get("labels", [])):
         raise ValueError("retry PR is hands-off")
 
@@ -191,14 +231,16 @@ def prepare_retry(api, read_control, expected_task):
     previous = [(other, assignment) for other, assignment, saved in executions(api.ledger)
                 if other is not record and other["control"]["issue"] == control["issue"]
                 and saved["state"] != "no_send"]
-    if len(previous) != 1 or previous[0][1]["execution"]["task_id"] != expected_task:
+    matched = [(other, assignment) for other, assignment in previous
+               if assignment["execution"]["task_id"] == expected_task]
+    if len(matched) != 1:
         raise ValueError("retry requires one exact previous task")
-    old, assignment = previous[0]
-    retryable(api, old, assignment)
+    old, assignment = matched[0]
     receipt = {"item_id": old["id"], "assignment_id": assignment["id"], "task_id": expected_task}
     if record.get("retry_of", receipt) != receipt or record["assignments"] and "retry_of" not in record:
         raise ValueError("retry identity changed")
     record["retry_of"] = receipt
+    available(api, record)
     receiver.fresh(api, read_control, control)
     api.persist()
     return prepare(api, read_control)

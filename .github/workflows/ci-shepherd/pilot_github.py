@@ -515,8 +515,15 @@ class PilotGitHub:
             if observed != scope["issue"]:
                 raise ValueError("current follow-up source changed")
             return
+        import work_item_execution as execution
+        active_retries = [record for record in self.ledger.get("workItems", [])
+                          if record["control"]["issue"] == identity and "retry_of" in record
+                          and not execution.superseded(self.ledger, record)]
+        if len(active_retries) > 1:
+            raise ValueError("ambiguous retry ownership")
+        item = active_retries[0]["id"] if active_retries else f"issue-{identity['number']}-{identity['node_id']}"
         prior = [value for value in self.ledger.get("normalRuns", []) if value["item"] ==
-                 f"issue-{identity['number']}-{identity['node_id']}" and value["phase"] == "issue-intake"
+                 item and value["phase"] == "issue-intake"
                  and value["state"] == "settled"]
         if prior:
             context = prior[-1]["context"]

@@ -1,9 +1,11 @@
 """Normal host entrypoints with fresh clients and serialized remote authority."""
 
 from copy import deepcopy
+from contextlib import redirect_stdout
 from datetime import timedelta
 import base64
 import json
+import io
 import os
 from pathlib import Path
 import re
@@ -31,6 +33,10 @@ import work_item_followup as followup
 import pilot_github
 import run_report
 import work_item_receiver as receiver
+import work_items as items
+import shepherd
+import pilot_storage as storage
+from memory_fixture import MemoryRemote
 from test_pilot_github import Transport, pr
 from test_work_item_receiver import Authority
 from test_work_items import control, result
@@ -110,7 +116,7 @@ class NormalLoopTests(unittest.TestCase):
                 self.posts.append((deepcopy(body), self.saved()))
                 if self.lost:
                     raise LostResponse("lost task receipt")
-                return Response({"id": "TASK1"}, {}, 201)
+                return Response({"id": getattr(self, "next_task_id", "TASK1")}, {}, 201)
             if method == "POST" and endpoint == self.prefix + "/issues/20872/comments":
                 self.issue_posts.append((deepcopy(body), self.saved()))
                 comment = {"id": 8000, "user": {"id": 1472, "login": "radical"}, "body": body["body"]}
@@ -133,7 +139,7 @@ class NormalLoopTests(unittest.TestCase):
             if argv[:2] == ["gh", "auth"]:
                 return 0, "gho_fixture\n", ""
             if argv[:3] == ["gh", "agent-task", "view"]:
-                self.assertEqual(SESSION, argv[3])
+                self.assertEqual(getattr(self, "expected_session", SESSION), argv[3])
                 return 0, self.logs or "No structured result.", ""
             raise AssertionError(argv)
 
@@ -214,7 +220,7 @@ class NormalLoopTests(unittest.TestCase):
         packet = self.prepare(FEED)
         self.assertIsNotNone(packet, "minimal feed must admit normal intake, not skip upstream issues")
         receipt = self.settle(packet, self.intake(packet))
-        self.assertEqual("approval-required", receipt["outcome"])
+        self.assertEqual("approval-required", receipt["outcome"], receipt)
         self.assertEqual([], self.posts)
         os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
         self.prepare()
@@ -222,6 +228,249 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual("sending", self.posts[0][1]["workItems"][0]["assignments"][0]["execution"]["state"])
         self.assertEqual("TASK1", self.saved()["workItems"][0]["assignments"][0]["execution"]["task_id"])
         self.task("in_progress")
+
+    def stage_retry(self, old, new, task):
+        api = pilot.hosted_api(RUN, os.environ)
+        path = self.root / f"{new}.json"
+        with patch.object(shepherd, "connect", return_value=api), redirect_stdout(io.StringIO()) as output:
+            code = shepherd.main(["--target", "upstream", "--tracker", "99", "--authority", "500",
+                                  "--tracker-node", "TRACKER99", "retry", old, "--id", new,
+                                  "--expected-task", task, "--out", str(path), "--json"])
+        self.assertEqual(0, code, output.getvalue())
+        proposal = json.loads(path.read_text())
+        self.assertEqual("retry", proposal["operation"])
+        self.assertEqual([], [entry for entry in self.saved()["workItems"] if entry["id"] == new])
+        applied = shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual("run", applied["action"])
+        self.assertEqual([], next(entry for entry in self.saved()["workItems"] if entry["id"] == new)["assignments"])
+
+    def retryable_history(self):
+        self.launch()
+        self.task("completed")
+        self.add_pr(0)
+        self.remote.values[self.prefix + "/pulls/7"]["state"] = "closed"
+        self.remote = MemoryRemote(self.remote)
+        self.saved = self.remote.current_ledger
+        api = pilot.hosted_api(RUN, os.environ)
+        api.memory_authorized = True
+        storage.initialize(api)
+        return self.saved()["workItems"][0]["id"]
+
+    def complete_retry(self, item, task_id, number):
+        record = next(entry for entry in self.saved()["workItems"] if entry["id"] == item)
+        task = deepcopy(self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"])
+        task["id"] = task_id
+        session = task["sessions"][0]
+        session.update(id=str(uuid.uuid4()), task_id=task_id, state="completed",
+                       prompt=execution.request(pilot.hosted_api(RUN, os.environ),
+                                                record, record["assignments"][0])["prompt"])
+        self.expected_session = session["id"]
+        pull = deepcopy(self.remote.values[self.prefix + "/pulls/7"])
+        pull.update(id=1000 + number, number=number, node_id=f"PR{number}",
+                    issue_url=f"https://api.github.com/{self.prefix}/issues/{number}")
+        pull["head"]["ref"] = f"fix-{number}"
+        session["head_ref"] = pull["head"]["ref"]
+        task["artifacts"] = [
+            {"provider": "github", "type": "pull", "data": {"id": pull["id"], "global_id": pull["node_id"]}},
+            {"provider": "github", "type": "branch",
+             "data": {"base_ref": "main", "head_ref": pull["head"]["ref"]}}]
+        self.remote.values["agents/repos/microsoft/aspire/tasks/" + task_id] = task
+        self.remote.values[self.prefix + f"/pulls/{number}"] = pull
+        self.remote.values[self.prefix + "/pulls"].append(pull)
+        self.remote.values[self.prefix + f"/issues/{number}"] = {
+            "id": 5000 + number, "node_id": pull["node_id"], "number": number,
+            "repository_url": f"https://api.github.com/{self.prefix}",
+            "pull_request": {"url": f"https://api.github.com/{self.prefix}/pulls/{number}"}}
+
+    def test_staged_retry_enters_real_intake_and_retains_two_predecessors(self):
+        old = self.retryable_history()
+        self.stage_retry(old, "retry-second", "TASK1")
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            packet = next(child for child in packet["packets"] if child["item"] == "retry-second")
+        self.assertEqual("issue-intake", packet["normal"])
+        receipt = self.settle(packet, self.intake(packet))
+        self.assertEqual("approval-required", receipt["outcome"], receipt)
+        self.assertEqual(1, len(self.posts))
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
+        self.next_task_id = "TASK2"
+        self.prepare()
+        self.assertEqual(2, len(self.posts))
+        self.assertEqual(2, len(self.saved()["workItems"]))
+        self.complete_retry("retry-second", "TASK2", 8)
+        self.stage_retry("retry-second", "retry-third", "TASK2")
+        ledger = self.saved()
+        total = normal_loop.native_spend(ledger) + sum(
+            (saved["worker_actual"] or 0) + saved["worker_reserved"]
+            for _, _, saved in execution.executions(ledger))
+        self.assertGreater(total, 0)
+        self.assertEqual(total, normal_loop.item_spend(ledger, "retry-third"))
+        prior_assignments = [entry["assignments"][0]["id"] for entry in self.saved()["workItems"][:2]]
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            self.assertEqual(["retry-third"], [child["item"] for child in packet["packets"]])
+            packet = packet["packets"][0]
+        self.assertEqual("issue-intake", packet["normal"])
+        self.assertEqual("retry-third", packet["item"])
+        # Each intake uses a real, distinct inference session, not a fabricated
+        # normalRuns receipt copied from the first attempt.
+        evidence = reconciliation_evidence(self.intake(packet))
+        receipt = pilot.settle(pilot.hosted_api(RUN, os.environ), packet, evidence, 2, self.clock())
+        self.assertEqual("approval-required", receipt["outcome"], receipt)
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps({"revoked": True})
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertEqual(2, len(self.posts))
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
+        self.next_task_id = "TASK3"
+        self.remote.values[self.prefix + "/pulls/7"]["state"] = "open"
+        with self.assertRaisesRegex(ValueError, "zero-change"):
+            self.prepare()
+        self.assertEqual(2, len(self.posts))
+        self.remote.values[self.prefix + "/pulls/7"]["state"] = "closed"
+        self.prepare()
+        self.assertEqual(3, len(self.posts))
+        history = deepcopy(self.saved()["workItems"][:2])
+        self.assertEqual(prior_assignments, [entry["assignments"][0]["id"] for entry in history])
+        self.complete_retry("retry-third", "TASK3", 9)
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            self.assertEqual(["retry-third"], [child["item"] for child in packet["packets"]])
+            packet = packet["packets"][0]
+        self.assertEqual("issue-assessment", packet["normal"])
+        self.assertEqual("retry-third", packet["item"])
+        self.assertEqual("assessed", self.settle(packet, self.assessment(packet))["outcome"])
+        self.prepare()
+        self.assertEqual(3, len(self.posts))
+        self.assertEqual(history, self.saved()["workItems"][:2])
+        self.assertEqual(["TASK1", "TASK2", "TASK3"],
+                         [entry["assignments"][0]["execution"]["task_id"] for entry in self.saved()["workItems"]])
+
+    def test_retry_staging_blocks_unsafe_predecessor_without_changes(self):
+        old = self.retryable_history()
+        task = self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]
+        pull = self.remote.values[self.prefix + "/pulls/7"]
+        original_task, original_pull = deepcopy(task), deepcopy(pull)
+        for changed in ("active", "unknown_cost", "open", "merged", "nonempty", "not_draft"):
+            task.clear()
+            task.update(deepcopy(original_task))
+            pull.clear()
+            pull.update(deepcopy(original_pull))
+            if changed == "active":
+                task["state"] = task["sessions"][0]["state"] = "in_progress"
+            elif changed == "unknown_cost":
+                task["sessions"][0]["usage"] = None
+            else:
+                pull.update({"open": {"state": "open"}, "merged": {"merged": True},
+                             "nonempty": {"changed_files": 1}, "not_draft": {"draft": False}}[changed])
+            before = deepcopy(self.saved())
+            api = pilot.hosted_api(RUN, os.environ)
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "retry requires"):
+                shepherd.stage(api, "retry", old, new_id="new", expected_task="TASK1")
+            self.assertEqual(before, self.saved())
+            self.assertEqual(1, len(self.posts))
+
+    def test_retry_apply_rechecks_pr_staleness_and_authority(self):
+        old = self.retryable_history()
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage(api, "retry", old, new_id="new", expected_task="TASK1")
+        before = deepcopy(self.saved())
+        self.remote.values[self.prefix + "/pulls/7"]["state"] = "open"
+        with self.assertRaisesRegex(ValueError, "zero-change"):
+            shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(before, self.saved())
+        self.remote.values[self.prefix + "/pulls/7"]["state"] = "closed"
+        os.environ["CI_SHEPHERD_ENABLE"] = "false"
+        with self.assertRaises(ValueError):
+            shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(before, self.saved())
+        os.environ["CI_SHEPHERD_ENABLE"] = "true"
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        with self.assertRaisesRegex(ValueError, "stale"):
+            shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(1, len(self.posts))
+
+    def test_retry_paused_after_intake_reservation_cannot_be_revived(self):
+        old = self.retryable_history()
+        self.stage_retry(old, "new", "TASK1")
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            packet = packet["packets"][0]
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage(api, "remove", "new")
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        receipt = self.settle(packet, self.intake(packet))
+        self.assertEqual("rejected", receipt["outcome"])
+        self.assertIn("request changed", receipt["reason"])
+        self.prepare(FEED)
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual("pause", self.saved()["workItems"][-1]["control"]["action"])
+
+    def test_retry_human_intake_decision_never_dispatches_on_next_turn(self):
+        old = self.retryable_history()
+        self.stage_retry(old, "new", "TASK1")
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            packet = packet["packets"][0]
+        self.assertEqual("human", self.settle(packet, self.intake(packet, action="human"))["outcome"])
+        self.prepare(FEED)
+        self.assertEqual(1, len(self.posts))
+        self.assertEqual([], self.saved()["workItems"][-1]["assignments"])
+
+    def test_pending_retry_cannot_fork_and_pause_never_authorizes_duplicate(self):
+        old = self.retryable_history()
+        self.stage_retry(old, "new", "TASK1")
+        api = pilot.hosted_api(RUN, os.environ)
+        with self.assertRaisesRegex(ValueError, "same-issue work|complete previous attempt chain"):
+            shepherd.stage(api, "retry", old, new_id="forked", expected_task="TASK1")
+        proposal = shepherd.stage(api, "remove", "new")
+        before = deepcopy(self.saved()["workItems"])
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        after = self.saved()["workItems"]
+        self.assertEqual(before[0], after[0])
+        self.assertEqual(before[1]["retry_of"], after[1]["retry_of"])
+        self.assertEqual(before[1]["assignments"], after[1]["assignments"])
+        with self.assertRaisesRegex(ValueError, "already tracked"):
+            shepherd.stage(api, "add", "reset", issue=after[1]["control"]["issue"],
+                           route="flaky_test", scope="New ID is not permission to duplicate.")
+        self.prepare(FEED)
+        self.assertEqual(1, len(self.posts))
+
+    def test_retry_preserves_passive_same_issue_history(self):
+        old = self.retryable_history()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        control = deepcopy(api.ledger["workItems"][0]["control"])
+        control.update(id="passive-history", action="pause")
+        passive = items.new_record(control)
+        api.ledger["workItems"].append(passive)
+        api.persist()
+        self.stage_retry(old, "new", "TASK1")
+        self.assertEqual(passive, next(entry for entry in self.saved()["workItems"]
+                                      if entry["id"] == "passive-history"))
+        self.assertEqual(1, len(self.posts))
+
+    def test_retry_blocks_unreconciled_packet_history_even_when_paused(self):
+        old = self.retryable_history()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        control = deepcopy(api.ledger["workItems"][0]["control"])
+        control["id"] = "escaped-packet"
+        packet_record = items.new_record(control)
+        assignment = items.claim(packet_record, control)
+        assignment["delivery"] = "delivered"
+        control.update(action="pause", revision=control["revision"] + 1)
+        items.reconcile(packet_record, control)
+        api.ledger["workItems"].append(packet_record)
+        api.persist()
+        before = deepcopy(self.saved())
+        with self.assertRaisesRegex(ValueError, "not packet assignments"):
+            shepherd.stage(api, "retry", old, new_id="new", expected_task="TASK1")
+        self.assertEqual(before, self.saved())
+        self.assertEqual(1, len(self.posts))
 
     def task(self, status):
         record = self.saved()["workItems"][0]
@@ -387,7 +636,7 @@ class NormalLoopTests(unittest.TestCase):
         self.assertEqual([], self.saved()["chains"])
         self.assertEqual(1, len(self.issue_posts))
 
-    def test_sibling_notices_refresh_shared_source_before_terminal_followup(self):
+    def test_manual_retry_does_not_assess_superseded_attempt(self):
         self.terminal()
         self.add_pr(0)["state"] = "closed"
         self.policy()
@@ -407,22 +656,11 @@ class NormalLoopTests(unittest.TestCase):
 
         with patch.object(live.HTTPTransport, "__call__", comments_update_issue):
             packet = self.prepare()
-            self.assertEqual("worklist", packet["normal"])
-            self.assertEqual(1, len(packet["packets"]))
-            child = packet["packets"][0]
-            self.assertEqual("issue-assessment", child["normal"])
-            self.assertEqual(self.issue["updated_at"], child["context"]["issue"]["updatedAt"])
-            decision = {"schemaVersion": 1, "packetId": packet["packetId"], "operation": packet["operation"],
-                        "decisions": [self.assessment(child)]}
-            receipt = self.settle(packet, decision)
-            self.assertEqual("processed", receipt["outcome"])
-            self.assertEqual(["assessed"], [item["outcome"] for item in receipt["items"]])
+            self.assertIsNone(packet)
             self.prepare()
         notices = [body["body"] for body, _ in self.issue_posts if body["body"].startswith(
             "[automated] **CI Shepherd: tracking candidate fixes**")]
-        self.assertEqual(1, len(notices))
-        self.assertIn("/pull/7", notices[0])
-        self.assertIn("/pull/8", notices[0])
+        self.assertEqual([], notices)
         self.assertEqual(1, len(self.posts))
         self.assertEqual(2, len(self.saved()["workItems"]))
 

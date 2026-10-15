@@ -177,8 +177,14 @@ def native_spend(ledger, now=None, item=None):
 
 
 def item_spend(ledger, item):
-    return native_spend(ledger, item=item) + sum((saved["worker_actual"] or 0) + saved["worker_reserved"]
-        for record, _, saved in execution.executions(ledger) if record["id"] == item)
+    record = next((entry for entry in ledger.get("workItems", []) if entry["id"] == item), None)
+    attempts = {item}
+    if record is not None:
+        attempts.update(previous["id"] for previous, _ in execution.predecessors(ledger, record))
+    # A new attempt ID must not reset the issue's cumulative retry allowance.
+    return sum(native_spend(ledger, item=identity) for identity in attempts) + sum(
+        (saved["worker_actual"] or 0) + saved["worker_reserved"]
+        for record, _, saved in execution.executions(ledger) if record["id"] in attempts)
 
 
 def digest(value):
@@ -578,6 +584,10 @@ def prepare(api, run, now, feed=None):
         # their issue numbers cannot be resolved against the authority repository.
         if record["control"]["issue"]["repository"] != api.repository:
             row["statusOnly"] = "Issue is outside the authority namespace."
+        elif execution.superseded(api.ledger, record):
+            row["statusOnly"] = "Superseded by an explicit retry; history and billing retained."
+            worklist.append(row)
+            continue
         elif not prior:
             row["statusOnly"] = ("No normal intake; cloud work is observation-only." if saved
                                  else "No settled normal intake receipt.")
@@ -644,7 +654,28 @@ def prepare(api, run, now, feed=None):
         item = record["id"]
         prior = [value for value in api.ledger.get("normalRuns", [])
                  if value["item"] == item and value["phase"] == "issue-intake" and value["state"] == "settled"]
+        if execution.superseded(api.ledger, record):
+            continue
+        if (not prior and "retry_of" in record and not record["assignments"]
+                and record["control"]["action"] == "run"):
+            observed = source(api, record["control"]["issue"]["number"])
+            if not eligible(observed) or observed["identity"] != record["control"]["issue"]:
+                continue
+            execution.available(api, record)
+            retry_feed = {"reported_kind": record["control"]["reported_kind"],
+                          "issue_url": f"https://github.com/{api.repository}/issues/{observed['identity']['number']}"}
+            context = intake_context(api, retry_feed, observed, candidates(api, observed))
+            # Bind the operator's pending retry request into the real inference
+            # packet. A pause/edit after preparation cannot be undone by settle.
+            context["retryControl"] = deepcopy(record["control"])
+            context["retryOf"] = deepcopy(record["retry_of"])
+            packet = reserve_packet(item, "issue-intake", context)
+            if packet is not None:
+                packets.append(packet)
+            continue
         if not prior or item not in observed_items:
+            continue
+        if "retry_of" in record and (prior[-1].get("decision") or {}).get("action") != "investigate":
             continue
         control = record["control"]
         observed = observed_items[item]
@@ -861,15 +892,32 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decis
         if digest(fresh) != packet["context"]["candidateDigest"]:
             raise ValueError("occurrence evidence changed")
         selected = next(entry for entry in fresh if entry["id"] == decision["evidenceId"])
+        retry_control = packet["context"].get("retryControl")
+        if retry_control is not None:
+            record = next(entry for entry in api.ledger["workItems"] if entry["id"] == value["item"])
+            if (record["control"] != retry_control or record["retry_of"] != packet["context"]["retryOf"]
+                    or record["assignments"] or record["control"]["action"] != "run"):
+                raise ValueError("retry request changed before intake settlement")
+            execution.available(api, record)
+            if selected["occurrence"] != retry_control["occurrence"]:
+                raise ValueError("retry must evaluate its pinned failure occurrence")
+            api.guard_work_item(record["control"])
         policy = policy_for(api, observed["identity"])
-        control = {"schema_version": 1, "id": value["item"], "revision": 1, "issue": observed["identity"],
+        control = {"schema_version": 1, "id": value["item"],
+                   "revision": retry_control["revision"] + 1 if retry_control is not None else 1,
+                   "issue": observed["identity"],
                    "reported_kind": packet["context"]["feed"]["reported_kind"], "requested_route": decision["route"],
                    "action": "run", "occurrence": selected["occurrence"], "scope": SCOPE,
                    "authority": {"local_edits": False, "issue_comment": bool(policy and policy["issue_comment"]),
                                  "draft_pr": False,
                                  "issue_create": False, "destination": None}, "pr_review": None}
-        api.guard_work_item(control)
+        if retry_control is None:
+            api.guard_work_item(control)
         receiver.record_for(api, control)
+        if retry_control is not None:
+            api.control = deepcopy(control)
+            if hasattr(api, "transport"):
+                api.transport.control = deepcopy(control)
         value.update(state="settled", decision=followup.redact_fields(deepcopy(decision), api.token))
         api.persist()
         read = read_control(api, value["item"])

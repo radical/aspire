@@ -118,22 +118,8 @@ def connect(args, *, write=False):
 def validate_graph(ledger):
     """Reuse record/import validators, then check explicit retry links in both directions."""
     state.validate(ledger)
-    records = {record["id"]: record for record in ledger.get("workItems", [])}
-    for record in records.values():
-        visited = {record["id"]}
-        current = record
-        while "retry_of" in current:
-            reference = current["retry_of"]
-            parent = records.get(reference["item_id"])
-            if parent is None or parent["id"] in visited:
-                raise ValueError("retry reference missing or cyclic")
-            assignments = [entry for entry in parent["assignments"] if entry["id"] == reference["assignment_id"]]
-            if (len(assignments) != 1
-                    or assignments[0].get("execution", {}).get("task_id") != reference["task_id"]
-                    or parent["control"]["issue"] != current["control"]["issue"]):
-                raise ValueError("retry issue/assignment/task reference mismatch")
-            visited.add(parent["id"])
-            current = parent
+    for record in ledger.get("workItems", []):
+        execution.predecessors(ledger, record)
     return ledger
 
 
@@ -288,12 +274,47 @@ def show(api, selector, *, live=False):
     return result
 
 
-def candidate(ledger, operation, control):
+def candidate(ledger, operation, control, retry_of=None):
     items.validate_control(control)
     changed = deepcopy(ledger)
     records = changed.setdefault("workItems", [])
     record = next((entry for entry in records if entry["id"] == control["id"]), None)
-    if operation == "add":
+    if operation == "retry":
+        if record is not None:
+            raise ValueError("retry requires a new item ID")
+        import normal_loop
+        expected = {"schema_version": 1, "id": control["id"], "revision": 1, "issue": control["issue"],
+                    "reported_kind": control["reported_kind"], "requested_route": control["requested_route"],
+                    "action": "run", "occurrence": control["occurrence"], "scope": normal_loop.SCOPE,
+                    "authority": {"local_edits": False, "issue_comment": False, "draft_pr": False,
+                                  "destination": None}, "pr_review": None}
+        if control != expected or retry_of is None:
+            raise ValueError("retry must request fresh normal intake without effect permissions")
+        record = items.new_record(control)
+        record["retry_of"] = deepcopy(retry_of)
+        records.append(record)
+        history = execution.predecessors(changed, record)
+        if any(control[key] != history[0][0]["control"][key]
+               for key in ("requested_route", "reported_kind", "occurrence")):
+            raise ValueError("retry must retain the predecessor intake identity")
+        if control["occurrence"] is None:
+            raise ValueError("normal retry requires a pinned failure occurrence")
+        if any(entry["control"]["action"] != "pause" and not entry["assignments"]
+               for entry in records if entry is not record and entry["control"]["issue"] == control["issue"]):
+            raise ValueError("unassigned same-issue work requires reconciliation")
+        if any("execution" not in assignment
+               for entry in records if entry is not record and entry["control"]["issue"] == control["issue"]
+               for assignment in entry["assignments"]):
+            raise ValueError("retry requires reconciled execution history, not packet assignments")
+        receipts = {(old["id"], assignment["id"]) for old, assignment in history}
+        if (any((old["id"], assignment["id"]) not in receipts
+                for old, assignment, saved in execution.executions(changed)
+                if old is not record and old["control"]["issue"] == control["issue"] and saved["state"] != "no_send")
+                or any(old is not record and old["control"]["issue"] == control["issue"]
+                       and "retry_of" in old and old["id"] not in {entry["id"] for entry, _ in history}
+                       for old in records)):
+            raise ValueError("retry must cover the complete previous attempt chain")
+    elif operation == "add":
         if record is not None or any(
                 entry["control"]["issue"]["repository"] == control["issue"]["repository"]
                 and entry["control"]["issue"]["number"] == control["issue"]["number"] for entry in records):
@@ -326,12 +347,30 @@ def candidate(ledger, operation, control):
     return changed
 
 
-def stage(api, operation, item_id, *, issue=None, route=None, scope=None):
+def stage(api, operation, item_id, *, issue=None, route=None, scope=None, new_id=None, expected_task=None):
     items.identifier(item_id, "item ID")
     ledger = load(api)
     if api.storage_revision is None:
         raise ValueError("staged management requires already activated branch authority")
-    if operation == "add":
+    retry_of = None
+    if operation == "retry":
+        items.identifier(new_id, "new retry item ID")
+        items.identifier(expected_task, "expected retry task")
+        old = next((entry for entry in ledger.get("workItems", []) if entry["id"] == item_id), None)
+        if old is None or not old["assignments"]:
+            raise ValueError("retry requires an exact previous task")
+        assignment = old["assignments"][-1]
+        if assignment.get("execution", {}).get("task_id") != expected_task:
+            raise ValueError("retry requires an exact previous task")
+        retry_of = {"item_id": old["id"], "assignment_id": assignment["id"], "task_id": expected_task}
+        import normal_loop
+        control = {"schema_version": 1, "id": new_id, "revision": 1, "issue": deepcopy(old["control"]["issue"]),
+                   "reported_kind": old["control"]["reported_kind"],
+                   "requested_route": old["control"]["requested_route"], "action": "run",
+                   "occurrence": deepcopy(old["control"]["occurrence"]), "scope": normal_loop.SCOPE,
+                   "authority": {"local_edits": False, "issue_comment": False,
+                                 "draft_pr": False, "destination": None}, "pr_review": None}
+    elif operation == "add":
         control = {"schema_version": 1, "id": item_id, "revision": 1, "issue": issue,
                    "reported_kind": "unknown", "requested_route": route, "action": "pause",
                    "occurrence": None, "scope": scope,
@@ -352,12 +391,17 @@ def stage(api, operation, item_id, *, issue=None, route=None, scope=None):
                 control["requested_route"] = route
             if scope is not None:
                 control["scope"] = scope
-    candidate(ledger, operation, control)
-    return {**snapshot(api), "schema_version": 1, "operation": operation, "control": control}
+    changed = candidate(ledger, operation, control, retry_of)
+    if operation == "retry":
+        for old, assignment in execution.predecessors(changed, changed["workItems"][-1]):
+            execution.retryable(api, deepcopy(old), deepcopy(assignment))
+    return {**snapshot(api), "schema_version": 1, "operation": operation, "control": control,
+            **({"retry_of": retry_of} if retry_of is not None else {})}
 
 
 def apply(api, proposal, *, expected_revision):
-    contracts.exact(proposal, {"schema_version", "authority", "generation", "head", "operation", "control"},
+    contracts.exact(proposal, {"schema_version", "authority", "generation", "head", "operation", "control"}
+                    | ({"retry_of"} if proposal.get("operation") == "retry" else set()),
                     "tracking change")
     ledger = load(api)
     if (type(expected_revision) is not int or type(proposal["generation"]) is not int
@@ -367,12 +411,15 @@ def apply(api, proposal, *, expected_revision):
             or api.storage_revision is None
             or any(proposal[key] != value for key, value in snapshot(api).items())):
         raise ValueError("authority changed or staged change stale")
-    changed = candidate(ledger, proposal["operation"], proposal["control"])
+    changed = candidate(ledger, proposal["operation"], proposal["control"], proposal.get("retry_of"))
     control = proposal["control"]
     original = next((entry for entry in ledger.get("workItems", []) if entry["id"] == control["id"]), None)
     api.normal_guard()
     api.authority_guard()
     api.guard_work_item(original["control"] if original is not None else control)
+    if proposal["operation"] == "retry":
+        for old, assignment in execution.predecessors(changed, changed["workItems"][-1]):
+            execution.retryable(api, deepcopy(old), deepcopy(assignment))
     # Verify saved task/session bindings without changing receipts or settling
     # credits. Same-issue attempts may refer back to this item.
     for record in ledger.get("workItems", []):
@@ -487,6 +534,10 @@ def human(value, *, links=False, records=(), chains=()):
             ["Action", control["action"]], ["Route", control["requested_route"]],
             ["Control revision", control["revision"]], ["Authority revision", value["generation"]],
             ["PR-content approval", "cleared"]], [20, 70])
+        if value["operation"] == "retry":
+            lines.extend(paragraph("Predecessor item", value["retry_of"]["item_id"]))
+            lines.extend(paragraph("Predecessor task", value["retry_of"]["task_id"]))
+            lines.append("Requests fresh normal intake; cloud execution requires its own exact approval.")
         lines.extend(["", *paragraph("Scope", control["scope"]), "",
                       "No task is launched or cancelled; history and credit holds are retained.",
                       "New adds have no effect permissions. Review the proposal before apply."])
@@ -610,7 +661,7 @@ def main(argv=None):
     parser.add_argument("--authority", type=int)
     parser.add_argument("--tracker-node")
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("list", "show", "add", "edit", "remove", "apply"):
+    for command in ("list", "show", "add", "edit", "remove", "retry", "apply"):
         child = commands.add_parser(command)
         child.add_argument("--json", action="store_true", help="Stable sorted JSON; diagnostics remain on stderr")
         if command in {"list", "show"}:
@@ -623,6 +674,11 @@ def main(argv=None):
         elif command == "apply":
             child.add_argument("file", type=Path)
             child.add_argument("--expected-revision", type=int, required=True, help="Authority generation in staged preview")
+        elif command == "retry":
+            child.add_argument("previous", help="Exact immediate predecessor item ID")
+            child.add_argument("--id", required=True, help="New retry item ID")
+            child.add_argument("--expected-task", required=True, help="Exact predecessor task ID")
+            child.add_argument("--out", type=Path, required=True, help="New exclusive local proposal file")
         else:
             if command == "add":
                 child.add_argument("issue")
@@ -656,8 +712,10 @@ def main(argv=None):
                     issue = {"repository": repository, "number": number, "node_id": observed.get("node_id")}
                     load(api)
                     api.verify_issue(issue)
-                value = stage(api, args.command, args.id, issue=issue,
-                              route=getattr(args, "route", None), scope=getattr(args, "scope", None))
+                value = stage(api, args.command, args.previous if args.command == "retry" else args.id, issue=issue,
+                              route=getattr(args, "route", None), scope=getattr(args, "scope", None),
+                              new_id=args.id if args.command == "retry" else None,
+                              expected_task=getattr(args, "expected_task", None))
                 storage.write_host_json(args.out, value, max_bytes=storage.MAX_ENVELOPE)
         if not args.json:
             print(f"Namespace: {api.binding.name} | Tracker: {api.tracker} | Authority: {api.authority_id}")

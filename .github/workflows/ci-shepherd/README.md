@@ -105,7 +105,7 @@ state as current.
 
 ### Staging and applying changes
 
-`add`, `edit` and `remove` write a new local proposal file and print a preview.
+`add`, `edit`, `remove` and `retry` write a new local proposal file and print a preview.
 They never update remote authority. Use an operator-owned directory outside worker
 workspaces; proposal files are created exclusively with mode `0600` and are not
 overwritten. `apply` rejects non-private files and symlink or group/world-writable
@@ -123,6 +123,9 @@ shepherd edit ITEM_ID --route flaky_test --scope 'Investigate only the pinned te
 
 shepherd remove ITEM_ID \
   --out "$HOME/.copilot/ci-shepherd/changes/pause.json" --json
+
+shepherd retry PREVIOUS_ITEM_ID --id NEW_ITEM_ID --expected-task PREVIOUS_TASK_ID \
+  --out "$HOME/.copilot/ci-shepherd/changes/retry.json"
 
 shepherd apply "$HOME/.copilot/ci-shepherd/changes/pause.json" \
   --expected-revision GENERATION_FROM_PREVIEW
@@ -142,8 +145,27 @@ preview, not the work item's control revision.
 - **Remove means pause:** it stops new authorized effects without deleting
   history, cancelling an existing worker, closing PRs or releasing reservations.
   Paused items remain inspectable with `show` and `list --all`. The CLI has no
-  unpause/reset/retry shortcut. Adding another ID for an already tracked issue is
-  rejected; use the separately guarded explicit retry workflow.
+  unpause/reset shortcut. Adding another ID for an already tracked issue is
+  rejected, including when every previous item is paused.
+- **Retry requests fresh intake:** use the immediate predecessor's exact item and
+  task IDs and a new item ID. Staging and applying retain all previous records,
+  assignments, receipts and accounting; neither launches a task. Each predecessor
+  in the complete retry chain must have a verified terminal task, known billing
+  and a closed, unmerged, zero-change PR that remains a draft. Imported tasks,
+  unrelated attempts, unresolved sends and forked retry requests block retry.
+
+An applied retry becomes the active attempt for the same pinned failure
+occurrence, with no effect permissions or assignment. The normal controller
+performs a real intake decision before preparing execution; a human-only
+decision cannot dispatch. Cloud execution still requires a new exact approval,
+and every predecessor is rechecked before sending. Pausing or editing the retry
+invalidates an already prepared intake packet. The cumulative retry allowance
+includes predecessor inference, worker usage and outstanding holds.
+
+Superseded attempts remain visible and retain their audit/accounting history,
+but do not produce new normal assessments or dispatches. A manually prepared
+retry without a normal intake receipt remains observation-only; the CLI does
+not fabricate receipts to adopt it.
 
 Every proposal validates the candidate ledger with existing record, result,
 follow-up and bidirectional imported-chain validators, plus retry

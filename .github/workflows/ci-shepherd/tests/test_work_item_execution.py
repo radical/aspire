@@ -659,6 +659,20 @@ class MappingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "known billing"):
             execution.prepare_retry(api, lambda: value, "TASK1")
 
+    def test_retry_cannot_replace_an_imported_task(self):
+        self.assertEqual("tracked", execution.import_pr(self.api, self.read)["outcome"])
+        value = deepcopy(self.control)
+        value.update(id="retry-item", scope=normal_loop.SCOPE)
+        api = CloudAuthority(self.api.ledger)
+        api.repository = self.repository
+        api.api, api.mapping = self.api.api, self.api.mapping
+        api.actor, api.repository_id = self.api.actor, self.api.repository_id
+        before = deepcopy(api.saved)
+        with self.assertRaisesRegex(ValueError, "unimported task"):
+            execution.prepare_retry(api, lambda: value, "TASK1")
+        self.assertEqual(before, api.saved)
+        self.assertEqual([], api.posts)
+
     def test_retry_blocks_pr_reopened_at_final_transport_guard(self):
         self.pull.update(state="closed", changed_files=0)
         value = deepcopy(self.control)
