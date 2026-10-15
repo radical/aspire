@@ -49,6 +49,38 @@ def rendered_prompts():
 
 
 class PromptTemplateTests(unittest.TestCase):
+    def test_cloud_request_size_and_identity_across_targets_routes_and_versions(self):
+        import json
+        for repository in sorted(work_items.REPOSITORIES):
+            for route in sorted(work_items.ROUTES):
+                for version in (None, 2):
+                    with self.subTest(repository=repository, route=route, version=version):
+                        api = SimpleNamespace(repository=repository, tracker=99, authority_id=500,
+                                              tracker_node="TRACKER99")
+                        value = control()
+                        value["issue"]["repository"] = repository
+                        value["occurrence"]["repository"] = repository
+                        value["requested_route"] = route
+                        record = work_items.new_record(value)
+                        assignment = work_items.claim(record, value)
+                        assignment["execution"] = {"approval": None}
+                        if version is not None:
+                            assignment["execution"]["request_version"] = version
+                        approval = work_item_execution.approval_template(record, assignment)
+                        assignment["execution"]["approval"] = approval
+                        body = work_item_execution.request(api, record, assignment)
+                        encoded = json.dumps(body).encode("utf-8")
+                        self.assertLessEqual(len(encoded), 20000)
+                        lines = [line for line in body["prompt"].splitlines()
+                                 if line.startswith(work_item_execution.CORRELATION)]
+                        self.assertEqual(1, len(lines))
+                        identity = json.loads(lines[0].removeprefix(work_item_execution.CORRELATION))
+                        self.assertEqual(approval, identity["approval"])
+                        self.assertEqual(assignment["id"], identity["assignment_id"])
+                        self.assertEqual(value["issue"], identity["issue"])
+                        self.assertEqual(assignment["revision"], identity["evaluated_revision"])
+                        self.assertEqual(version, identity.get("request_version"))
+
     def test_cloud_prefix_is_identical_across_assignments_and_routes(self):
         import prompt_templates
         boundary = "\n## Route instructions\n"

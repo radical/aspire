@@ -311,7 +311,10 @@ classification alone. A selected route is an initial hypothesis: an approved
 product-bug task can repair a verified test defect without launching a second
 worker. Version 2 cloud assignments receive comparable-failure investigation
 instructions for all three routes. Suspected flaky tests use `fix-flaky-test`;
-missing skills fall back to checked-in guidance and repository-native tests.
+CI log/artifact diagnosis uses `ci-test-failures`. Missing skills fall back to
+checked-in guidance and repository-native tests. Compatible local execution is
+optional fast feedback; an incompatible host selects an approved remote route
+rather than ending reproduction.
 
 Issue tasks create one draft only for real, meaningfully validated changes.
 PR tasks, whether a first repair or follow-up, retain the verified existing
@@ -337,17 +340,46 @@ Non-forced configuration and cleanup commits may remain in task history.
 Historical scopes denying CI mutation remain restrictive; permission failures
 require exact errors and manual validation commands, not credential changes.
 
+The shared protocol in `prompts/diagnose-repair.md` requires inventorying the
+worker's exposed dispatch, status, log and artifact operations before diagnostic
+pushes. `gh auth status` describes shell authentication, not all tool access:
+MCP/platform reads and pushes do not prove shell authentication or Actions-write.
+Use an existing authenticated tool only for the approved operation; never invent
+a method, provision credentials or bypass repository-policy denial. Uncertain
+dispatches require reconciliation before retry or configuration restoration.
+Unavailable capability is a precise blocker, not permission to expand scope.
+
+Baseline, contention escalation and post-fix runs share assignment-approved total
+dispatch, runner, iteration and elapsed/CI budgets, with one execution at a time.
+Broaden only within the approved original lane, explicitly preserving traits,
+build settings and within-process concurrency. Multiple runners do not establish
+within-process contention. Exact target/theory-case counts and SHAs matter;
+aggregate cohort passes cannot prove that the assigned case was not skipped.
+The live workflow must be inspected: if it retains only failure results, passing
+target execution may remain unknown. Evidence-retention changes require separate
+approval, not an invented success claim.
+
 Before relying on a cloud repair, verify that the worker can read the
 controller's authority and current memory ledger, identify its task/session,
-and observe the controller's persisted task receipt. The
+observe the controller's persisted task receipt, and access the required
+execution/evidence operations. Prompt tests cover assembly, correlation and
+request size, not model compliance or live Actions-write permission. The
 `HOST_VERIFIED_SESSION_ID` result placeholder is not a substitute for
 pre-write identity verification. A worker starting before its receipt is
 persisted must not infer approval from a missing task identity.
 
-If a worker stops after pushing temporary reproduction settings, cleanup can
+Restore exact pre-investigation workflow contents while preserving unrelated
+edits; generic repository defaults are not a substitute. If a worker stops after
+pushing temporary reproduction settings, cleanup can
 require a person: revoked authority or a concurrent writer forbids further
-worker pushes, including restoration. Earlier-SHA reproduction results do not
-prove final-head CI readiness. Fork target policy can prohibit workflow edits
+worker pushes, including restoration. Report outstanding local/pushed state.
+Keep startup drafts diagnostic-only while temporary settings remain or no
+validated repair exists. Inspect incidental PR CI/concurrency effects of
+diagnostic pushes; do not disable CI or cancel runs to avoid them.
+Record configured-run and final publication SHAs, establishing equivalent
+tested source/build inputs after cleanup or leaving final-head validation
+explicitly outstanding. Earlier-SHA results alone do not prove final-head
+CI readiness. Fork target policy can prohibit workflow edits
 even when shared reproduction guidance describes them; that restriction wins.
 Instructions cannot prevent a platform-created empty draft when the task
 request has `create_pull_request: true`; artifact checks still reject it as a fix.

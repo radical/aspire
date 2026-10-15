@@ -5,6 +5,25 @@ description: Guide for diagnosing GitHub Actions test failures, extracting faile
 
 # CI Test Failure Diagnosis and Issue Filing
 
+## Diagnosis access
+
+CI logs, run/job status and artifacts can be inspected through the available
+authenticated GitHub CLI or exposed MCP tools; diagnosing an existing failure
+does not require local test execution. Inspect actual tool schemas before use.
+For suspected flaky/quarantined tests, also use `fix-flaky-test` for repeated
+reproduction and post-fix verification.
+
+`gh auth status` is optional diagnostic evidence, not a universal access gate.
+Shell CLI, MCP and platform authentication are separate: successful reads or
+pushes do not prove dispatch permission. If CLI authentication is absent, check
+for an already authenticated exposed tool supporting the approved operation.
+Do not invent methods, change credentials/permissions, print tokens or bypass
+repository-policy denials. Report the precise unavailable operation or actual
+error if no authorized route exists. Reconcile uncertain writes before retrying.
+
+Diagnosis alone does not authorize creating issues/comments, modifying workflows
+or dispatching/rerunning CI. Use the assignment's scope for those operations.
+
 ## Recipe: Create an Issue for a Test Failure
 
 When the user asks to create an issue for a failing test, follow these steps. Always redirect full output to a log file (not `tail`) so you can inspect it if the command fails.
