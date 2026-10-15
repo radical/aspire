@@ -50,28 +50,17 @@ public sealed class MtpExitCodeScriptTests(ITestOutputHelper output)
 
     private async Task<CommandResult> RunProcessAsync(string fileName, IReadOnlyList<string> arguments)
     {
-        using var process = new Process();
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.WorkingDirectory = RepoRoot.Path;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.UseShellExecute = false;
+        var startInfo = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = RepoRoot.Path
+        };
         foreach (var argument in arguments)
         {
-            process.StartInfo.ArgumentList.Add(argument);
+            startInfo.ArgumentList.Add(argument);
         }
 
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(timeout.Token);
-
-        var result = new CommandResult(process.ExitCode, await stdoutTask + await stderrTask);
-        output.WriteLine(result.Output);
-
-        return result;
+        var result = await ProcessRunner.RunAsync(output, startInfo, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        return new CommandResult(result.ExitCode, result.Output);
     }
 
     private sealed record CommandResult(int ExitCode, string Output);

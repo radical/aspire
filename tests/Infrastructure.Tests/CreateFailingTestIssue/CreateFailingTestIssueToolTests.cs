@@ -642,39 +642,8 @@ public sealed class CreateFailingTestIssueToolTests : IClassFixture<CreateFailin
 
         processStartInfo.Environment["ASPIRE_FAILING_TEST_ISSUE_FIXTURE_DIR"] = fixtureDirectory;
 
-        _output.WriteLine($"Running: {processStartInfo.FileName} {string.Join(" ", processStartInfo.ArgumentList)}");
-
-        using var process = new Process { StartInfo = processStartInfo };
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
-        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        try
-        {
-            await process.WaitForExitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (!string.IsNullOrWhiteSpace(stdout))
-        {
-            _output.WriteLine(stdout);
-        }
-
-        if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            _output.WriteLine(stderr);
-        }
-
-        return new ToolResult(process.ExitCode, stdout, stderr);
+        var result = await ProcessRunner.RunAsync(_output, processStartInfo, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+        return new ToolResult(result.ExitCode, result.StandardOutput, result.StandardError);
     }
 
     private string CreateFixtureDirectory(params TestTrxCase[] testCases)

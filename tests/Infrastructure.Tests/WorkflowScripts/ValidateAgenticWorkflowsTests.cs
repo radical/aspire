@@ -73,7 +73,8 @@ public sealed class ValidateAgenticWorkflowsTests(ITestOutputHelper output)
             output,
             "bash",
             ["-c", Scalar(Step(Steps(LoadWorkflow()), "Verify generated files are up to date"), "run")],
-            workspace.Path);
+            workspace.Path,
+            TimeSpan.FromSeconds(30));
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("Generated agentic workflow files are not up to date:", result.Output, StringComparison.Ordinal);

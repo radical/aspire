@@ -86,34 +86,22 @@ public sealed class DeploymentTestScriptTests(ITestOutputHelper output) : IDispo
         string fakeDotnetScript,
         string resultsDirectory)
     {
-        using var process = new Process();
-        process.StartInfo.FileName = "bash";
-        process.StartInfo.ArgumentList.Add(s_runnerPath);
-        process.StartInfo.ArgumentList.Add(resultsDirectory);
-        process.StartInfo.ArgumentList.Add("Deployment.EndToEnd-ExampleTests");
-        process.StartInfo.ArgumentList.Add("--filter-class");
-        process.StartInfo.ArgumentList.Add("Aspire.ExampleTests");
-        process.StartInfo.WorkingDirectory = _workspace.Path;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.UseShellExecute = false;
-        process.StartInfo.Environment["GITHUB_OUTPUT"] = outputFile;
-        process.StartInfo.Environment["DOTNET_SCRIPT"] = fakeDotnetScript;
-        process.StartInfo.Environment["FAKE_DOTNET_ARGUMENTS"] = argumentsFile;
-        process.StartInfo.Environment["FAKE_DOTNET_EXIT_CODE"] = testExitCode.ToString();
+        var startInfo = new ProcessStartInfo("bash")
+        {
+            WorkingDirectory = _workspace.Path
+        };
+        startInfo.ArgumentList.Add(s_runnerPath);
+        startInfo.ArgumentList.Add(resultsDirectory);
+        startInfo.ArgumentList.Add("Deployment.EndToEnd-ExampleTests");
+        startInfo.ArgumentList.Add("--filter-class");
+        startInfo.ArgumentList.Add("Aspire.ExampleTests");
+        startInfo.Environment["GITHUB_OUTPUT"] = outputFile;
+        startInfo.Environment["DOTNET_SCRIPT"] = fakeDotnetScript;
+        startInfo.Environment["FAKE_DOTNET_ARGUMENTS"] = argumentsFile;
+        startInfo.Environment["FAKE_DOTNET_EXIT_CODE"] = testExitCode.ToString();
 
-        process.Start();
-
-        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(timeout.Token);
-
-        var result = new CommandResult(process.ExitCode, await stdoutTask + await stderrTask);
-        output.WriteLine(result.Output);
-
-        return result;
+        var processResult = await ProcessRunner.RunAsync(output, startInfo, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        return new CommandResult(processResult.ExitCode, processResult.Output);
     }
 
     public void Dispose() => _workspace.Dispose();

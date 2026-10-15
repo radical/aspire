@@ -20,7 +20,8 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
             output,
             "bash",
             ["-c", """printf '%s\n' "$1" "$(cat marker.txt)"; printf 'error' >&2; exit 7""", "test", "argument with spaces"],
-            workspace.Path);
+            workspace.Path,
+            TimeSpan.FromSeconds(30));
 
         Assert.Equal(7, result.ExitCode);
         Assert.Equal("argument with spaces\nworking directory\n", result.StandardOutput);
@@ -42,6 +43,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
             // bash's built-in default search path).
             ["-c", """printf '%s|%s' "$RUNNER_TEST_VALUE" "${HOME:+inherited-home}" """],
             workspace.Path,
+            TimeSpan.FromSeconds(30),
             new Dictionary<string, string> { ["RUNNER_TEST_VALUE"] = "override" });
 
         Assert.Equal(0, result.ExitCode);
@@ -58,10 +60,25 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
             output,
             "bash",
             ["-c", """printf '%262144s' ''; printf '%262144s' '' >&2"""],
-            workspace.Path);
+            workspace.Path,
+            TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(new string(' ', 256 * 1024), result.StandardOutput);
         Assert.Equal(new string(' ', 256 * 1024), result.StandardError);
+    }
+
+    [Fact]
+    [RequiresTools(["bash"])]
+    public async Task TimesOutAndTerminatesLongRunningProcess()
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo("bash");
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add("sleep 10");
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await ProcessRunner.RunAsync(output, startInfo, TimeSpan.FromMilliseconds(100)));
+
+        Assert.Contains("timed out", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

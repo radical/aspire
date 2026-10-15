@@ -13,33 +13,74 @@ internal static class ProcessRunner
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
+        TimeSpan timeout,
         IReadOnlyDictionary<string, string>? environment = null)
     {
-        using var process = new Process();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory
+        };
+
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
         {
-            process.StartInfo.Environment[name] = value;
+            startInfo.Environment[name] = value;
         }
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.WorkingDirectory = workingDirectory;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.UseShellExecute = false;
         foreach (var argument in arguments)
         {
-            process.StartInfo.ArgumentList.Add(argument);
+            startInfo.ArgumentList.Add(argument);
         }
-        output.WriteLine($"Executing: {fileName} {string.Join(' ', arguments)} in {workingDirectory}");
+
+        return await RunAsync(output, startInfo, timeout).ConfigureAwait(false);
+    }
+
+    public static Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, TimeSpan timeout)
+        => RunAsync(null, startInfo, timeout);
+
+    public static async Task<ProcessResult> RunAsync(
+        ITestOutputHelper? output,
+        ProcessStartInfo startInfo,
+        TimeSpan timeout)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.UseShellExecute = false;
+
+        var arguments = string.Join(' ', startInfo.ArgumentList);
+        output?.WriteLine($"Executing: {startInfo.FileName} {arguments} in {startInfo.WorkingDirectory}");
+
+        using var process = new Process { StartInfo = startInfo };
         process.Start();
+
         // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
 
-        var result = new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
+        using var cancellationTokenSource = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (cancellationTokenSource.IsCancellationRequested)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            throw new TimeoutException($"Process timed out after {timeout}: {startInfo.FileName} {arguments}", exception);
+        }
+
+        var result = new ProcessResult(
+            process.ExitCode,
+            await stdoutTask.ConfigureAwait(false),
+            await stderrTask.ConfigureAwait(false));
         if (result.Output.Length > 0)
         {
-            output.WriteLine(result.Output);
+            output?.WriteLine(result.Output);
         }
 
         return result;

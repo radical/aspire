@@ -320,31 +320,13 @@ public sealed class PrDocsCheckWorkflowTests(ITestOutputHelper testOutput)
         startInfo.ArgumentList.Add("test_*.py");
         startInfo.ArgumentList.Add("-v");
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start {python}.");
-
-        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        testOutput.WriteLine(stdout);
-        testOutput.WriteLine(stderr);
+        var result = await ProcessRunner.RunAsync(testOutput, startInfo, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+        testOutput.WriteLine(result.StandardOutput);
+        testOutput.WriteLine(result.StandardError);
 
         Assert.True(
-            process.ExitCode == 0,
-            $"{python} exited with code {process.ExitCode}.{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
+            result.ExitCode == 0,
+            $"{python} exited with code {result.ExitCode}.{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
     }
 
     private static string ReadWorkflow(string fileName)

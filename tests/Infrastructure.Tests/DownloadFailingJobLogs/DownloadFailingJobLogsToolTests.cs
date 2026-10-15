@@ -100,37 +100,8 @@ public sealed class DownloadFailingJobLogsToolTests : IClassFixture<DownloadFail
         processStartInfo.ArgumentList.Add(RunId.ToString());
         processStartInfo.Environment["ASPIRE_FAILING_TEST_ISSUE_FIXTURE_DIR"] = fixtureDirectory;
 
-        using var process = new Process { StartInfo = processStartInfo };
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
-        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        try
-        {
-            await process.WaitForExitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (!string.IsNullOrWhiteSpace(stdout))
-        {
-            _output.WriteLine(stdout);
-        }
-
-        if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            _output.WriteLine(stderr);
-        }
-
-        return new ToolResult(process.ExitCode, stdout, stderr);
+        var result = await ProcessRunner.RunAsync(_output, processStartInfo, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+        return new ToolResult(result.ExitCode, result.StandardOutput, result.StandardError);
     }
 
     private static void WriteJobsFixture(string fixtureDirectory)

@@ -219,33 +219,21 @@ public sealed class NixCliPackageTests(ITestOutputHelper outputHelper) : IDispos
 
     private static async Task<CommandResult> RunBashAsync(string scriptPath, string[] arguments, Dictionary<string, string?> environment)
     {
-        using var process = new System.Diagnostics.Process();
-        process.StartInfo.FileName = "bash";
-        process.StartInfo.ArgumentList.Add(scriptPath);
+        var startInfo = new System.Diagnostics.ProcessStartInfo("bash");
+        startInfo.ArgumentList.Add(scriptPath);
 
         foreach (var argument in arguments)
         {
-            process.StartInfo.ArgumentList.Add(argument);
+            startInfo.ArgumentList.Add(argument);
         }
-
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.UseShellExecute = false;
 
         foreach (var (name, value) in environment)
         {
-            process.StartInfo.Environment[name] = value;
+            startInfo.Environment[name] = value;
         }
 
-        process.Start();
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(cancellationTokenSource.Token);
-
-        var output = await outputTask + await errorTask;
-
-        return new CommandResult(process.ExitCode, output);
+        var result = await ProcessRunner.RunAsync(startInfo, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        return new CommandResult(result.ExitCode, result.Output);
     }
 
     private static Task<string> ReadRepoFileAsync(string relativePath)

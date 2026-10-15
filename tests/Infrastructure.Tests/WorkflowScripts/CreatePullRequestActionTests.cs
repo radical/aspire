@@ -86,6 +86,7 @@ public sealed class CreatePullRequestActionTests(ITestOutputHelper output)
             "bash",
             ["-c", script],
             workingDirectory,
+            TimeSpan.FromSeconds(30),
             new Dictionary<string, string>
             {
                 ["BRANCH"] = "update-actionlint",

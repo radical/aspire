@@ -315,30 +315,21 @@ public sealed class ExtensionChangelogFinalizedWorkflowTests(ITestOutputHelper o
         var scriptPath = Path.Combine(RepoRoot.Path, ScriptRelativePath);
         Assert.True(File.Exists(scriptPath), $"Expected helper script at '{ScriptRelativePath}'.");
 
-        using var process = new Process();
-        process.StartInfo.FileName = "bash";
-        process.StartInfo.ArgumentList.Add(scriptPath);
-        process.StartInfo.WorkingDirectory = workingDirectory;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.UseShellExecute = false;
+        var startInfo = new ProcessStartInfo("bash")
+        {
+            WorkingDirectory = workingDirectory
+        };
+        startInfo.ArgumentList.Add(scriptPath);
         if (environment is not null)
         {
             foreach (var (key, value) in environment)
             {
-                process.StartInfo.Environment[key] = value ?? string.Empty;
+                startInfo.Environment[key] = value ?? string.Empty;
             }
         }
 
-        process.Start();
-
-        // Read both streams concurrently to avoid deadlock when the shell emits an annotation.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(timeout.Token);
-
-        return new CommandResult(process.ExitCode, await stdoutTask + await stderrTask);
+        var result = await ProcessRunner.RunAsync(startInfo, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        return new CommandResult(result.ExitCode, result.Output);
     }
 
     private async Task<ReleaseBranchRepository> CreateReleaseBranchRepositoryAsync(
@@ -483,29 +474,18 @@ public sealed class ExtensionChangelogFinalizedWorkflowTests(ITestOutputHelper o
 
     private async Task<CommandResult> RunProcessAsync(string fileName, IEnumerable<string> args, string workingDirectory)
     {
-        using var process = new Process();
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.WorkingDirectory = workingDirectory;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.UseShellExecute = false;
+        var startInfo = new ProcessStartInfo(fileName)
+        {
+            WorkingDirectory = workingDirectory
+        };
 
         foreach (var arg in args)
         {
-            process.StartInfo.ArgumentList.Add(arg);
+            startInfo.ArgumentList.Add(arg);
         }
 
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(timeout.Token);
-
-        var outputText = await stdoutTask + await stderrTask;
-        output.WriteLine(outputText);
-
-        return new CommandResult(process.ExitCode, outputText);
+        var result = await ProcessRunner.RunAsync(output, startInfo, TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        return new CommandResult(result.ExitCode, result.Output);
     }
 
     private static YamlStream LoadWorkflow()

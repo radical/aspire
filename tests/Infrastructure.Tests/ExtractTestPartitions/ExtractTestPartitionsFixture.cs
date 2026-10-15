@@ -18,32 +18,23 @@ public sealed class ExtractTestPartitionsFixture : IAsyncLifetime
     {
         ToolProjectPath = GetToolProjectPath();
 
-        // Build the tool once before all tests
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"build \"{ToolProjectPath}\" --restore",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
+            WorkingDirectory = RepoRoot.Path,
             CreateNoWindow = true
         };
+        psi.ArgumentList.Add("build");
+        psi.ArgumentList.Add(ToolProjectPath);
+        psi.ArgumentList.Add("--restore");
 
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        await process.WaitForExitAsync(cts.Token);
-
-        if (process.ExitCode != 0)
+        var result = await ProcessRunner.RunAsync(psi, TimeSpan.FromMinutes(3)).ConfigureAwait(false);
+        if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Failed to build ExtractTestPartitions tool. Exit code: {process.ExitCode}\n" +
-                $"stdout:\n{stdout}\n" +
-                $"stderr:\n{stderr}");
+                $"Failed to build ExtractTestPartitions tool. Exit code: {result.ExitCode}\n" +
+                $"stdout:\n{result.StandardOutput}\n" +
+                $"stderr:\n{result.StandardError}");
         }
     }
 

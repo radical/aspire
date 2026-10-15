@@ -309,37 +309,8 @@ public class ExtractTestPartitionsTests : IClassFixture<ExtractTestPartitionsFix
             }
         }
 
-        _output.WriteLine($"Running: {psi.FileName} {string.Join(" ", psi.ArgumentList)}");
-
-        using var process = new Process { StartInfo = psi };
-        var outputLines = new List<string>();
-
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is not null)
-            {
-                outputLines.Add(e.Data);
-                _output.WriteLine($"[stdout] {e.Data}");
-            }
-        };
-
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is not null)
-            {
-                outputLines.Add(e.Data);
-                _output.WriteLine($"[stderr] {e.Data}");
-            }
-        };
-
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        await process.WaitForExitAsync(cts.Token);
-
-        return new ToolResult(process.ExitCode, string.Join(Environment.NewLine, outputLines));
+        var result = await ProcessRunner.RunAsync(_output, psi, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+        return new ToolResult(result.ExitCode, result.Output);
     }
 
     private sealed record ToolResult(int ExitCode, string Output);

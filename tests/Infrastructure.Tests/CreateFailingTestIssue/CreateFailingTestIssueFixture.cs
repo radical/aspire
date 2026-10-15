@@ -32,39 +32,20 @@ public sealed class CreateFailingTestIssueFixture : IAsyncLifetime
         ProcessStartInfo processStartInfo = new()
         {
             FileName = "dotnet",
-            Arguments = $"build \"{toolProjectPath}\" --restore",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WorkingDirectory = RepoRoot.Path
         };
+        processStartInfo.ArgumentList.Add("build");
+        processStartInfo.ArgumentList.Add(toolProjectPath);
+        processStartInfo.ArgumentList.Add("--restore");
 
-        using var process = new Process { StartInfo = processStartInfo };
-        process.Start();
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-
-        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        try
-        {
-            await process.WaitForExitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (process.ExitCode != 0)
+        var result = await ProcessRunner.RunAsync(processStartInfo, TimeSpan.FromMinutes(3)).ConfigureAwait(false);
+        if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Failed to build CreateFailingTestIssue tool. Exit code: {process.ExitCode}{Environment.NewLine}" +
-                $"stdout:{Environment.NewLine}{stdout}{Environment.NewLine}" +
-                $"stderr:{Environment.NewLine}{stderr}");
+                $"Failed to build CreateFailingTestIssue tool. Exit code: {result.ExitCode}{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.StandardOutput}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.StandardError}");
         }
     }
 }

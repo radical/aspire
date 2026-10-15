@@ -500,24 +500,7 @@ public sealed class Hex1bNativePublishingTests : IDisposable
             startInfo.Environment["NUGET_PACKAGES"] = packages;
         }
 
-        using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        var standardOutput = await stdout;
-        var standardError = await stderr;
-        var output = standardOutput + standardError;
-        _output.WriteLine(output);
-        return (process.ExitCode, standardOutput, standardError, output);
+        var result = await ProcessRunner.RunAsync(_output, startInfo, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+        return (result.ExitCode, result.StandardOutput, result.StandardError, result.Output);
     }
 }

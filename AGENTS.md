@@ -31,6 +31,7 @@ Instructions for GitHub Copilot and other AI coding agents working with the Aspi
 * Never change NuGet.config files unless explicitly asked to.
 * Do not use cryptographic hashes such as SHA-256 when the hash is not security-related. Prefer `System.IO.Hashing.XxHash3` when you need a stable non-cryptographic hash.
 * When code needs a temporary directory, prefer the repository temp directory abstractions first (for example `IFileSystemService.TempDirectory` / `ITempFileSystemService`) and otherwise use `Directory.CreateTempSubdirectory()` instead of `Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())`; if you need a temporary file path, place it under a securely created temp directory.
+* Look for opportunities to reuse existing helpers and consolidate meaningful repeated behavior, such as process startup, output draining, timeouts, and cleanup. Extend a suitable shared abstraction when it reduces duplication; avoid introducing wrappers for trivial one-off orchestration.
 * Don't update files under `*/api/*.cs` (e.g. src/Aspire.Hosting/api/Aspire.Hosting.cs) as they are generated.
 * Do not make new parameters optional just to avoid updating call sites. A parameter should only be optional when it has a sensible semantic default and the API is frequently used (where call-site brevity outweighs explicitness). If a parameter is logically required, make it required and update all call sites.
 

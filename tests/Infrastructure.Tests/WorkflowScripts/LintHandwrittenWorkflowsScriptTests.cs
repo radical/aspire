@@ -108,6 +108,7 @@ public sealed class LintHandwrittenWorkflowsScriptTests(ITestOutputHelper output
             "bash",
             [s_scriptPath],
             Path.Combine(_workspace.Path, "repo"),
+            TimeSpan.FromSeconds(30),
             new Dictionary<string, string>
             {
                 ["PATH"] = $"{binDirectory}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",
