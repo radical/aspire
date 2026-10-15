@@ -176,13 +176,20 @@ def native_spend(ledger, now=None, item=None):
                for value in ledger.get("normalRuns", []) if item is None or value["item"] == item)
 
 
-def item_spend(ledger, item):
+def item_spend(ledger, item, *, subject=None):
     record = next((entry for entry in ledger.get("workItems", []) if entry["id"] == item), None)
     attempts = {item}
     if record is not None:
         attempts.update(previous["id"] for previous, _ in execution.predecessors(ledger, record))
     # A new attempt ID must not reset the issue's cumulative retry allowance.
-    return sum(native_spend(ledger, item=identity) for identity in attempts) + sum(
+    import tracking_reset
+    identity = subject
+    if identity is None:
+        identity = record["control"]["issue"] if record is not None else next((
+            value["context"]["issue"]["identity"] for value in ledger.get("normalRuns", [])
+            if value["item"] == item), None)
+    prior = tracking_reset.prior_spend(ledger, identity["node_id"]) if identity is not None else 0
+    return prior + sum(native_spend(ledger, item=identity) for identity in attempts) + sum(
         (saved["worker_actual"] or 0) + saved["worker_reserved"]
         for record, _, saved in execution.executions(ledger) if record["id"] in attempts)
 
@@ -453,19 +460,26 @@ def validate_receipts(values):
 
 
 def reserve(api, run, now, item, phase, context):
+    import tracking_reset
+    if not hasattr(api, "normal_observation"):
+        api.normal_observation = []
     receipts = api.ledger.setdefault("normalRuns", [])
     for value in receipts:
         same_context = (value["context"]["contextDigest"] == digest(context)
                         if "contextDigest" in value["context"] else value["context"] == context)
         if value["item"] == item and value["phase"] == phase and same_context:
             # Failed, expired or unknown inference is never silently retried.
+            api.normal_observation.append({"item": item, "reason": "duplicate-context",
+                                           "receipt": value["id"], "receiptState": value["state"]})
             return None
     if any(value["item"] == item and value["state"] == "reserved" for value in receipts):
+        api.normal_observation.append({"item": item, "reason": "inference-pending"})
         return None
     context_limit = MAX_INTAKE_CONTEXT if phase == "issue-intake" else MAX_CONTEXT
-    if len(receipts) >= MAX_RUNS or len(json.dumps(context).encode()) > context_limit:
+    count = sum(len(part.get("normalRuns", [])) for part in tracking_reset.history(api.ledger))
+    if count >= MAX_RUNS or len(json.dumps(context).encode()) > context_limit:
         raise ValueError("normal inference/context bound exhausted")
-    if (item_spend(api.ledger, item) + state.NATIVE_RESERVE > state.chain_allowance(api.ledger)
+    if (item_spend(api.ledger, item, subject=context["issue"]["identity"]) + state.NATIVE_RESERVE > state.chain_allowance(api.ledger)
             or state.repository_spend(api.ledger, now) + state.NATIVE_RESERVE > state.REPOSITORY_ALLOWANCE):
         raise ValueError("normal inference credit allowance exhausted")
     value = {"id": str(uuid.uuid4()), "packetId": str(uuid.uuid4()), "item": item, "phase": phase,
@@ -549,6 +563,7 @@ def dispatch_reserved(api, item):
 
 
 def prepare(api, run, now, feed=None):
+    api.normal_observation = []
     storage.initialize(api)
     if not hasattr(api, "normal_approval"):
         if feed is not None:
@@ -622,21 +637,24 @@ def prepare(api, run, now, feed=None):
     packets = []
     for _, observed, _ in incoming.values():
         if not any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
-            worklist.append({"item": f"issue-{observed['identity']['number']}-{observed['identity']['node_id']}",
+            import tracking_reset
+            worklist.append({"item": tracking_reset.admission_id(api.ledger, observed["identity"]),
                              "issue": observed["identity"], "state": "incoming" if eligible(observed) else "ineligible"})
 
     def reserve_packet(item, phase, context):
+        import tracking_reset
         # The transport bounds the complete turn, not each child separately.
         # Leave room for the wrapper and refreshed task/handoff status fields.
         size = len(json.dumps({"packets": packets, "worklist": worklist, "context": context}).encode())
         reason = None
-        if len(api.ledger.get("normalRuns", [])) >= MAX_RUNS:
+        if sum(len(part.get("normalRuns", [])) for part in tracking_reset.history(api.ledger)) >= MAX_RUNS:
             reason = "Normal inference history bound exhausted."
         elif size + 4096 + 1024 * len(worklist) > contracts.MAX_JSON_BYTES:
             reason = "Decision packet capacity exhausted."
         if reason is not None:
             row = next(row for row in worklist if row["item"] == item)
             row["attention"] = reason + " No inference reserved for this item."
+            api.normal_observation.append({"item": item, "reason": "capacity-exhausted", "detail": reason})
             return None
         try:
             return reserve(api, run, now, item, phase, context)
@@ -647,6 +665,7 @@ def prepare(api, run, now, feed=None):
                 raise
             row = next(row for row in worklist if row["item"] == item)
             row["attention"] = str(error) + "; no inference reserved for this item."
+            api.normal_observation.append({"item": item, "reason": "admission-blocked", "detail": str(error)})
             return None
 
     # Tasks are discovered from the canonical ledger, never from feed or previews.
@@ -731,15 +750,20 @@ def prepare(api, run, now, feed=None):
             packets.append(packet)
     for number, (entry, observed, occurrences) in incoming.items():
         if not eligible(observed):
+            api.normal_observation.append({"issue": observed["identity"], "reason": "ineligible-source"})
             continue
-        item = f"issue-{number}-{observed['identity']['node_id']}"
+        import tracking_reset
+        item = tracking_reset.admission_id(api.ledger, observed["identity"])
         if any(record["control"]["issue"] == observed["identity"] for record in api.ledger.get("workItems", [])):
+            api.normal_observation.append({"item": item, "reason": "existing-owner"})
             continue
+        tracking_reset.guard(api, observed["identity"]["node_id"])
         context = intake_context(api, entry, observed, occurrences)
         packet = reserve_packet(item, "issue-intake", context)
         if packet is not None:
             packets.append(packet)
     if not packets:
+        api.normal_observation.extend(worklist)
         return None
     if len(worklist) == 1:
         return packets[0]
@@ -811,6 +835,16 @@ def check_reservation(api, packet, value):
 def settle_turn(api, packet, evidence, usage, now, *, billing_only=False):
     import reasoning
     api.read_authority()
+    import tracking_reset
+    retired = {value["id"] for entry in api.ledger.get("retired", []) for value in entry["ledger"].get("normalRuns", [])}
+    if any(child["operation"] in retired for child in packet["packets"]):
+        for child in packet["packets"]:
+            receipt = next(value for part in tracking_reset.history(api.ledger)
+                           for value in part.get("normalRuns", []) if value["id"] == child["operation"])
+            if receipt.get("turnId") != packet["packetId"] or child["target"] != packet["target"]:
+                raise ValueError("retired worklist reservation mismatch")
+            check_reservation(api, child, receipt)
+        return {"outcome": "replay"}
     children = packet["packets"]
     if not children or len({child["operation"] for child in children}) != len(children):
         raise ValueError("invalid worklist operations")
@@ -854,6 +888,12 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decis
         return settle_turn(api, packet, evidence, usage, now, billing_only=billing_only)
     # Billing is independent of issue eligibility, packet expiry and model output.
     api.read_authority()
+    import tracking_reset
+    retired = next((value for entry in api.ledger.get("retired", [])
+                    for value in entry["ledger"].get("normalRuns", []) if value["id"] == packet["operation"]), None)
+    if retired is not None:
+        check_reservation(api, packet, retired)
+        return {"outcome": "replay"}
     value = next(value for value in api.ledger.get("normalRuns", []) if value["id"] == packet["operation"])
     check_reservation(api, packet, value)
     if usage is not None or value["nativeActual"] is None:
@@ -868,10 +908,11 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False, _turn_decis
         decision, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
         if _turn_decision is not None:
             decision = _turn_decision
-        if any(other.get("sessionId") == evidence["sessionId"] for other in api.ledger.get("normalRuns", [])
+        if any(other.get("sessionId") == evidence["sessionId"] for part in tracking_reset.history(api.ledger)
+               for other in part.get("normalRuns", [])
                if other is not value and not (_turn_id is not None and other.get("turnId") == _turn_id
                                              and value.get("turnId") == _turn_id)) or any(operation["sessionId"] == evidence["sessionId"]
-               for chain in api.ledger["chains"] for operation in chain["operations"]):
+               for part in tracking_reset.history(api.ledger) for chain in part["chains"] for operation in chain["operations"]):
             raise ValueError("native session reused")
         value["sessionId"] = evidence["sessionId"]
         api.persist()

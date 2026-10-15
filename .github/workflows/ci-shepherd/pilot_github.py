@@ -521,7 +521,8 @@ class PilotGitHub:
                           and not execution.superseded(self.ledger, record)]
         if len(active_retries) > 1:
             raise ValueError("ambiguous retry ownership")
-        item = active_retries[0]["id"] if active_retries else f"issue-{identity['number']}-{identity['node_id']}"
+        import tracking_reset
+        item = active_retries[0]["id"] if active_retries else tracking_reset.admission_id(self.ledger, identity)
         prior = [value for value in self.ledger.get("normalRuns", []) if value["item"] ==
                  item and value["phase"] == "issue-intake"
                  and value["state"] == "settled"]
@@ -1037,6 +1038,8 @@ class PilotGitHub:
         return result
 
     def guard(self, chain, observation, *, effect=True, require_managed=True):
+        import tracking_reset
+        tracking_reset.guard(self, chain["node"])
         if not effect and handoff.converted(chain):
             fresh = handoff.monitor_guard(self, chain, observation)
             if not fresh["managed"] or fresh["attention"]:
@@ -1322,6 +1325,9 @@ class PilotGitHub:
     def sweep(self):
         if self.ledger is None:
             raise ValueError("authenticated authority must be read before discovery")
+        import tracking_reset
+        for chain in self.ledger["chains"]:
+            tracking_reset.guard(self, chain["node"])
         self.reconcile_workers()
         for chain in self.ledger["chains"]:
             if handoff.converted(chain):
@@ -1334,6 +1340,8 @@ class PilotGitHub:
         for candidate in intake:
             number = candidate["number"]
             if number in {121, self.tracker} or not managed(candidate) or state.find_chain(self.ledger, number) is not None:
+                continue
+            if tracking_reset.blocked(self.ledger, candidate["node_id"]):
                 continue
             if self.binding == bindings.UPSTREAM_ALL:
                 if "pull_request" not in candidate:

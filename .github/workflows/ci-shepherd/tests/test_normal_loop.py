@@ -23,6 +23,7 @@ from helpers import FakeClock, WorkspaceTest, reconciliation_evidence
 import hosted
 import live
 import normal_loop
+import local
 import pilot
 import pilot_binding as bindings
 import pilot_state as state
@@ -243,6 +244,392 @@ class NormalLoopTests(unittest.TestCase):
         applied = shepherd.apply(api, proposal, expected_revision=proposal["generation"])
         self.assertEqual("run", applied["action"])
         self.assertEqual([], next(entry for entry in self.saved()["workItems"] if entry["id"] == new)["assignments"])
+
+    def drop(self, selector=FEED["issue_url"]):
+        effects = deepcopy((self.posts, self.issue_posts, self.issue_patches))
+        api = pilot.hosted_api(RUN, os.environ)
+        path = self.root / f"drop-{uuid.uuid4()}.json"
+        with patch.object(shepherd, "connect", return_value=api), redirect_stdout(io.StringIO()):
+            code = shepherd.main(["drop", selector, "--out", str(path), "--json"])
+        self.assertEqual(0, code)
+        proposal = json.loads(path.read_text())
+        result = shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(effects, (self.posts, self.issue_posts, self.issue_patches))
+        return result
+
+    def activate_memory(self):
+        self.remote = MemoryRemote(self.remote)
+        self.saved = self.remote.current_ledger
+        api = pilot.hosted_api(RUN, os.environ)
+        api.memory_authorized = True
+        storage.initialize(api)
+
+    def test_drop_orphan_receipt_allows_identical_feed_without_resetting_spend(self):
+        packet = self.prepare(FEED)
+        self.assertEqual("rejected", self.settle(packet, None)["outcome"])
+        self.assertIsNone(self.prepare(FEED))
+        self.activate_memory()
+        before = deepcopy(self.saved())
+        spend = state.repository_spend(before, self.clock())
+        self.drop(packet["item"])
+        self.assertEqual([], self.saved()["normalRuns"])
+        self.assertEqual(spend, state.repository_spend(self.saved(), self.clock()))
+        fresh = self.prepare(FEED)
+        self.assertEqual("issue-intake", fresh["normal"])
+        self.assertNotEqual(packet["item"], fresh["item"])
+        self.assertNotEqual(packet["operation"], fresh["operation"])
+        self.assertNotIn("decision", fresh["context"])
+        self.assertEqual("replay", self.settle(packet, self.intake(packet))["outcome"])
+        receipt = self.settle(fresh, self.intake(fresh))
+        self.assertEqual("approval-required", receipt["outcome"])
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
+        self.prepare(FEED)
+        self.prepare(FEED)
+        self.assertEqual(1, len(self.posts))
+
+    def test_drop_rejects_outstanding_inference_without_writes(self):
+        self.prepare(FEED)
+        self.activate_memory()
+        before = deepcopy(self.saved())
+        with self.assertRaisesRegex(ValueError, "billing|pending"):
+            shepherd.stage_reset(pilot.hosted_api(RUN, os.environ), "drop", FEED["issue_url"])
+        self.assertEqual(before, self.saved())
+        self.assertEqual([], self.posts)
+
+    def test_fresh_admission_cannot_bypass_retired_lifetime_allowance(self):
+        packet = self.prepare(FEED)
+        self.settle(packet, None, usage=state.chain_allowance(self.saved()))
+        self.activate_memory()
+        self.drop()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        with patch.object(state, "REPOSITORY_ALLOWANCE", 100000):
+            self.assertIsNone(normal_loop.prepare(api, RUN, self.clock(), FEED))
+        self.assertEqual([], self.saved()["normalRuns"])
+        self.assertEqual("admission-blocked", api.normal_observation[0]["reason"])
+
+    def test_retired_receipts_still_enforce_history_capacity_with_visible_reason(self):
+        for index in range(normal_loop.MAX_RUNS):
+            self.issue["updated_at"] = f"2026-10-04T00:01:{index:02d}Z"
+            packet = self.prepare(FEED)
+            self.settle(packet, None, usage=0)
+        self.activate_memory()
+        self.drop()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        self.assertIsNone(normal_loop.prepare(api, RUN, self.clock(), FEED))
+        self.assertEqual("capacity-exhausted", api.normal_observation[0]["reason"])
+        self.assertEqual([], self.saved()["normalRuns"])
+
+    def test_drop_blocks_shared_turn_with_an_unsettled_sibling(self):
+        packet = self.prepare(FEED)
+        self.settle(packet, None)
+        self.activate_memory()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        receipt = api.ledger["normalRuns"][0]
+        receipt["turnId"] = "shared-turn"
+        sibling = deepcopy(receipt)
+        sibling.update(id="sibling", packetId="sibling-packet", item="other-item", state="reserved",
+                       nativeActual=None, nativeReserved=state.NATIVE_RESERVE)
+        sibling["context"]["issue"]["identity"] = {
+            "repository": "microsoft/aspire", "number": 30000, "node_id": "OTHER"}
+        api.ledger["normalRuns"].append(sibling)
+        api.persist()
+        before = deepcopy(self.saved())
+        with self.assertRaisesRegex(ValueError, "overlapping turn"):
+            shepherd.stage_reset(api, "drop", FEED["issue_url"])
+        self.assertEqual(before, self.saved())
+
+    def test_drop_revalidation_cannot_publish_over_an_intervening_head(self):
+        packet = self.prepare(FEED)
+        self.settle(packet, None)
+        self.activate_memory()
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage_reset(api, "drop", FEED["issue_url"])
+        stage = shepherd.stage_reset
+        def concurrent_stage(*args):
+            writer = pilot.hosted_api(RUN, os.environ)
+            writer.read_authority()
+            unrelated = control()
+            unrelated.update(id="concurrent", action="pause",
+                             issue={"repository": "microsoft/aspire", "number": 30000, "node_id": "OTHER"})
+            writer.ledger.setdefault("workItems", []).append(items.new_record(unrelated))
+            writer.persist()
+            return stage(*args)
+        with patch.object(shepherd, "stage_reset", side_effect=concurrent_stage):
+            with self.assertRaisesRegex(ValueError, "stale"):
+                shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(["concurrent"], [record["id"] for record in self.saved()["workItems"]])
+        self.assertEqual(1, len(self.saved()["normalRuns"]))
+
+    def test_drop_old_worklist_and_reused_session_cannot_create_effects(self):
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        unrelated = control()
+        unrelated.update(id="passive", action="pause",
+                         issue={"repository": "microsoft/aspire", "number": 30000, "node_id": "OTHER"})
+        api.ledger.setdefault("workItems", []).append(items.new_record(unrelated))
+        api.persist()
+        wrapper = self.prepare(FEED)
+        self.assertEqual("worklist", wrapper["normal"])
+        packet = wrapper["packets"][0]
+        evidence = reconciliation_evidence(self.intake(packet, action="human"))
+        self.assertEqual("human", pilot.settle(pilot.hosted_api(RUN, os.environ), packet, evidence, 2, self.clock())["outcome"])
+        self.activate_memory()
+        self.drop()
+        self.assertEqual("replay", pilot.settle(pilot.hosted_api(RUN, os.environ), wrapper, evidence, 2, self.clock())["outcome"])
+        fresh = self.prepare(FEED)
+        if fresh["normal"] == "worklist":
+            fresh = fresh["packets"][0]
+        reused = reconciliation_evidence(self.intake(fresh))
+        reused = json.loads(json.dumps(reused).replace(reused["sessionId"], evidence["sessionId"]))
+        receipt = pilot.settle(pilot.hosted_api(RUN, os.environ), fresh, reused, 2, self.clock())
+        self.assertEqual("rejected", receipt["outcome"])
+        self.assertIn("session reused", receipt["reason"])
+        self.assertEqual(["passive"], [record["id"] for record in self.saved()["workItems"]])
+        self.assertEqual([], self.posts)
+
+    def test_no_inference_report_explains_duplicate_receipt(self):
+        packet = self.prepare(FEED)
+        self.settle(packet, None)
+        api = pilot.hosted_api(RUN, os.environ)
+        self.assertIsNone(pilot.prepare(api, RUN, self.clock(), feed=FEED))
+        reason = next(row for row in api.normal_observation if row.get("reason") == "duplicate-context")
+        self.assertEqual(packet["operation"], reason["receipt"])
+        self.assertEqual("rejected", reason["receiptState"])
+
+    def test_drop_terminal_history_rechecks_resumed_worker_and_preserves_lifetime(self):
+        old = self.retryable_history()
+        packet = self.prepare()
+        self.settle(packet, self.assessment(packet))
+        before = deepcopy(self.saved())
+        spend = normal_loop.item_spend(before, old)
+        self.drop(old)
+        self.assertEqual([], self.saved()["workItems"])
+        self.assertEqual(before["workItems"], self.saved()["retired"][0]["ledger"]["workItems"])
+        self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]["state"] = "in_progress"
+        self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]["sessions"][0]["state"] = "in_progress"
+        with self.assertRaisesRegex(ValueError, "resumed"):
+            self.prepare(FEED)
+        self.assertEqual(1, len(self.posts))
+        self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]["state"] = "completed"
+        self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]["sessions"][0]["state"] = "completed"
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        packet = self.prepare(FEED)
+        self.assertEqual(spend + state.NATIVE_RESERVE, normal_loop.item_spend(self.saved(), packet["item"]))
+        self.assertEqual("approval-required", self.settle(packet, self.intake(packet))["outcome"])
+        self.assertEqual(1, len(self.posts))
+
+    def test_drop_rechecks_current_billing_and_does_not_release_saved_hold(self):
+        old = self.retryable_history()
+        packet = self.prepare()
+        self.settle(packet, self.assessment(packet))
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage_reset(api, "drop", old)
+        before = deepcopy(self.saved())
+        self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]["sessions"][0]["usage"] = None
+        with self.assertRaisesRegex(ValueError, "billing"):
+            shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(before, self.saved())
+        self.assertEqual(1, len(self.posts))
+
+    def test_retired_task_resumed_after_fresh_intake_blocks_dispatch(self):
+        old = self.retryable_history()
+        assessment = self.prepare()
+        self.settle(assessment, self.assessment(assessment))
+        self.drop(old)
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        fresh = self.prepare(FEED)
+        receipt = self.settle(fresh, self.intake(fresh))
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
+        task = self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]
+        task["state"] = task["sessions"][0]["state"] = "in_progress"
+        with self.assertRaisesRegex(ValueError, "resumed"):
+            self.prepare()
+        self.assertEqual(1, len(self.posts))
+
+    def test_drop_imported_pr_closure_preserves_binding_and_blocks_discovery(self):
+        self.launch()
+        self.task("completed")
+        self.add_pr(1)
+        self.prepare()
+        self.assertEqual(1, len(self.saved()["chains"]))
+        self.activate_memory()
+        before = deepcopy(self.saved())
+        self.drop("https://github.com/microsoft/aspire/pull/7")
+        ledger = self.saved()
+        self.assertEqual([], ledger["chains"])
+        self.assertEqual([], ledger["workItems"])
+        inactive = ledger["retired"][0]["ledger"]
+        self.assertEqual(before["chains"], inactive["chains"])
+        self.assertEqual(before["workItems"], inactive["workItems"])
+        self.assertEqual(state.repository_spend(before, self.clock()), state.repository_spend(ledger, self.clock()))
+        self.prepare()
+        self.assertEqual([], self.saved()["chains"])
+        self.assertEqual(1, len(self.posts))
+
+    def test_drop_includes_separately_tracked_owned_pr_but_not_candidate_links(self):
+        self.launch()
+        self.task("completed")
+        pull = self.add_pr(1)
+        self.external_candidate()
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        old = api.ledger["workItems"][0]["id"]
+        execution.observe(api, normal_loop.read_control(api, old))
+        chain = state.adopt(api.ledger, 7, "pr", pull["node_id"])
+        api.persist()
+        self.activate_memory()
+        self.drop(old)
+        self.assertEqual([], self.saved()["chains"])
+        retired = self.saved()["retired"][0]
+        self.assertEqual([chain["id"]], [entry["id"] for entry in retired["ledger"]["chains"]])
+        self.assertEqual({20872, 7}, {subject["number"] for subject in retired["subjects"]})
+
+    def test_explicit_pr_readmission_blocks_if_retired_source_resumes(self):
+        self.launch()
+        self.task("completed")
+        pull = self.add_pr(1)
+        self.prepare()
+        self.activate_memory()
+        self.drop("https://github.com/microsoft/aspire/pull/7")
+        self.remote.values[self.prefix + "/pulls/7"]["labels"] = [{"name": "shepherd-adopted"}]
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage_reset(api, "admit", "https://github.com/microsoft/aspire/pull/7")
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        task = self.remote.values["agents/repos/microsoft/aspire/tasks/TASK1"]
+        task["state"] = task["sessions"][0]["state"] = "in_progress"
+        with self.assertRaisesRegex(ValueError, "resumed"):
+            self.prepare()
+        self.assertEqual(1, len(self.posts))
+
+    def test_direct_pr_admission_requires_explicit_apply_after_drop(self):
+        pull = deepcopy(pr(7))
+        for key in ("head", "base"):
+            pull[key]["repo"] = self.repo
+        pull.update(merged=False, changed_files=1)
+        pull["labels"] = [{"name": "shepherd-adopted"}]
+        self.remote.values[self.prefix + "/pulls/7"] = pull
+        self.remote.values[self.prefix + "/issues/7"] = dict(
+            number=7, node_id=pull["node_id"], state="open", labels=pull["labels"],
+            pull_request={"url": f"https://api.github.com/{self.prefix}/pulls/7"})
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        chain = state.adopt(api.ledger, 7, "pr", pull["node_id"])
+        original_id = chain["id"]
+        operation = state.reserve(api.ledger, chain, "first-operation", self.clock(), local=False)
+        state.settle_native(operation, 2)
+        state.finish(operation, "failed")
+        chain["reviews"] = [{"id": "rejected-review", "head": pull["head"]["sha"],
+                             "at": operation["at"], "state": "no-send",
+                             "actual": 0, "reserved": 0, "reviewId": None}]
+        api.persist()
+        self.activate_memory()
+        self.drop("https://github.com/microsoft/aspire/pull/7")
+        api = pilot.hosted_api(RUN, os.environ)
+        proposal = shepherd.stage_reset(api, "admit", "https://github.com/microsoft/aspire/pull/7")
+        self.assertEqual([], self.saved()["chains"])
+        self.assertEqual("replay", pilot.settle(api, {
+            "chain": original_id, "operation": operation["id"], "target": "upstream"},
+            None, 2, self.clock())["outcome"])
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        fresh = self.saved()["chains"][0]
+        self.assertNotEqual(original_id, fresh["id"])
+        self.assertEqual([], fresh["operations"])
+        self.assertEqual({}, fresh["dispositions"])
+        self.assertEqual(2, state.chain_spend(fresh))
+        self.assertEqual(2, state.repository_spend(self.saved(), self.clock()))
+        self.assertEqual([], self.posts)
+
+    def test_drop_preserves_unknown_completed_review_billing(self):
+        import tracking_reset
+        ledger = state.new_ledger("microsoft/aspire")
+        pull = pr(7)
+        chain = state.adopt(ledger, 7, "pr", pull["node_id"])
+        chain["reviews"] = [{"id": "completed-review", "head": pull["head"]["sha"],
+                             "at": self.clock().isoformat(), "state": "completed",
+                             "actual": None, "reserved": state.NATIVE_RESERVE, "reviewId": 42}]
+        state.validate(ledger)
+        before = deepcopy(ledger)
+        with self.assertRaisesRegex(ValueError, "unknown review billing"):
+            tracking_reset.drop(ledger, {"node_id": pull["node_id"]}, str(uuid.uuid4()))
+        self.assertEqual(before, ledger)
+        self.assertEqual(state.NATIVE_RESERVE, state.repository_spend(ledger, self.clock()))
+
+    def test_no_inference_local_result_and_report_keep_normal_reason(self):
+        packet = self.prepare(FEED)
+        self.settle(packet, None)
+        api = pilot.hosted_api(RUN, os.environ)
+        api.normal_feed = FEED
+        api.enabled = lambda: True
+        with redirect_stdout(io.StringIO()):
+            result = local.run_sweep(api, self.root, RUN, {}, executor=lambda *_: self.fail("must not infer"))
+        self.assertEqual("waiting; no inference", result["outcome"])
+        self.assertEqual("duplicate-context", result["normal"][0]["reason"])
+        self.assertEqual(result, json.loads((self.root / "result.json").read_text()))
+        report = run_report.render(RUN, "upstream", self.saved(), self.saved(), result, None,
+                                   "start", "end")
+        self.assertIn("duplicate-context", report)
+        self.assertIn(packet["operation"], report)
+
+    def test_drop_keeps_unknown_billing_and_uncertain_effects_unchanged(self):
+        old = self.retryable_history()
+        packet = self.prepare()
+        self.settle(packet, self.assessment(packet))
+        original = deepcopy(self.saved())
+        for changed in ("unknown", "sending", "uncertain", "report"):
+            api = pilot.hosted_api(RUN, os.environ)
+            api.read_authority()
+            api.ledger = deepcopy(original)
+            record = api.ledger["workItems"][0]
+            saved = record["assignments"][0]["execution"]
+            if changed == "unknown":
+                saved.update(worker_actual=None, worker_reserved=1)
+            elif changed == "report":
+                record["comment"]["delivery"] = "uncertain"
+            else:
+                saved["state"] = changed
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                import tracking_reset
+                tracking_reset.drop(api.ledger, dict(record["control"]["issue"], kind="issues"), str(uuid.uuid4()))
+            self.assertEqual(original, self.saved())
+
+    def test_drop_two_attempts_retains_unrelated_records_and_stale_proposal_fails(self):
+        old = self.retryable_history()
+        self.stage_retry(old, "second", "TASK1")
+        os.environ.pop("CI_SHEPHERD_WORK_ITEM_APPROVAL", None)
+        packet = self.prepare()
+        if packet["normal"] == "worklist":
+            packet = packet["packets"][0]
+        receipt = self.settle(packet, self.intake(packet))
+        os.environ["CI_SHEPHERD_WORK_ITEM_APPROVAL"] = json.dumps(receipt["approval_template"])
+        self.next_task_id = "TASK2"
+        self.prepare()
+        self.complete_retry("second", "TASK2", 8)
+        assessment = self.prepare()
+        if assessment["normal"] == "worklist":
+            assessment = assessment["packets"][0]
+        self.settle(assessment, self.assessment(assessment))
+        api = pilot.hosted_api(RUN, os.environ)
+        api.read_authority()
+        # Settle the legitimately reserved assessment before allowing retirement.
+        for pending in api.ledger.get("normalRuns", []):
+            if pending["state"] == "reserved":
+                self.fail("fixture must settle the assessment before drop")
+        unrelated = deepcopy(api.ledger["workItems"][0]["control"])
+        unrelated.update(id="unrelated", action="pause",
+                         issue={"repository": "microsoft/aspire", "number": 30000, "node_id": "OTHER"})
+        api.ledger["workItems"].append(items.new_record(unrelated))
+        api.persist()
+        proposal = shepherd.stage_reset(api, "drop", old)
+        self.assertEqual(2, len(proposal["affected"]["items"]))
+        shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual([items.new_record(unrelated)], self.saved()["workItems"])
+        self.assertEqual(2, len(self.saved()["retired"][0]["ledger"]["workItems"]))
+        with self.assertRaisesRegex(ValueError, "stale"):
+            shepherd.apply(api, proposal, expected_revision=proposal["generation"])
+        self.assertEqual(2, len(self.posts))
 
     def retryable_history(self):
         self.launch()

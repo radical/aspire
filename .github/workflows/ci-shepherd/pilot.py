@@ -297,6 +297,8 @@ def bound_worker_request(api, chain, operation, packet):
 
 
 def dispatch(api, chain, operation, packet, now):
+    import tracking_reset
+    tracking_reset.guard(api, chain["node"])
     api.repair_authority(chain)
     if not api.result_capable:
         raise ValueError("approved result collector unavailable; no worker admission")
@@ -321,6 +323,7 @@ def dispatch(api, chain, operation, packet, now):
         state.sent(operation)
         api.persist()
         api.guard(chain, observed)
+        tracking_reset.guard(api, chain["node"])
         attempted = True
         response = api.transport("POST", f"agents/repos/{api.repository}/tasks", body)
         if (not isinstance(response, Response) or response.status != 201 or not isinstance(response.payload, dict)
@@ -359,8 +362,12 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         import normal_loop
         return normal_loop.settle(api, packet, evidence, usage, now, billing_only=billing_only)
     api.read_authority()
+    import tracking_reset
     if packet.get("target", "fork") != api.binding.name:
         raise ValueError("packet target binding mismatch")
+    if any(chain["id"] == packet.get("chain") for entry in api.ledger.get("retired", [])
+           for chain in entry["ledger"]["chains"]):
+        return {"outcome": "replay"}
     chain = next(chain for chain in api.ledger["chains"] if chain["id"] == packet["chain"])
     if not billing_only:
         handoff.enroll(api, chain, now)
@@ -385,9 +392,11 @@ def settle(api, packet, evidence, usage, now, *, billing_only=False):
         if evidence is None:
             raise ValueError("failed/cancelled native execution or missing fresh evidence")
         decision, _ = reasoning.validate_evidence(evidence, evidence["sessionId"], hosted=True)
-        if (any(other["sessionId"] == evidence["sessionId"] for current in api.ledger["chains"]
+        if (any(other["sessionId"] == evidence["sessionId"] for part in tracking_reset.history(api.ledger)
+                for current in part["chains"]
                 for other in current["operations"] if other is not operation)
-                or any(other["sessionId"] == evidence["sessionId"] for other in api.ledger.get("normalRuns", []))):
+                or any(other["sessionId"] == evidence["sessionId"] for part in tracking_reset.history(api.ledger)
+                       for other in part.get("normalRuns", []))):
             raise ValueError("native session reused across operations")
         operation["sessionId"] = evidence["sessionId"]
         if not issue_pr.timestamp(packet["preparedAt"]) <= now < issue_pr.timestamp(packet["preparedAt"]) + timedelta(minutes=10):

@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import uuid
 from types import SimpleNamespace
 
 import local
@@ -20,6 +21,7 @@ import round as contracts
 from standalone import secure_path
 import work_item_execution as execution
 import work_items as items
+import tracking_reset
 
 
 class TrackingTransport(pilot_github.PilotTransport):
@@ -399,7 +401,113 @@ def stage(api, operation, item_id, *, issue=None, route=None, scope=None, new_id
             **({"retry_of": retry_of} if retry_of is not None else {})}
 
 
+def reset_subject(api, ledger, selector):
+    record = next((record for record in ledger.get("workItems", []) if record["id"] == selector), None)
+    receipts = [receipt["context"]["issue"]["identity"] for receipt in ledger.get("normalRuns", [])
+                if receipt["item"] == selector]
+    if record is not None:
+        subject = dict(record["control"]["issue"], kind="issues")
+    elif receipts:
+        if any(identity != receipts[0] for identity in receipts):
+            raise ValueError("ambiguous orphan item identity")
+        subject = dict(receipts[0], kind="issues")
+    else:
+        repository, kind, number = reference(selector)
+        if repository != api.repository:
+            raise ValueError("reset requires the selected authority repository")
+        value = api.api.get(f"repos/{repository}/issues/{number}")
+        if (value.get("number") != number or not value.get("node_id")
+                or ("pull_request" in value) != (kind == "pull")):
+            raise ValueError("reset subject type/identity mismatch")
+        subject = {"repository": repository, "number": number, "node_id": value["node_id"], "kind": kind}
+    observe_link(api, subject["repository"], "pull" if subject["kind"] == "pull" else "issue",
+                 subject["number"], subject["node_id"])
+    return subject
+
+
+def stage_reset(api, operation, selector):
+    ledger = load(api)
+    if api.storage_revision is None:
+        raise ValueError("reset requires already activated branch authority")
+    subject = reset_subject(api, ledger, selector)
+    identity = str(uuid.uuid4())
+    if operation == "drop":
+        saved = tracking_reset.closure(ledger, subject)
+        tracking_reset.verify(api, saved)
+        changed = tracking_reset.drop(ledger, subject, identity)
+        affected = {"items": [record["id"] for record in saved["workItems"]],
+                    "receipts": [receipt["id"] for receipt in saved["normalRuns"]],
+                    "chains": [chain["id"] for chain in saved["chains"]]}
+    elif operation == "admit":
+        if subject["kind"] != "pull":
+            raise ValueError("explicit admission requires a PR URL; issues use the normal feed")
+        tracking_reset.guard(api, subject["node_id"])
+        if state.find_chain(ledger, subject["number"]) is not None:
+            raise ValueError("PR already actively tracked")
+        value = api.mapping(subject["number"])
+        if value["node_id"] != subject["node_id"] or value["state"] != "open" or not pilot_github.managed(value):
+            raise ValueError("PR admission requires an open managed PR")
+        changed = deepcopy(ledger)
+        state.adopt(changed, subject["number"], "pr", subject["node_id"])["id"] = identity
+        affected = {"items": [], "receipts": [], "chains": [identity]}
+    else:
+        raise ValueError("unsupported reset operation")
+    validate_graph(changed)
+    return {**snapshot(api), "schema_version": 1, "operation": operation, "subject": subject,
+            "id": identity, "affected": affected}
+
+
+def apply_reset(api, proposal, expected_revision):
+    contracts.exact(proposal, {"authority", "generation", "head", "schema_version", "operation",
+                              "subject", "id", "affected"}, "tracking reset")
+    ledger = load(api)
+    if (type(expected_revision) is not int or type(proposal["generation"]) is not int
+            or type(proposal["schema_version"]) is not int or proposal["schema_version"] != 1
+            or expected_revision != proposal["generation"]
+            or api.storage_revision is None or any(proposal[key] != value for key, value in snapshot(api).items())):
+        raise ValueError("authority changed or staged reset stale")
+    items.identifier(proposal["id"], "reset identity")
+    subject = proposal["subject"]
+    observed = reset_subject(api, ledger, f"https://github.com/{subject['repository']}/{subject['kind']}/{subject['number']}")
+    if observed != subject:
+        raise ValueError("reset subject identity changed")
+    # Recompute closure, live safety and admission checks under the apply lock.
+    current = stage_reset(api, proposal["operation"],
+                          f"https://github.com/{subject['repository']}/{subject['kind']}/{subject['number']}")
+    if any(current[key] != proposal[key] for key in ("authority", "generation", "head")):
+        raise ValueError("authority changed or staged reset stale during revalidation")
+    if proposal["operation"] == "drop":
+        if current["affected"] != proposal["affected"]:
+            raise ValueError("drop ownership closure changed")
+        changed = tracking_reset.drop(ledger, subject, proposal["id"])
+    else:
+        changed = deepcopy(ledger)
+        state.adopt(changed, subject["number"], "pr", subject["node_id"])["id"] = proposal["id"]
+        if proposal["affected"] != {"items": [], "receipts": [], "chains": [proposal["id"]]}:
+            raise ValueError("PR admission identity changed")
+    api.normal_guard()
+    api.authority_guard()
+    api.control = None
+    api.tracking_candidate = deepcopy(changed)
+    if proposal["operation"] == "drop":
+        saved = tracking_reset.closure(ledger, subject)
+        api.tracking_guard = lambda: tracking_reset.verify(api, saved)
+    else:
+        api.tracking_guard = lambda: tracking_reset.guard(api, subject["node_id"])
+    if hasattr(api, "transport"):
+        api.transport.control = None
+        api.transport.tracking_candidate = deepcopy(changed)
+    api.ledger = changed
+    storage.validate_candidate(api, changed)
+    api.persist()
+    return {"schema_version": 1, "outcome": "applied", "operation": proposal["operation"],
+            "subject": subject, "affected": proposal["affected"],
+            "notice": "Only Shepherd records changed; no external resource mutation or dispatch."}
+
+
 def apply(api, proposal, *, expected_revision):
+    if proposal.get("operation") in {"drop", "admit"}:
+        return apply_reset(api, proposal, expected_revision)
     contracts.exact(proposal, {"schema_version", "authority", "generation", "head", "operation", "control"}
                     | ({"retry_of"} if proposal.get("operation") == "retry" else set()),
                     "tracking change")
@@ -520,6 +628,15 @@ def full_links(value, records, chains):
 
 
 def human(value, *, links=False, records=(), chains=()):
+    if value.get("operation") in {"drop", "admit"}:
+        subject = value["subject"]
+        return "\n".join([
+            "APPLIED" if value.get("outcome") == "applied" else "NOT APPLIED",
+            f"{value['operation'].upper()}: https://github.com/{subject['repository']}/{subject['kind']}/{subject['number']}",
+            *[f"{key}: {', '.join(entries) or 'none'}" for key, entries in value["affected"].items()],
+            *([f"Authority revision: {value['generation']}"] if "generation" in value else []),
+            "Only Shepherd records change. External issues, PRs, tasks and comments stay unchanged.",
+            "Safety/accounting receipts remain inactive; no task is launched."])
     lines = []
 
     def section(title, headers, rows, limits):
@@ -661,7 +778,7 @@ def main(argv=None):
     parser.add_argument("--authority", type=int)
     parser.add_argument("--tracker-node")
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("list", "show", "add", "edit", "remove", "retry", "apply"):
+    for command in ("list", "show", "add", "edit", "remove", "retry", "drop", "admit", "apply"):
         child = commands.add_parser(command)
         child.add_argument("--json", action="store_true", help="Stable sorted JSON; diagnostics remain on stderr")
         if command in {"list", "show"}:
@@ -679,6 +796,9 @@ def main(argv=None):
             child.add_argument("--id", required=True, help="New retry item ID")
             child.add_argument("--expected-task", required=True, help="Exact predecessor task ID")
             child.add_argument("--out", type=Path, required=True, help="New exclusive local proposal file")
+        elif command in {"drop", "admit"}:
+            child.add_argument("selector", help="Issue/PR URL or exact item ID; admit accepts PR URLs")
+            child.add_argument("--out", type=Path, required=True)
         else:
             if command == "add":
                 child.add_argument("issue")
@@ -702,6 +822,9 @@ def main(argv=None):
                 value = listing(api, include_paused=args.all)
             elif args.command == "show":
                 value = show(api, args.selector, live=args.live)
+            elif args.command in {"drop", "admit"}:
+                value = stage_reset(api, args.command, args.selector)
+                storage.write_host_json(args.out, value, max_bytes=storage.MAX_ENVELOPE)
             else:
                 issue = None
                 if args.command == "add":

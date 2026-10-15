@@ -184,6 +184,8 @@ def superseded(ledger, record):
 
 def available(api, record):
     issue = record["control"]["issue"]
+    import tracking_reset
+    tracking_reset.guard(api, issue["node_id"])
     history = predecessors(api.ledger, record)
     receipts = {(previous["id"], assignment["id"]) for previous, assignment in history}
     ancestors = {previous["id"] for previous, _ in history}

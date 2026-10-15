@@ -389,6 +389,8 @@ def run_sweep(api, directory, run, context, *, executor):
             result = pilot.settle(api, packet, evidence, usage, live.clock(), billing_only=not api.enabled())
             if result["outcome"] == "validate":
                 raise ValueError("inline repair is outside this cloud-only local runner")
+    if getattr(api, "normal_observation", None):
+        result["normal"] = api.normal_observation
     contracts.write_json(directory / "result.json", result)
     print(json.dumps({"run": run["runId"], **result}, allow_nan=False), flush=True)
     return result

@@ -184,6 +184,11 @@ def validate_ledger(api, ledger):
 
 def validate_candidate(api, ledger):
     validate_ledger(api, ledger)
+    if getattr(api, "tracking_candidate", ledger) != ledger:
+        raise ValueError("tracking reset candidate changed")
+    guard = getattr(api, "tracking_guard", None)
+    if guard is not None:
+        guard()
     control = getattr(api, "control", None)
     if control is not None:
         matches = [record for record in ledger.get("workItems", []) if record["id"] == control["id"]]
@@ -214,6 +219,8 @@ def validate_transport_document(transport, raw):
             raise ValueError("memory migration document changed")
         return
     control = getattr(transport, "control", None)
+    if getattr(transport, "tracking_candidate", value["ledger"]) != value["ledger"]:
+        raise ValueError("tracking reset transport candidate changed")
     if control is not None:
         matches = [record for record in value["ledger"].get("workItems", []) if record["id"] == control["id"]]
         if len(matches) != 1 or matches[0]["control"] != control:

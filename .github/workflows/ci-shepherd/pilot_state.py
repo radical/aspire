@@ -50,6 +50,8 @@ def validate(ledger):
         keys.add("workItems")
     if isinstance(ledger, dict) and "normalRuns" in ledger:
         keys.add("normalRuns")
+    if isinstance(ledger, dict) and "retired" in ledger:
+        keys.add("retired")
     contracts.exact(ledger, keys, "pilot ledger")
     if ledger["schemaVersion"] != 1 or ledger["repository"] not in {"radical/aspire", "microsoft/aspire"}:
         raise ValueError("unsupported pilot authority")
@@ -77,7 +79,10 @@ def validate(ledger):
                                 "childAdoption"} | ({"reminder"} if "reminder" in chain else set())
                         | ({"reviews"} if "reviews" in chain else set())
                         | ({"handoff"} if "handoff" in chain else set())
-                        | ({"sourceWorkItem"} if "sourceWorkItem" in chain else set()), "chain")
+                        | ({"sourceWorkItem"} if "sourceWorkItem" in chain else set())
+                        | ({"priorSpend"} if "priorSpend" in chain else set()), "chain")
+        if "priorSpend" in chain:
+            amount(chain["priorSpend"])
         if "handoff" in chain:
             handoff.validate(chain["handoff"])
             transfer = chain["handoff"].get("appTransfer")
@@ -233,6 +238,9 @@ def validate(ledger):
                     "item_id": record["id"], "assignment_id": assignment["id"]}:
                 raise ValueError("cloud import reverse binding mismatch")
             imports.add(identity)
+    if "retired" in ledger:
+        import tracking_reset
+        tracking_reset.validate(ledger)
     return ledger
 
 
@@ -269,6 +277,9 @@ def adopt(ledger, number, kind, node):
     chain = {"id": str(uuid.uuid4()), "origin": number, "kind": kind, "node": node, "child": None,
              "childNode": None, "state": "open", "localAttempts": 0, "rounds": 0, "escalated": False,
              "operations": [], "dispositions": {}, "statusId": None, "statusPending": False, "childAdoption": "none"}
+    import tracking_reset
+    if tracking_reset.blocked(ledger, node):
+        chain["priorSpend"] = tracking_reset.prior_spend(ledger, node)
     ledger["chains"].append(chain)
     validate(ledger)
     return chain
@@ -290,7 +301,7 @@ def operation_spend(operation):
 
 
 def chain_spend(chain):
-    return sum(operation_spend(operation) for operation in chain["operations"]) + sum(
+    return chain.get("priorSpend", 0) + sum(operation_spend(operation) for operation in chain["operations"]) + sum(
         (record["actual"] or 0) + record["reserved"] for record in chain.get("reviews", []))
 
 
@@ -303,6 +314,7 @@ def repository_spend(ledger, now):
     import work_item_execution
     import normal_loop
     total = work_item_execution.spend(ledger, now) + normal_loop.native_spend(ledger, now)
+    total += sum(repository_spend(entry["ledger"], now) for entry in ledger.get("retired", []))
     for chain in ledger["chains"]:
         for record in chain.get("reviews", []):
             total += record["reserved"]

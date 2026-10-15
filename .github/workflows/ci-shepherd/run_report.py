@@ -36,6 +36,11 @@ def accounting(ledger):
             actual += review["actual"] or 0
             reserved += review["reserved"]
             unknown |= review["actual"] is None
+    for entry in ledger.get("retired", []):
+        old_actual, old_reserved, old_unknown = accounting(entry["ledger"])
+        actual += old_actual
+        reserved += old_reserved
+        unknown |= old_unknown
     return actual, reserved, unknown
 
 
@@ -56,6 +61,12 @@ def render(run, target, before, after, result, packet, started, ended):
         lines.append(f"- Controller error: {text(result['error'])}.")
     if result.get("until"):
         lines.append(f"- Deferred until {text(result['until'])}; reassess fresh evidence then.")
+    for row in result.get("normal", []):
+        label = row.get("item") or row.get("issue", {}).get("number") or "normal intake"
+        reason = row.get("reason") or row.get("attention") or row.get("statusOnly") or row.get("state")
+        receipt = (f"; receipt {text(row['receipt'])} ({text(row['receiptState'])})"
+                   if "receipt" in row else "")
+        lines.append(f"- Normal item `{text(label)}`: {text(reason)}{receipt}.")
     if packet and "normal" in packet:
         if packet["normal"] == "worklist":
             lines.append(f"- Refreshed worklist: {len(packet['worklist'])} items; "

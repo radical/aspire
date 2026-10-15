@@ -145,7 +145,7 @@ preview, not the work item's control revision.
 - **Remove means pause:** it stops new authorized effects without deleting
   history, cancelling an existing worker, closing PRs or releasing reservations.
   Paused items remain inspectable with `show` and `list --all`. The CLI has no
-  unpause/reset shortcut. Adding another ID for an already tracked issue is
+  unpause shortcut. Adding another ID for an already tracked issue is
   rejected, including when every previous item is paused.
 - **Retry requests fresh intake:** use the immediate predecessor's exact item and
   task IDs and a new item ID. Staging and applying retain all previous records,
@@ -166,6 +166,64 @@ Superseded attempts remain visible and retain their audit/accounting history,
 but do not produce new normal assessments or dispatches. A manually prepared
 retry without a normal intake receipt remains observation-only; the CLI does
 not fabricate receipts to adopt it.
+
+### Dropping tracking and admitting fresh work
+
+`drop` stages a reset of **Shepherd records only**. Select an exact item ID,
+issue URL or owned PR URL. The preview lists every affected item, inference
+receipt and managed PR chain; selecting one attempt includes the whole issue's
+retry history and imported PR ownership. External candidate PR links alone do
+not expand the reset.
+
+```bash
+shepherd drop https://github.com/microsoft/aspire/issues/ISSUE_NUMBER \
+  --out "$HOME/.copilot/ci-shepherd/changes/drop.json"
+shepherd apply "$HOME/.copilot/ci-shepherd/changes/drop.json" \
+  --expected-revision GENERATION_FROM_PREVIEW
+```
+
+Apply moves the complete ownership group out of active tracking in one
+expected-head commit. This includes orphan intake receipts with no work item.
+It retains bounded, validated inactive receipts for accounting, task/session
+identity, replay protection and ownership evidence. Git history alone is not
+used as a runtime safety guard.
+
+The next explicit normal issue feed gets a new admission identity and a real
+fresh intake. Old decisions, conclusions, controls and dedup receipts are not
+inputs to that inference. Current GitHub evidence is still discoverable, and
+normal policy, approval, lifetime spending and rolling repository credit limits
+still apply. Fresh intake does not guarantee a new task or a new credit budget.
+Retained records still count toward history and storage limits.
+
+Dropped PRs are not automatically re-adopted by managed-label discovery. To
+explicitly start a new direct PR chain, stage and apply admission:
+
+```bash
+shepherd admit https://github.com/microsoft/aspire/pull/PR_NUMBER \
+  --out "$HOME/.copilot/ci-shepherd/changes/admit.json"
+shepherd apply "$HOME/.copilot/ci-shepherd/changes/admit.json" \
+  --expected-revision GENERATION_FROM_PREVIEW
+```
+
+The PR must still be open and managed in the selected repository. Admission
+creates only tracking records, not an agent or external effect.
+
+Drop rejects active or uncertain workers, outstanding inference or overlapping
+turns, unreconciled packet assignments, unresolved publication intents, unknown
+worker/review billing, and external app handoffs. A terminal review is not
+evidence of zero cost. Task identities and billing are reverified at apply;
+resumed retired tasks block subsequent admission or dispatch. Reconcile changed
+or unavailable billing before proceeding; reset does not release holds.
+Old packets and controls cannot restore retired ownership or authorize effects.
+
+Staging is GET-only and writes only a private local proposal. Applying changes
+the GitHub-backed Shepherd memory branch, **not** external issue, PR, task,
+comment, label or application state. Neither command cancels work, deletes
+external resources, closes PRs, launches tasks or schedules a run.
+
+Normal local runs retain no-inference reasons in `result.json` and `report.md`,
+including the ID and state of a duplicate intake receipt. A generic waiting
+outcome is not proof that an issue was evaluated or a worker launched.
 
 Every proposal validates the candidate ledger with existing record, result,
 follow-up and bidirectional imported-chain validators, plus retry
