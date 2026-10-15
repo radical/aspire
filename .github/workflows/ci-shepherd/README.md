@@ -25,9 +25,31 @@ isolated from the product branch; do not merge them into `ci-shepherd`.
 and narrow, staged control changes. It uses Python's standard library and the
 existing selected GitHub credential; it never changes authentication.
 
-Choose the verified tracker issue, activation comment and immutable tracker node
-explicitly. For convenience, define a shell function from the repository root
-after setting `TRACKER`, `AUTHORITY` and `TRACKER_NODE` to those identities:
+Run from the repository root. Inspection can resolve the existing hosted
+controller configuration using GET-only repository-variable and tracker reads:
+
+```bash
+python3 -B .github/workflows/ci-shepherd/shepherd.py list --links
+python3 -B .github/workflows/ci-shepherd/shepherd.py --target upstream list
+```
+
+Discovery uses `CI_SHEPHERD_TRACKER`, `CI_SHEPHERD_TRACKER_NODE` and
+`CI_SHEPHERD_AUTHORITY_COMMENT` for fork tracking, or their
+`CI_SHEPHERD_UPSTREAM_*` counterparts for upstream tracking. Nonempty environment
+values override repository variables. If both namespaces have configured
+trackers, select `--target` explicitly. Missing or ambiguous configuration fails
+closed; discovery never scans issues or chooses the newest authority.
+
+An explicit `--tracker` bypasses repository-variable lookup. The CLI derives the
+node from the open tracker and the authority comment from its unique owned
+activation pointer, verifying any supplied node/comment pins. Configured pins
+apply only to their matching configured tracker. The pointer and memory
+document still undergo the existing identity, target and activation checks.
+Human output shows the resolved namespace; JSON output is unchanged.
+Discovery does not initialize authority or grant permission to write.
+
+Explicit identity flags remain available. For repeated use, define a shell
+function after setting `TRACKER`, `AUTHORITY` and `TRACKER_NODE`:
 
 ```bash
 shepherd() {
@@ -37,8 +59,10 @@ shepherd() {
 }
 
 shepherd list
+shepherd list --links
 shepherd list --all --json
 shepherd show ITEM_ID
+shepherd show ITEM_ID --live --links
 shepherd show https://github.com/microsoft/aspire/issues/ISSUE_NUMBER --live --json
 shepherd show https://github.com/microsoft/aspire/pull/PR_NUMBER
 ```
@@ -52,7 +76,21 @@ match multiple attempts. Details retain assignments, task/session identities,
 results, follow-ups, candidate fixes, related attempts, imported chains and credit
 holds. Candidate links do not grant ownership of another author's PR.
 
-Default output is concise text. Each subcommand accepts `--json` for sorted,
+Default output uses aligned, plain-text tables without color or additional
+dependencies. Issue and chain lists are separate; detailed reports separate saved
+assignments, related attempts, candidate PRs and live observations. List row
+numbers refer to the full item/chain IDs printed below each table; they are not
+command selectors. Long prose and
+table cells wrap without truncating values. Full task/session IDs and PR links
+appear below the detail tables for copying. Unknown credits remain `unknown`, not
+zero. Staged changes show a field table and an explicit `NOT APPLIED` notice.
+
+Use `list --links` or `show --links` to append full, copyable issue, PR, task
+and pinned workflow job/run URLs. Links come from validated saved identities or
+verified live observations, not arbitrary result text. Saved links do not imply
+current platform state. The flag does not alter JSON output.
+
+Each subcommand accepts `--json` for sorted,
 versioned JSON. Exit codes are `0` for success, `1` for a rejected operation or
 unavailable evidence, and `2` for invalid command arguments. Errors go to stderr.
 Saved output identifies its authority generation and branch head; it is not a

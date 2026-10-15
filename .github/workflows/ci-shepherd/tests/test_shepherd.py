@@ -80,13 +80,40 @@ class ShepherdTests(WorkspaceTest, unittest.TestCase):
         self.assertEqual([], self.api.posts)
         self.assertEqual([], self.api.effects)
         rendered = shepherd.human(result)
-        self.assertIn("SAVED example-item  run  in_progress", rendered)
-        self.assertIn("LIVE task TASK1: completed", rendered)
+        self.assertIn("Saved assignments", rendered)
+        self.assertIn("Live observations", rendered)
+        self.assertIn("completed", rendered)
 
     def test_live_show_rejects_foreign_session(self):
         self.api.task_transport.values["agents/repos/radical/aspire/tasks/TASK1"]["sessions"][0]["task_id"] = "OTHER"
         with self.assertRaisesRegex(ValueError, "session/correlation"):
             shepherd.show(self.api, "example-item", live=True)
+        self.assertEqual([], self.api.effects)
+
+    def test_full_links_use_bound_references_without_changing_json(self):
+        value = shepherd.listing(self.api)
+        before = deepcopy(value)
+        rendered = shepherd.human(value, links=True, records=self.api.saved["workItems"])
+        self.assertIn("https://github.com/radical/aspire/issues/900", rendered)
+        self.assertIn("https://github.com/radical/aspire/tasks/TASK1", rendered)
+        self.assertIn("https://github.com/radical/aspire/actions/runs/100/attempts/1/job/200", rendered)
+        self.assertNotIn("https://github.com/radical/aspire/tasks/SESSION1", rendered)
+        self.assertEqual(before, value)
+        detailed = shepherd.show(self.api, "example-item", live=True)
+        rendered = shepherd.human(detailed, links=True)
+        self.assertIn("https://github.com/radical/aspire/tasks/TASK1", rendered)
+        self.assertEqual([], self.api.effects)
+
+    def test_full_links_omit_missing_tasks_and_keep_chain_pr_identity(self):
+        state.adopt(self.api.saved, 904, "pr", "PR904")
+        value = shepherd.listing(self.api)
+        records = deepcopy(self.api.saved["workItems"])
+        records[0]["assignments"][0]["execution"]["task_id"] = None
+        value["chains"][0]["child"] = 905
+        rendered = shepherd.human(value, links=True, records=records)
+        links = [line.strip() for line in rendered.splitlines() if line.strip().startswith("https://")]
+        self.assertIn("https://github.com/radical/aspire/pull/905", links)
+        self.assertEqual([], [url for url in links if "/tasks/" in url])
         self.assertEqual([], self.api.effects)
 
     def test_stage_remove_preserves_task_and_credit_hold(self):
@@ -215,6 +242,95 @@ class ShepherdTests(WorkspaceTest, unittest.TestCase):
             self.assertEqual(1, shepherd.main([*authority, "remove", "example-item", "--out", str(path)]))
         self.assertEqual([], self.api.effects)
 
+    def test_cli_link_flag_and_json_stability(self):
+        authority = ["--target", "fork", "--tracker", "99", "--authority", "500",
+                     "--tracker-node", "TRACKER99"]
+        before = deepcopy(self.api.saved)
+        for command in (["list"], ["show", "example-item", "--live"]):
+            with self.subTest(command=command):
+                with patch.object(shepherd, "connect", return_value=self.api), redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(0, shepherd.main([*authority, *command, "--links"]))
+                self.assertIn("https://github.com/radical/aspire/tasks/TASK1", output.getvalue())
+                outputs = []
+                for flags in (["--json"], ["--json", "--links"]):
+                    with patch.object(shepherd, "connect", return_value=self.api), redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(0, shepherd.main([*authority, *command, *flags]))
+                    outputs.append(json.loads(output.getvalue()))
+                self.assertEqual(outputs[0], outputs[1])
+        with patch.object(shepherd, "connect", return_value=self.api), redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(1, shepherd.main([*authority, "show", "missing", "--links"]))
+        self.assertIn("tracked item not found", error.getvalue())
+        self.assertEqual(before, self.api.saved)
+        self.assertEqual([], self.api.effects)
+
+    def discovery(self, *, target="fork", tracker=None, authority=None, node=None,
+                  environment=None, variables=(), comments=None, tracker_node="TRACKER99",
+                  wrong_pointer=False):
+        identity = storage.identity(self.api)
+        identity.update(trackerId=99, trackerNode="TRACKER99", commentId=500)
+        body = storage.pointer(identity, SimpleNamespace(commit="a" * 40, blob="b" * 40),
+                               "c" * 64, self.api.saved)
+        if wrong_pointer:
+            body = body.replace('"trackerId":99', '"trackerId":98')
+        if comments is None:
+            comments = [{"id": 500, "user": self.api.actor, "body": body}]
+        values = {
+            "repos/radical/aspire/actions/variables?per_page=100": [{"variables": list(variables)}],
+            "repos/radical/aspire/issues/99": {"number": 99, "node_id": tracker_node, "state": "open"},
+            "user": self.api.actor,
+            "repos/radical/aspire/issues/99/comments?per_page=100": [comments],
+        }
+        args = SimpleNamespace(target=target, tracker=tracker, authority=authority, tracker_node=node)
+        with patch.object(shepherd.local, "metadata", side_effect=lambda path, token, **kwargs: values[path]) as reads:
+            pointer = shepherd.resolve(args, "fixture", environment or {})
+        storage.parse_pointer(pointer, identity)
+        return args, reads
+
+    def test_discovery_explicit_precedence_and_missing_unrelated_config(self):
+        args, reads = self.discovery(tracker=99, authority=500, node="TRACKER99",
+                                    environment={"CI_SHEPHERD_TRACKER": "98",
+                                                 "CI_SHEPHERD_AUTHORITY_COMMENT": "499"})
+        self.assertEqual((99, 500, "TRACKER99"), (args.tracker, args.authority, args.tracker_node))
+        self.assertEqual(3, reads.call_count)
+
+    def test_discovery_one_configured_namespace(self):
+        args, _ = self.discovery(target=None, variables=[{"name": "CI_SHEPHERD_TRACKER", "value": "99"}])
+        self.assertEqual(("fork", 99, 500, "TRACKER99"),
+                         (args.target, args.tracker, args.authority, args.tracker_node))
+
+    def test_discovery_ambiguity_missing_node_and_comment_fail_closed(self):
+        cases = [
+            ({}, "tracker missing"),
+            ({"target": None}, "missing or ambiguous"),
+            ({"target": None, "variables": [
+                {"name": "CI_SHEPHERD_TRACKER", "value": "99"},
+                {"name": "CI_SHEPHERD_UPSTREAM_TRACKER", "value": "127"}]}, "ambiguous"),
+            ({"tracker": 99, "node": "WRONG"}, "node mismatch"),
+            ({"tracker": 99, "authority": 501}, "comment mismatch"),
+            ({"tracker": 99, "wrong_pointer": True}, "pointer identity"),
+            ({"tracker": 99, "comments": []}, "pointer missing"),
+            ({"tracker": 99, "comments": [
+                {"id": 500, "user": self.api.actor, "body": state.MARKER},
+                {"id": 501, "user": self.api.actor, "body": state.MARKER}]}, "ambiguous"),
+            ({"tracker": 99, "comments": [
+                {"id": 500, "user": self.api.actor, "body": state.MARKER}]}, "pointer missing"),
+        ]
+        before = deepcopy(self.api.saved)
+        for kwargs, message in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, message):
+                self.discovery(**kwargs)
+        self.assertEqual(before, self.api.saved)
+        self.assertEqual([], self.api.effects)
+
+    def test_discovery_failure_keeps_stdout_empty_and_returns_error(self):
+        with patch.object(shepherd.local, "selected_token", return_value="fixture"), \
+                patch.object(shepherd.local, "metadata", side_effect=ValueError("configuration unavailable")), \
+                redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(1, shepherd.main(["list", "--json"]))
+        self.assertEqual("", output.getvalue())
+        self.assertIn("configuration unavailable", error.getvalue())
+        self.assertEqual([], self.api.effects)
+
     def test_missing_and_ambiguous_selector_are_errors(self):
         with self.assertRaisesRegex(ValueError, "not found"):
             shepherd.show(self.api, "missing")
@@ -323,6 +439,51 @@ class ShepherdTests(WorkspaceTest, unittest.TestCase):
         pull["node_id"] = "FOREIGN"
         with self.assertRaisesRegex(ValueError, "identity"):
             shepherd.show(self.api, chain["id"], live=True)
+
+    def test_listing_renders_separate_aligned_tables(self):
+        state.adopt(self.api.saved, 904, "pr", "NODE904")
+        value = shepherd.listing(self.api)
+        before = deepcopy(value)
+        rendered = shepherd.human(value)
+        self.assertIn("Tracked issues", rendered)
+        self.assertIn("Managed PRs", rendered)
+        self.assertIn("Item ID", rendered)
+        self.assertIn("Hold", rendered)
+        self.assertIn("radical/aspire#900", rendered)
+        self.assertIn("unknown", rendered)
+        self.assertIn("1: example-item", rendered)
+        self.assertEqual(before, value)
+        self.assertTrue(all(len(line) <= 100 for line in rendered.splitlines()))
+
+    def test_detail_wraps_prose_keeps_full_identifiers_and_escapes_controls(self):
+        value = shepherd.show(self.api, "example-item")
+        value["items"][0]["record"]["control"]["scope"] = "A long explanation " * 30 + "\x1b[31m"
+        rendered = shepherd.human(value)
+        self.assertIn("Saved assignments", rendered)
+        self.assertIn("Identifiers and links", rendered)
+        self.assertIn("TASK1", rendered)
+        self.assertIn("SESSION1", rendered)
+        self.assertIn("\\u001b", rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertTrue(all(len(line) <= 100 for line in rendered.splitlines()))
+
+    def test_staged_preview_uses_table_and_clear_no_effect_notice(self):
+        rendered = shepherd.human(self.stage())
+        self.assertIn("Field", rendered)
+        self.assertIn("Value", rendered)
+        self.assertIn("NOT APPLIED", rendered)
+        self.assertIn("pause", rendered)
+        self.assertIn("No task is launched or cancelled", rendered)
+
+    def test_empty_report_and_zero_credits_are_distinct_from_unknown(self):
+        value = shepherd.listing(self.api)
+        value["items"][0]["credits_actual"] = 0
+        value["items"][0]["credits_reserved"] = 0
+        rendered = shepherd.human(value)
+        self.assertRegex(rendered, r"workflow_failure\s+0\s+0")
+        value["items"] = []
+        value["chains"] = []
+        self.assertIn("No matching tracked items.", shepherd.human(value))
 
 
 class TrackingStorageTests(WorkspaceTest, unittest.TestCase):

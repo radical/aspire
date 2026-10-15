@@ -3,10 +3,13 @@
 import argparse
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import textwrap
+from types import SimpleNamespace
 
 import local
 import pilot_binding as bindings
@@ -43,11 +46,73 @@ class TrackingGitHub(local.LocalGitHub):
         super().authority_guard()
 
 
+def resolve(args, token, environment):
+    prefixes = {"fork": "CI_SHEPHERD_", "upstream": "CI_SHEPHERD_UPSTREAM_"}
+    configuration = dict(environment)
+    if args.tracker is None:
+        names = [prefix + suffix for prefix in prefixes.values()
+                 for suffix in ("TRACKER", "TRACKER_NODE", "AUTHORITY_COMMENT")]
+        relevant = names if args.target is None else [prefixes[args.target] + "TRACKER"]
+        if args.target is None or not any(configuration.get(name) for name in relevant):
+            pages = local.metadata("repos/radical/aspire/actions/variables?per_page=100", token, paginate=True)
+            for page in pages:
+                for variable in page["variables"]:
+                    if variable["name"] in names:
+                        if not configuration.get(variable["name"]):
+                            configuration[variable["name"]] = variable["value"]
+    if args.target is None and args.tracker is None:
+        configured = [target for target, prefix in prefixes.items() if configuration.get(prefix + "TRACKER")]
+        if not configured:
+            raise ValueError("configured authority missing or ambiguous: no tracker configured; supply --tracker and --target")
+        if len(configured) > 1:
+            raise ValueError("configured authority ambiguous: select --target fork or --target upstream")
+        args.target = configured[0]
+    prefix = prefixes.get(args.target)
+    if (args.tracker is not None and prefix
+            and str(args.tracker) != str(configuration.get(prefix + "TRACKER"))):
+        prefix = None
+    if args.tracker is None:
+        configured_tracker = configuration.get(prefix + "TRACKER") if prefix else None
+        if not configured_tracker:
+            raise ValueError("tracker missing: supply --tracker or configure the selected namespace")
+        args.tracker = int(configured_tracker)
+    tracker = local.metadata(f"repos/radical/aspire/issues/{args.tracker}", token)
+    if (tracker.get("number") != args.tracker or tracker.get("state") != "open"
+            or "pull_request" in tracker or not tracker.get("node_id")):
+        raise ValueError("discovery requires an open tracker issue")
+    node = args.tracker_node or (configuration.get(prefix + "TRACKER_NODE") if prefix else None)
+    if node is not None and node != tracker["node_id"]:
+        raise ValueError("tracker node mismatch")
+    args.tracker_node = tracker["node_id"]
+    actor = local.metadata("user", token)
+    pages = local.metadata(f"repos/radical/aspire/issues/{args.tracker}/comments?per_page=100",
+                           token, paginate=True)
+    owner = SimpleNamespace(actor=actor)
+    candidates = [comment for page in pages for comment in page
+                  if pilot_github.PilotGitHub.owned(owner, comment) and state.MARKER in comment.get("body", "")]
+    if len(candidates) != 1 or not storage.is_pointer(candidates[0]["body"]):
+        raise ValueError("activated authority pointer missing or ambiguous")
+    comment = candidates[0]
+    authority = args.authority or (configuration.get(prefix + "AUTHORITY_COMMENT") if prefix else None)
+    if authority is not None and int(authority) != comment["id"]:
+        raise ValueError("authority comment mismatch")
+    args.authority = comment["id"]
+    descriptor = contracts.loads(comment["body"][len(storage.HEADER):], max_bytes=storage.MAX_POINTER)
+    if args.target is None:
+        args.target = descriptor["authority"]["binding"]
+    if args.target not in prefixes:
+        raise ValueError("unsupported discovered target")
+    return comment["body"]
+
+
 def connect(args, *, write=False):
     token = local.selected_token()
+    pointer = resolve(args, token, os.environ)
     revision = local.command(["git", "--no-pager", "-C", str(local.ROOT), "rev-parse", "HEAD"])
-    return TrackingGitHub(token, args.tracker, args.authority, args.tracker_node,
-                          write=write, revision=revision, binding=bindings.select(args.target))
+    api = TrackingGitHub(token, args.tracker, args.authority, args.tracker_node,
+                         write=write, revision=revision, binding=bindings.select(args.target))
+    storage.parse_pointer(pointer, storage.identity(api))
+    return api
 
 
 def validate_graph(ledger):
@@ -329,78 +394,227 @@ def apply(api, proposal, *, expected_revision):
             "notice": "No dispatch, cancellation, task deletion or publication performed."}
 
 
-def human(value):
-    def safe(text):
-        return "unknown" if text is None else json.dumps(str(text), ensure_ascii=True)[1:-1]
+def display(value):
+    if value is None:
+        return "unknown"
+    if type(value) is bool:
+        return "yes" if value else "no"
+    return json.dumps(str(value), ensure_ascii=True)[1:-1]
+
+
+def table(headers, rows, limits):
+    cells = [[display(cell) for cell in row] for row in rows]
+    widths = [min(limit, max(len(header), *(len(row[index]) for row in cells)))
+              for index, (header, limit) in enumerate(zip(headers, limits))]
+    lines = ["  ".join(header.ljust(width) for header, width in zip(headers, widths)).rstrip(),
+             "  ".join("-" * width for width in widths)]
+    for row in cells:
+        wrapped = [textwrap.wrap(cell, width=width, break_on_hyphens=False) or [""]
+                   for cell, width in zip(row, widths)]
+        for index in range(max(len(cell) for cell in wrapped)):
+            lines.append("  ".join((cell[index] if index < len(cell) else "").ljust(width)
+                                   for cell, width in zip(wrapped, widths)).rstrip())
+    return lines
+
+
+def paragraph(label, value):
+    return textwrap.wrap(f"{label}: {display(value)}", width=96,
+                         subsequent_indent="  ", break_on_hyphens=False) or [f"{label}:"]
+
+
+def short_link(url):
+    repository, _, number = reference(url)
+    return f"{repository}#{number}"
+
+
+def full_links(value, records, chains):
+    links = set()
+    selected = {item["id"]: item for item in value["items"]}
+    for item in value["items"]:
+        links.add(item["url"])
+        for task in item.get("live_tasks", []):
+            repository, _, _ = reference(item["url"])
+            links.add(f"https://github.com/{repository}/tasks/{task['task_id']}")
+            if task["pr"] is not None:
+                links.add(task["pr"]["url"])
+    for record in records:
+        if record["id"] not in selected:
+            continue
+        repository = record["control"]["issue"]["repository"]
+        for pull in pull_links(record):
+            links.add(f"https://github.com/{pull['repository']}/pull/{pull['number']}")
+        for assignment in record["assignments"]:
+            saved = assignment.get("execution", {})
+            if saved.get("task_id") is not None:
+                links.add(f"https://github.com/{repository}/tasks/{saved['task_id']}")
+        # Occurrences are pinned repository/run/attempt/job identities, not
+        # arbitrary worker result text containing an unverified URL.
+        occurrences = [record["control"]["occurrence"],
+                       *(assignment["basis"]["occurrence"] for assignment in record["assignments"])]
+        for occurrence in occurrences:
+            if occurrence is not None:
+                links.add(f"https://github.com/{occurrence['repository']}/actions/runs/"
+                          f"{occurrence['run_id']}/attempts/{occurrence['run_attempt']}/job/{occurrence['job_id']}")
+    for chain in value["chains"]:
+        links.add(chain["url"])
+        if chain["child"] is not None:
+            repository, _, _ = reference(chain["url"])
+            links.add(f"https://github.com/{repository}/pull/{chain['child']}")
+    selected_chains = {chain["id"] for chain in value["chains"]}
+    for chain in chains:
+        if chain["id"] in selected_chains:
+            summary = next(entry for entry in value["chains"] if entry["id"] == chain["id"])
+            repository, _, _ = reference(summary["url"])
+            for operation in chain["operations"]:
+                if operation["taskId"] is not None:
+                    links.add(f"https://github.com/{repository}/tasks/{operation['taskId']}")
+    return ["", "Full links (saved references; verified live task/PR links included with --live)",
+            *("  " + display(link) for link in sorted(links))]
+
+
+def human(value, *, links=False, records=(), chains=()):
+    lines = []
+
+    def section(title, headers, rows, limits):
+        lines.extend(["", title])
+        lines.extend(table(headers, rows, limits) if rows else ["  None."])
+
     if "operation" in value:
         control = value["control"]
-        return (f"STAGED {safe(value['operation'])} {safe(control['id'])} "
-                f"revision={control['revision']} action={control['action']}\n"
-                f"Issue: {issue_url(control['issue'])}\n"
-                f"Route: {control['requested_route']}\nScope: {safe(control['scope'])}\n"
-                "PR-content approval: cleared; new adds have no effect permissions.\n"
-                f"Expected authority revision: {value['generation']}\n"
-                "Not applied. No task is launched or cancelled; history and credit holds are retained.")
+        lines.append(f"STAGED {display(value['operation'])} - NOT APPLIED")
+        section("Proposed control", ["Field", "Value"], [
+            ["Item ID", control["id"]], ["Issue", issue_url(control["issue"])],
+            ["Action", control["action"]], ["Route", control["requested_route"]],
+            ["Control revision", control["revision"]], ["Authority revision", value["generation"]],
+            ["PR-content approval", "cleared"]], [20, 70])
+        lines.extend(["", *paragraph("Scope", control["scope"]), "",
+                      "No task is launched or cancelled; history and credit holds are retained.",
+                      "New adds have no effect permissions. Review the proposal before apply."])
+        return "\n".join(lines)
     if "outcome" in value:
-        return f"{value['outcome']} {safe(value['id'])}: action={value['action']} revision={value['revision']}"
-    lines = [f"{value['evidence'].upper()} evidence; authority revision={value['generation']} head={value['head']}"]
+        return "\n".join([f"{display(value['outcome']).upper()} - {display(value['id'])}",
+                          *table(["Action", "Control revision"], [[value["action"], value["revision"]]], [20, 20]),
+                          "No dispatch, cancellation or publication performed."])
+
+    lines.extend(["CI Shepherd tracking",
+                  f"Evidence: {value['evidence'].upper()} | Authority revision: {display(value['generation'])}",
+                  f"Authority head: {display(value['head'])}"])
+    if value["evidence"] == "live":
+        lines.append("Saved records and credit holds are unchanged; live observations appear separately.")
+    else:
+        lines.append("Saved snapshot only; use show --live to verify current platform state.")
+
+    details = any("record" in item for item in value["items"]) or any("record" in chain for chain in value["chains"])
+    if not details:
+        section("Tracked issues", ["Item", "Issue", "Action", "Saved status", "Route", "Credits", "Hold"], [
+            [index, short_link(item["url"]), item["action"], item["state"], item["route"],
+             item["credits_actual"], item["credits_reserved"]]
+            for index, item in enumerate(value["items"], 1)], [5, 23, 6, 13, 16, 12, 7])
+        if value["items"]:
+            lines.extend(["", "Item IDs (use the full ID with show)"])
+            lines.extend(f"  {index}: {display(item['id'])}" for index, item in enumerate(value["items"], 1))
+        section("Managed PRs / issue chains", ["Chain", "Subject", "Saved status", "Child PR"], [
+            [index, short_link(chain["url"]), chain["state"], chain["child"] or "-"]
+            for index, chain in enumerate(value["chains"], 1)], [5, 23, 16, 10])
+        if value["chains"]:
+            lines.extend(["", "Chain IDs (use the full ID with show)"])
+            lines.extend(f"  {index}: {display(chain['id'])}" for index, chain in enumerate(value["chains"], 1))
+        for item in value["items"]:
+            if item["attention"]:
+                lines.extend(["", *paragraph("Attention - " + item["id"], item["attention"])])
+        if not value["items"] and not value["chains"]:
+            lines.extend(["", "No matching tracked items."])
+        if links:
+            lines.extend(full_links(value, records, chains))
+        return "\n".join(lines)
+
     for item in value["items"]:
-        prefix = "SAVED " if "record" in item else ""
-        lines.append(f"{prefix}{safe(item['id'])}  {item['action']}  {item['state']}  {item['url']}")
-        if "record" in item:
-            lines.extend([f"  Route: {item['route']}; scope: {safe(item['record']['control']['scope'])}",
-                          f"  Related items: {', '.join(item['related_items']) or '-'}"])
-            lines.extend(f"    SAVED {safe(other['id'])}: action={other['action']} state={other['state']}"
-                         for other in item["related_status"])
-            for assignment in item["record"]["assignments"]:
-                saved = assignment.get("execution", {})
-                lines.append(f"  Assignment {safe(assignment['id'])}: delivery={assignment['delivery']} "
-                             f"task={safe(saved.get('task_id'))} session={safe(saved.get('session_id'))} "
-                             f"platform={safe(saved.get('task_state'))} "
-                             f"credits={safe(saved.get('worker_actual'))} hold={safe(saved.get('worker_reserved'))}")
-                if saved.get("pr") is not None:
-                    pr = saved["pr"]
-                    lines.append(f"    PR: https://github.com/{pr['repository']}/pull/{pr['number']}")
-                if saved.get("attention"):
-                    lines.append("    Attention: " + safe(saved["attention"]))
-                if saved.get("followup") is not None:
-                    followup = saved["followup"]
-                    lines.append(f"    Follow-up: {followup['status']}; {safe(followup['reason'])}")
-                if assignment["result"] is not None:
-                    lines.append("    Result: " + safe(assignment["result"]["summary"]))
-            for pull in item["record"].get("candidate_fixes", {}).get("pulls", []):
-                repository = item["record"]["control"]["issue"]["repository"]
-                lines.append(f"  Candidate PR: https://github.com/{repository}/pull/{pull['number']} "
-                             f"{pull['state']} merged={pull['merged']} owned={pull['own']}")
-            if "live_tasks" in item:
-                lines.extend(f"  LIVE task {safe(task['task_id'])}: {task['state']}" for task in item["live_tasks"])
-                lines.extend(f"    LIVE task PR: {task['pr']['url']} {task['pr']['state']} "
-                             f"draft={task['pr']['draft']} merged={task['pr']['merged']}"
-                             for task in item["live_tasks"] if task["pr"] is not None)
-                lines.append(f"  LIVE issue: {item['live_issue']['state']}")
-                lines.extend(f"  LIVE PR {pull['number']}: {pull['state']} draft={pull['draft']} merged={pull['merged']}"
-                             for pull in item["live_prs"])
+        record = item["record"]
+        lines.extend(["", f"Item: {display(item['id'])}", f"Issue: {item['url']}"])
+        section("Saved overview", ["Action", "Status", "Route", "Credits", "Hold"],
+                [[item["action"], item["state"], item["route"], item["credits_actual"], item["credits_reserved"]]],
+                [8, 16, 20, 15, 12])
+        lines.extend(["", *paragraph("Scope", record["control"]["scope"])])
+        section("Saved assignments", ["Attempt", "Revision", "Delivery", "Platform", "Credits", "Hold"], [
+            [index, assignment["revision"], assignment["delivery"],
+             assignment.get("execution", {}).get("task_state"),
+             assignment.get("execution", {}).get("worker_actual"),
+             assignment.get("execution", {}).get("worker_reserved")]
+            for index, assignment in enumerate(record["assignments"], 1)], [7, 8, 12, 16, 15, 12])
+        for index, assignment in enumerate(record["assignments"], 1):
+            saved = assignment.get("execution", {})
+            if saved.get("attention"):
+                lines.extend(paragraph(f"Attempt {index} attention", saved["attention"]))
+            if saved.get("followup") is not None:
+                followup = saved["followup"]
+                lines.extend(paragraph(f"Attempt {index} follow-up ({followup['status']})", followup["reason"]))
+            if assignment["result"] is not None:
+                lines.extend(paragraph(f"Attempt {index} result", assignment["result"]["summary"]))
+
+        section("Related attempts (saved)", ["Item ID", "Action", "Status", "Hold"], [
+            [other["id"], other["action"], other["state"], other["credits_reserved"]]
+            for other in item["related_status"]], [42, 8, 16, 12])
+        repository = record["control"]["issue"]["repository"]
+        candidates = record.get("candidate_fixes", {}).get("pulls", [])
+        section("Candidate PRs (saved; not management authority)",
+                ["PR", "Status", "Merged", "Owned task"], [
+                    [f"{repository}#{pull['number']}", pull["state"], pull["merged"], pull["own"]]
+                    for pull in candidates], [30, 12, 8, 12])
+        if "live_tasks" in item:
+            observations = [["Issue", short_link(item["url"]), item["live_issue"]["state"], "-", "-"]]
+            observations.extend(["Task", index, task["state"], "-", "-"]
+                                for index, task in enumerate(item["live_tasks"], 1))
+            pulls = {pull["number"]: pull for pull in item["live_prs"]}
+            pulls.update({task["pr"]["number"]: task["pr"] for task in item["live_tasks"] if task["pr"] is not None})
+            observations.extend(["PR", f"{repository}#{number}", pull["state"], pull["draft"], pull["merged"]]
+                                for number, pull in sorted(pulls.items()))
+            section("Live observations", ["Kind", "Reference", "Status", "Draft", "Merged"],
+                    observations, [8, 30, 16, 8, 8])
+            if item["live_issue"]["hands_off"]:
+                lines.append("Attention: source issue is marked shepherd-hands-off.")
+
+        lines.extend(["", "Identifiers and links", f"  Item: {display(item['id'])}"])
+        for index, assignment in enumerate(record["assignments"], 1):
+            saved = assignment.get("execution", {})
+            lines.extend([f"  Attempt {index} assignment: {display(assignment['id'])}",
+                          f"  Attempt {index} task:       {display(saved.get('task_id'))}",
+                          f"  Attempt {index} session:    {display(saved.get('session_id'))}"])
+            if saved.get("pr") is not None:
+                pr = saved["pr"]
+                lines.append(f"  Saved PR: https://github.com/{pr['repository']}/pull/{pr['number']}")
+        lines.extend(f"  Candidate PR: https://github.com/{repository}/pull/{pull['number']}" for pull in candidates)
+        for index, task in enumerate(item.get("live_tasks", []), 1):
+            lines.append(f"  Live task {index}: {display(task['task_id'])}")
+            if task["pr"] is not None:
+                lines.append(f"  Live task PR: {task['pr']['url']}")
+
     for chain in value["chains"]:
-        lines.append(f"SAVED {safe(chain['id'])}  chain  {chain['state']}  {chain['url']}")
-        if chain.get("live_pr") is not None:
-            lines.append("  LIVE PR: " + safe(chain["live_pr"]))
-        if chain.get("live_issue") is not None:
-            lines.append("  LIVE issue: " + safe(chain["live_issue"]))
-    if not value["items"] and not value["chains"]:
-        lines.append("No matching tracked items.")
+        lines.extend(["", f"Chain: {display(chain['id'])}", f"Subject: {chain['url']}"])
+        section("Saved chain", ["Status", "Child PR"], [[chain["state"], chain["child"] or "-"]], [20, 15])
+        for kind in ("pr", "issue"):
+            observed = chain.get("live_" + kind)
+            if observed is not None:
+                section("Live " + kind.upper(), ["Number", "Status", "Draft", "Merged"], [
+                    [observed["number"], observed["state"], observed.get("draft", "-"), observed.get("merged", "-")]],
+                    [10, 16, 8, 8])
+    if links:
+        lines.extend(full_links(value, [item["record"] for item in value["items"]],
+                                [chain["record"] for chain in value["chains"]]))
     return "\n".join(lines)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=["fork", "upstream"], default="upstream")
-    parser.add_argument("--tracker", type=int, required=True)
-    parser.add_argument("--authority", type=int, required=True)
-    parser.add_argument("--tracker-node", required=True)
+    parser.add_argument("--target", choices=["fork", "upstream"])
+    parser.add_argument("--tracker", type=int)
+    parser.add_argument("--authority", type=int)
+    parser.add_argument("--tracker-node")
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("list", "show", "add", "edit", "remove", "apply"):
         child = commands.add_parser(command)
         child.add_argument("--json", action="store_true", help="Stable sorted JSON; diagnostics remain on stderr")
+        if command in {"list", "show"}:
+            child.add_argument("--links", action="store_true", help="Include full issue, PR, task and pinned run links")
         if command == "list":
             child.add_argument("--all", action="store_true", help="Include paused items")
         elif command == "show":
@@ -423,8 +637,8 @@ def main(argv=None):
     try:
         if args.command == "apply":
             proposal = storage.read_host_json(secure_path(args.file), max_bytes=storage.MAX_ENVELOPE)
+            api = connect(args, write=True)
             with local.authority_lock(Path.home() / ".copilot" / "ci-shepherd" / "locks", args.authority):
-                api = connect(args, write=True)
                 value = apply(api, proposal, expected_revision=args.expected_revision)
         else:
             api = connect(args)
@@ -445,7 +659,11 @@ def main(argv=None):
                 value = stage(api, args.command, args.id, issue=issue,
                               route=getattr(args, "route", None), scope=getattr(args, "scope", None))
                 storage.write_host_json(args.out, value, max_bytes=storage.MAX_ENVELOPE)
-        print(json.dumps(value, sort_keys=True, allow_nan=False) if args.json else human(value))
+        if not args.json:
+            print(f"Namespace: {api.binding.name} | Tracker: {api.tracker} | Authority: {api.authority_id}")
+        print(json.dumps(value, sort_keys=True, allow_nan=False) if args.json else human(
+            value, links=getattr(args, "links", False), records=api.ledger.get("workItems", []),
+            chains=api.ledger["chains"]))
         return 0
     except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"CI Shepherd tracking failed closed: {error}", file=sys.stderr)
