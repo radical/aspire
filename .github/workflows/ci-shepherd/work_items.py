@@ -149,7 +149,15 @@ def validate_result(value):
                             "changed_files", "tests", "pr_proposal", "summary"}
                     | ({"recommended_route"} if "recommended_route" in value else set())
                     | ({"proposed_actions"} if "proposed_actions" in value else set())
+                    | ({"operational_feedback"} if "operational_feedback" in value else set())
                     | ({"investigation"} if "investigation" in value else set()), "worker result")
+    if "operational_feedback" in value:
+        feedback = value["operational_feedback"]
+        contracts.exact(feedback, {"capabilities_used", "blockers", "improvements"}, "operational feedback")
+        for key in ("capabilities_used", "blockers", "improvements"):
+            texts(feedback[key], key, 3)
+            for entry in feedback[key]:
+                text(entry, key, 400)
     if "investigation" in value:
         import work_item_investigation
         work_item_investigation.validate(value["investigation"])
@@ -178,7 +186,7 @@ def validate_result(value):
 
 
 def validate_result_version(value, assignment):
-    if ({"recommended_route", "proposed_actions", "investigation"} & set(value)
+    if ({"recommended_route", "proposed_actions", "investigation", "operational_feedback"} & set(value)
             and assignment.get("request_version") != 2
             and assignment.get("execution", {}).get("request_version") != 2):
         raise ValueError("proposal extensions require version 2 assignment")

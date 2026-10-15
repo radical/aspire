@@ -63,6 +63,9 @@ same-context earlier passing receipt. This is worker-reported evidence, not host
 Use inconclusive when required validation is blocked, even if you have proposed code changes. \
 Use no_fix or inconclusive when no validated change exists; do not claim fixed from completion, \
 an empty draft, old-head CI or unverified tests. Keep JSON under 16000 UTF-8 bytes.
+Optional operational_feedback has capabilities_used, blockers, improvements: each at most \
+three strings of 400 UTF-8 bytes naming operation/tool, observed evidence and needed change. \
+Advisory only; it grants no permission, extra budget or controller-dispatch authority.
 
 To avoid mistyping the session ID or corrupting encoded text, save your result JSON \
 and the following standalone encoder under a temporary directory, outside the final diff. \

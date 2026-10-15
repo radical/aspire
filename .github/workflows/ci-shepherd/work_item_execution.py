@@ -300,7 +300,8 @@ def request(api, record, assignment):
             "evaluated_revision": assignment["revision"], "worker_id": "HOST_VERIFIED_SESSION_ID",
             "actual_classification": "inconclusive", "transience": "not_established",
             "outcome": "inconclusive", "same_failure": False, "evidence": [], "changed_files": [],
-            "tests": [], "pr_proposal": None, "summary": "Describe the actual outcome."
+            "tests": [], "pr_proposal": None, "summary": "Describe the actual outcome.",
+            "operational_feedback": {"capabilities_used": [], "blockers": [], "improvements": []}
         }, sort_keys=True)} if value.get("request_version") == 2 else {}),
     )
     body = {"prompt": prompt, "base_ref": "main", "create_pull_request": True}

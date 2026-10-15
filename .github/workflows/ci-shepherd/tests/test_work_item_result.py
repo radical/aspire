@@ -15,6 +15,70 @@ from test_work_items import control
 
 
 class ResultEncodingTests(unittest.TestCase):
+    def test_operational_feedback_round_trips_through_encoder_and_strict_reader(self):
+        from copy import deepcopy
+        import work_items
+        assignment = {"id": "assignment", "revision": 1, "request_version": 2}
+        claimed = result(assignment)
+        claimed["operational_feedback"] = {
+            "capabilities_used": ["MCP job logs and artifacts retrieved."],
+            "blockers": ["run_workflow suspended for approval; no receipt, no HTTP denial."],
+            "improvements": ["Retain named argument-level results; aggregate passes are insufficient."],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / "result.json", Path(directory) / "result.b64"
+            source.write_text(json.dumps(claimed), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1] / "work_item_result.py"),
+                 str(source), str(output)],
+                env={"COPILOT_AGENT_SESSION_ID": "session-1"}, capture_output=True, text=True)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            parsed = followup.parse_result(f"CSWORKITEMBEGIN{output.read_text()}CSWORKITEMEND",
+                                           {"id": "example-item"}, assignment, "session-1")
+            self.assertEqual(claimed, parsed)
+            self.assertNotIn("proposed_actions", parsed)
+            self.assertNotIn("recommended_route", parsed)
+        legacy = deepcopy(claimed)
+        legacy.pop("operational_feedback")
+        work_items.validate_result_version(legacy, {"id": "assignment", "revision": 1})
+        with self.assertRaisesRegex(ValueError, "version 2"):
+            work_items.validate_result_version(claimed, {"id": "assignment", "revision": 1})
+
+    def test_operational_feedback_rejects_unbounded_or_action_shaped_values(self):
+        import work_items
+        valid = {"capabilities_used": [], "blockers": [], "improvements": []}
+        invalid = (
+            None, [], valid | {"dispatch": True}, valid | {"blockers": "missing"},
+            valid | {"blockers": ["x"] * 4}, valid | {"improvements": ["x" * 401]},
+            valid | {"capabilities_used": [{"tool": "run_workflow"}]},
+            {"blockers": [], "improvements": []},
+        )
+        for feedback in invalid:
+            with self.subTest(feedback=feedback):
+                claimed = result({"id": "assignment", "revision": 1})
+                claimed["operational_feedback"] = feedback
+                with self.assertRaises(ValueError):
+                    work_items.validate_result(claimed)
+
+    def test_operational_feedback_unicode_byte_boundary_in_strict_reader(self):
+        assignment = {"id": "assignment", "revision": 1, "request_version": 2}
+        for entry, accepted in (("x" * 400, True), ("x" * 401, False),
+                                ("\u6f22" * 133 + "x", True), ("\u6f22" * 134, False),
+                                ("\u2192" * 133 + "x", True), ("\u2192" * 134, False)):
+            with self.subTest(bytes=len(entry.encode("utf-8")), accepted=accepted):
+                claimed = result(assignment)
+                claimed["operational_feedback"] = {
+                    "capabilities_used": [], "blockers": [entry], "improvements": []}
+                encoded = base64.b64encode(
+                    json.dumps(claimed, ensure_ascii=False).encode("utf-8")).decode("ascii")
+                envelope = f"CSWORKITEMBEGIN{encoded}CSWORKITEMEND"
+                if accepted:
+                    self.assertEqual(claimed, followup.parse_result(
+                        envelope, {"id": "example-item"}, assignment, "session-1"))
+                else:
+                    with self.assertRaisesRegex(ValueError, "invalid blockers"):
+                        followup.parse_result(envelope, {"id": "example-item"}, assignment, "session-1")
+
     def test_encoder_uses_host_identity_and_round_trips_unicode_wrapped_base64(self):
         assignment = {"id": "assignment", "revision": 1}
         claimed = result(assignment)

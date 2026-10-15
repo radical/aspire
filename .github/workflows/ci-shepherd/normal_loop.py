@@ -31,7 +31,12 @@ SCOPE = ("Diagnose and repair the linked issue's host-verified failure, includin
          "when evidence supports it. Reproduce, fix and validate using repository skills. "
          "Cloud edits and draft publication require the separate exact execution approval; "
          "packet-only local permissions do not authorize cloud work. Focused test reproduction "
-         "may use reproduce-flaky-tests.yml on the assigned cloud branch; do not rerun existing "
+         "may use reproduce-flaky-tests.yml on the assigned cloud branch: at most 2 sequential "
+         "dispatches total, 1 runner on one failing OS, 5 iterations per dispatch, and a "
+         "30-minute reproduction-job timeout (60 allocated runner-minutes total; setup and "
+         "incidental PR CI excluded). First dispatch is baseline; reserve the second for "
+         "verification after a justified repair. No contention escalation or automatic "
+         "controller dispatch. Missing or ambiguous receipt stops further submissions. Do not rerun existing "
          "CI, change credentials or permissions, publish diagnostic comments/issues, merge or "
          "close issues. Report concrete blockers or an evidence-backed no-fix result.")
 

@@ -49,6 +49,26 @@ def rendered_prompts():
 
 
 class PromptTemplateTests(unittest.TestCase):
+    def test_normal_issue_allowance_reaches_worker_without_rewriting_historical_scope(self):
+        import json
+        import normal_loop
+        api = SimpleNamespace(repository="microsoft/aspire", tracker=99, authority_id=500,
+                              tracker_node="TRACKER99")
+        historical = "No CI mutation; diagnose using existing logs only."
+        for scope in (normal_loop.SCOPE, historical):
+            with self.subTest(scope=scope):
+                value = control()
+                value["scope"] = scope
+                record = work_items.new_record(value)
+                assignment = work_items.claim(record, value)
+                assignment["execution"] = {"approval": None, "request_version": 2}
+                body = work_item_execution.request(api, record, assignment)
+                evidence = json.loads(body["prompt"].split("Bounded assignment evidence: ", 1)[1])
+                self.assertEqual(scope, evidence["scope"])
+                if scope == historical:
+                    self.assertEqual(historical, record["control"]["scope"])
+                self.assertLessEqual(len(json.dumps(body).encode("utf-8")), 20000)
+
     def test_cloud_request_size_and_identity_across_targets_routes_and_versions(self):
         import json
         for repository in sorted(work_items.REPOSITORIES):

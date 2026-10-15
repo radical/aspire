@@ -349,8 +349,30 @@ a method, provision credentials or bypass repository-policy denial. Uncertain
 dispatches require reconciliation before retry or configuration restoration.
 Unavailable capability is a precise blocker, not permission to expand scope.
 
+Cloud MCP write tools can be exposed but paused for interactive approval.
+This is different from an absent tool or an observed HTTP permission denial.
+Do not treat a suspended invocation as a submitted run. Resolve its receipt
+before retrying or restoring configuration. A separately authorized controller
+can execute a bounded handoff, but the normal runner does not currently
+implement that route; a prompt cannot remove the platform's approval gate.
+
+Version 2 issue workers may return optional `operational_feedback` containing
+`capabilities_used`, `blockers` and `improvements`. Each field is an array of
+at most three strings, each at most 400 UTF-8 bytes. Describe the operation,
+observed evidence and needed change. The strict reader retains this advisory
+feedback with the result, without treating it as an action or authority.
+Historical results without feedback remain valid.
+
 Baseline, contention escalation and post-fix runs share assignment-approved total
 dispatch, runner, iteration and elapsed/CI budgets, with one execution at a time.
+New normal issue scopes supply an initial allowance: two sequential dispatches,
+one runner on one failing OS, five method iterations each, and a 30-minute
+reproduction-job timeout. The second dispatch is reserved for verification of
+a justified repair, not escalation after a non-reproducing baseline. The total
+is at most 60 allocated reproduction runner-minutes; setup and incidental PR CI
+are additional overhead. Existing assignments retain their saved scopes.
+This bounds the worker's permitted execution; it does not add an authenticated
+route or change GitHub's interactive approval requirements.
 Broaden only within the approved original lane, explicitly preserving traits,
 build settings and within-process concurrency. Multiple runners do not establish
 within-process contention. Exact target/theory-case counts and SHAs matter;
@@ -358,6 +380,9 @@ aggregate cohort passes cannot prove that the assigned case was not skipped.
 The live workflow must be inspected: if it retains only failure results, passing
 target execution may remain unknown. Evidence-retention changes require separate
 approval, not an invented success claim.
+Even when aggregate counts equal the number of source theory declarations,
+those totals are not named argument-level outcome records. Preserve exact-case
+counts as unknown rather than inferring tuple passes from matching totals.
 
 Before relying on a cloud repair, verify that the worker can read the
 controller's authority and current memory ledger, identify its task/session,
