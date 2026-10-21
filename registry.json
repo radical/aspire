@@ -211,6 +211,15 @@
       "reason": "Remove the experimental Linux approval after native CI validation.\nRetain its complete audit history.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
       "at": "2026-10-21T20:58:07+00:00",
       "contentRevision": 1
+    },
+    {
+      "sequence": 15,
+      "id": "pipeline-platform-windows-003",
+      "action": "remove",
+      "actor": "radical",
+      "reason": "Remove the experimental Windows approval after native CI validation.\nRetain its complete audit history.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:58:07+00:00",
+      "contentRevision": 1
     }
   ]
 }
