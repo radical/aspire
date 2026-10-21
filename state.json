@@ -12,16 +12,47 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
-  "stage": "start",
+  "phase": "dispatching-agent",
+  "stage": "baseline",
   "agents": [
     "39637986705"
   ],
-  "workers": [],
+  "workers": [
+    {
+      "run_id": "39638615398",
+      "phase": "reproduce",
+      "parent_run_id": "39637945282",
+      "candidate_sha": "8bb44fe03358922580990578b2040d7e2b00fa1b",
+      "workflow_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "test": "Aspire.Hosting.Tests.JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject",
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log"
+      ],
+      "iterations": [
+        {
+          "iteration": 1,
+          "executed": 1,
+          "failed": 0,
+          "outcome": "Passed",
+          "failure": null,
+          "trx": "iteration-1/real-proof.trx",
+          "log_bytes": 586,
+          "runner": 1,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39638615398-1"
+        }
+      ],
+      "executed": 1,
+      "failed": 0,
+      "other_failed": 0
+    }
+  ],
   "candidates": [],
   "requested_executions": 1,
   "enrollment_run_id": "39637945282",
-  "updated_at": "2026-10-21T16:52:02.925953+00:00",
+  "updated_at": "2026-10-21T16:56:24.592777+00:00",
   "agent_run_id": "39637986705",
   "agent_revision": "efdf97d5a4f8ef7eefcb013a38bf896b6c31efcf",
   "worker": {
