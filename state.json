@@ -12,12 +12,16 @@
     "resume_delay_seconds": 0,
     "cancel_probe": true
   },
-  "phase": "dispatching-agent",
+  "phase": "awaiting-agent",
   "stage": "start",
-  "agents": [],
+  "agents": [
+    "39636364877"
+  ],
   "workers": [],
   "candidates": [],
   "requested_executions": 0,
   "enrollment_run_id": "39636319096",
-  "updated_at": "2026-10-21T16:36:58.636596+00:00"
+  "updated_at": "2026-10-21T16:37:02.249889+00:00",
+  "agent_run_id": "39636364877",
+  "agent_revision": "cdfeb37c95b32d0b3009a511d628d9ba01b3dbcb"
 }
