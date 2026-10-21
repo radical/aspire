@@ -12,16 +12,27 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "dispatching-worker",
   "stage": "start",
   "agents": [
     "39636365853"
   ],
   "workers": [],
   "candidates": [],
-  "requested_executions": 0,
+  "requested_executions": 1,
   "enrollment_run_id": "39636312608",
-  "updated_at": "2026-10-21T16:37:02.628042+00:00",
+  "updated_at": "2026-10-21T16:41:35.691118+00:00",
   "agent_run_id": "39636365853",
-  "agent_revision": "9f84e66ea97a9472294fe74c02a068c2bb7e0a81"
+  "agent_revision": "9f84e66ea97a9472294fe74c02a068c2bb7e0a81",
+  "worker": {
+    "phase": "reproduce",
+    "candidate_sha": "aa080c329e164aad343b6b7390d5665f47499db0",
+    "parent_run_id": "39636875776",
+    "configuration": {
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false
+    },
+    "reserved_executions": 1
+  }
 }
