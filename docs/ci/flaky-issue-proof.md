@@ -109,3 +109,42 @@ Compile `flaky-issue-agent.md` using the repository-pinned gh-aw compiler.
 The compiled runtime uses newer Actions permission/concurrency features not
 recognized by the installed actionlint, so lint the handwritten workflows and
 validate the generated workflow through the compiler and hosted execution.
+
+## Hosted evidence
+
+Assignment and the opt-in label started these actual fork investigations.
+The clean repair chain required no operator intervention after assignment:
+
+| Issue | Observed outcome |
+| --- | --- |
+| [radical/aspire#147](https://github.com/radical/aspire/issues/147) | Four fresh investigators; one induced baseline failure, a persisted 60-second pause, one deliberately ineffective candidate failure, then nine passes on three parallel workers; actual draft [radical/aspire#150](https://github.com/radical/aspire/pull/150) and terminal findings |
+| [radical/aspire#148](https://github.com/radical/aspire/issues/148) | Three fresh investigators; five passes across two rounds; terminal non-reproduction findings, no candidate or PR |
+| [radical/aspire#146](https://github.com/radical/aspire/issues/146) | Two fresh investigators; actual owned sleeping job cancelled; findings with zero test executions |
+| [radical/aspire#149](https://github.com/radical/aspire/issues/149) | Operator cancelled only its identified investigator before its callback; the controller posted blocked findings automatically, without tests, candidates or a PR |
+
+The real repair is `5fad4dc4cb924f93c665f09b57b0e3f7ea7acf82`; the verification
+run is [39642087881](https://github.com/radical/aspire/actions/runs/39642087881).
+Independent downloads checked every original target TRX, output log and checkout
+receipt, exact source identities, positive execution counts and the actual draft
+PR. The final investigator read the published source/diff and all nine TRX
+outcome attributes, but only a job-log excerpt. Its self-report was not used as
+the independent execution oracle.
+
+Four explicit terminal resumes, one for each outcome above, created no new
+investigators, workers, candidates, PRs or terminal comments. Checkpoint revisions,
+candidate refs and existing result bodies remained identical.
+
+The first two issue workers stopped before execution with MSB3202 because a
+relative `-projects` input was resolved from Arcade's build infrastructure.
+Their automatic blocked findings remain on
+[radical/aspire#144](https://github.com/radical/aspire/issues/144) and
+[radical/aspire#145](https://github.com/radical/aspire/issues/145).
+The matrix now supplies the absolute candidate project path.
+`test_matrix_provides_absolute_arcade_project_path` fails against the actual
+pre-fix implementation and passes with the correction. All 33 behavioral checks
+pass.
+
+These results prove the bounded catalog-based fork lifecycle, not arbitrary
+issue selection, natural flake elimination or upstream readiness. Recovery after
+an arbitrary interrupted controller or a lost worker callback remains outside
+the hosted proof; an operator resume entry point is not a scheduled watchdog.
