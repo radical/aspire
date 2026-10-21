@@ -24,6 +24,15 @@
         "createdAt": "2026-10-21T03:07:56.704345+00:00",
         "expiresAt": "2026-10-21T08:00:00+00:00"
       }
+    },
+    {
+      "sequence": 2,
+      "id": "proof-candidate",
+      "action": "approve",
+      "actor": "experiment-reviewer",
+      "reason": "Approve the exact fixed-fixture error for this fork-only experiment; not production authorization.",
+      "at": "2026-10-21T03:10:10+00:00",
+      "contentRevision": 1
     }
   ]
 }
