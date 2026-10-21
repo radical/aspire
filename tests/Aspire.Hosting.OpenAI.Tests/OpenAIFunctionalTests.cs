@@ -17,6 +17,7 @@ public class OpenAIFunctionalTests
     [QuarantinedTest("https://github.com/microsoft/aspire/issues/10977")]
     public async Task DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy()
     {
+        // Retry-path probe: preserve the failing baseline behavior.
         using var cts = new CancellationTokenSource(TestConstants.LongTimeoutDuration);
 
         var healthCheckTcs = new TaskCompletionSource<HealthCheckResult>();
