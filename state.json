@@ -12,8 +12,8 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
-  "stage": "baseline",
+  "phase": "dispatching-agent",
+  "stage": "verification",
   "agents": [
     "39637993884",
     "39639628984"
@@ -48,6 +48,36 @@
       "executed": 1,
       "failed": 1,
       "other_failed": 0
+    },
+    {
+      "run_id": "39640507377",
+      "phase": "verify",
+      "parent_run_id": "39639366111",
+      "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
+      "workflow_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "test": "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy",
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log"
+      ],
+      "iterations": [
+        {
+          "iteration": 1,
+          "executed": 1,
+          "failed": 1,
+          "outcome": "Failed",
+          "failure": "System.OperationCanceledException : Resource 'chat' failed to become healthy before the operation was cancelled.\n- Current State: Running\n- Creation Time: 10/21/2026 17:06:10\n- Current Health: Degraded\n- Health Reports:\n  - blocking_check: Healthy @ 2026-10-21 17:09:07\n  - resource_check: Degraded @ 2026-10-21 17:09:07\n---- System.OperationCanceledException : The operation was canceled.",
+          "trx": "iteration-1/real-proof.trx",
+          "log_bytes": 24301,
+          "runner": 1,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39640507377-1"
+        }
+      ],
+      "executed": 1,
+      "failed": 1,
+      "other_failed": 0
     }
   ],
   "candidates": [
@@ -68,7 +98,7 @@
   ],
   "requested_executions": 2,
   "enrollment_run_id": "39637940652",
-  "updated_at": "2026-10-21T17:04:30.460847+00:00",
+  "updated_at": "2026-10-21T17:09:42.150182+00:00",
   "agent_run_id": "39639628984",
   "agent_revision": "26e6a383958e90fded3748388c5b46da6f6996d9",
   "worker": {
@@ -99,5 +129,6 @@
       "rationale": "Deliberately ineffective control-plane probe, not a real fix: only inserts a comment after the method's opening brace to exercise the failed-verification feedback path. Failure is expected to persist.",
       "limitation": "This candidate is intentionally ineffective; a real repair will be authored after its verification fails and the new TRX/logs are read. No natural flake reproduction is claimed."
     }
-  }
+  },
+  "failed_probe_observed": true
 }
