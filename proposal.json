@@ -1,10 +1,10 @@
 {
   "version": 1,
   "issue_number": 148,
-  "state_revision": "efdf97d5a4f8ef7eefcb013a38bf896b6c31efcf",
+  "state_revision": "e9bf130837058b875d68c01a759b85f27db7433c",
   "action": "reproduce",
-  "explanation": "Test contract: FlattenJsonObject_HandlesEmptyObject is a synchronous, deterministic test that builds an empty JsonObject, calls JsonFlattener.FlattenJsonObject, and asserts the result is empty. No timing, I/O, ports or shared state. Issue describes a passing control; starting with the first baseline round (1 runner, 1 iteration). Limitation: only source inspected, no run evidence yet.",
-  "evidence_read": ["/tmp/gh-aw/issue-proof/context.json", "/tmp/gh-aw/issue-proof/test-source.cs lines 67-78 (target test)"],
-  "iterations": 1,
-  "runners": 1
+  "explanation": "Baseline round 1 (1 runner x 1 iteration) of JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject passed (1 executed, 0 failed, run 39638615398). This is a deterministic pure JSON-flattening test with no readiness waits or shared state. Per the policy, requesting a second baseline round with 2 runners x 2 iterations (4 executions, within the remaining budget of 4). No fix is proposed; passing runs are not a reproduction.",
+  "evidence_read": ["context.json (worker receipt: executed 1, failed 0, outcome Passed)", "test-source.cs", "receipt.json", "job-1.log (not fully read)"],
+  "iterations": 2,
+  "runners": 2
 }
