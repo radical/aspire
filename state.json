@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": true
   },
-  "phase": "awaiting-agent",
+  "phase": "dispatching-worker",
   "stage": "start",
   "agents": [
     "39636364877"
@@ -21,7 +21,18 @@
   "candidates": [],
   "requested_executions": 0,
   "enrollment_run_id": "39636319096",
-  "updated_at": "2026-10-21T16:37:02.249889+00:00",
+  "updated_at": "2026-10-21T16:41:53.953513+00:00",
   "agent_run_id": "39636364877",
-  "agent_revision": "cdfeb37c95b32d0b3009a511d628d9ba01b3dbcb"
+  "agent_revision": "cdfeb37c95b32d0b3009a511d628d9ba01b3dbcb",
+  "worker": {
+    "phase": "cancel-probe",
+    "candidate_sha": "8bb44fe03358922580990578b2040d7e2b00fa1b",
+    "parent_run_id": "39636927593",
+    "configuration": {
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false
+    },
+    "reserved_executions": 0
+  }
 }
