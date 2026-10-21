@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "issue_number": 147,
+  "issue_body": "[automated] Fork-only validation of issue-driven investigation. The selected\nOpenAI baseline deliberately injects an external-status outage. This is not\nnatural flake reproduction.\n\nStart from assignment, run a real failing baseline, verify a deliberately\nineffective first candidate, resume a fresh agent to repair it, and verify the\nactual published repair on three Linux workers. Preserve the outage fixture,\noriginal readiness waits and quarantine. Finish with a proof-only draft PR\nagainst the frozen fixture branch and findings on this issue. Do not merge,\nclose this issue or modify upstream.\n\n```json\n{\"version\":1,\"target\":\"openai-controlled\",\"max_rounds\":2,\"max_fix_attempts\":2,\"max_executions\":12,\"retry_probe\":true,\"resume_delay_seconds\":60,\"cancel_probe\":false}\n```",
+  "config": {
+    "version": 1,
+    "target": "openai-controlled",
+    "max_rounds": 2,
+    "max_fix_attempts": 2,
+    "max_executions": 12,
+    "retry_probe": true,
+    "resume_delay_seconds": 60,
+    "cancel_probe": false
+  },
+  "phase": "dispatching-agent",
+  "stage": "start",
+  "agents": [],
+  "workers": [],
+  "candidates": [],
+  "requested_executions": 0,
+  "enrollment_run_id": "39637940652",
+  "updated_at": "2026-10-21T16:47:49.983818+00:00"
+}
