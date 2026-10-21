@@ -33,6 +33,8 @@ public class OpenAIFunctionalTests
                       .AddModel("chat", "gpt-4o-mini")
                       .WithHealthCheck("blocking_check");
 
+        ForceExternalStatusDegraded(builder.Services);
+
         var dependentResource = builder.AddContainer("nginx", "mcr.microsoft.com/cbl-mariner/base/nginx", "1.22")
                                        .WaitFor(resource);
 
@@ -100,5 +102,19 @@ public class OpenAIFunctionalTests
         await pendingStart;
 
         await app.StopAsync();
+    }
+
+    private static void ForceExternalStatusDegraded(IServiceCollection services)
+    {
+        // The fork-only fixture models the observed external status-page outage
+        // without relying on the public service still being degraded.
+        services.Configure<HealthCheckServiceOptions>(options =>
+        {
+            var externalCheck = options.Registrations.Single(check => check.Name == "resource_check");
+            options.Registrations.Remove(externalCheck);
+        });
+        services.AddHealthChecks().AddCheck(
+            "resource_check",
+            () => HealthCheckResult.Degraded("Controlled external-status outage"));
     }
 }
