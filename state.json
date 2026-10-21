@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
+  "phase": "dispatching-agent",
   "stage": "baseline",
   "agents": [
     "39637986705",
@@ -48,12 +48,76 @@
       "executed": 1,
       "failed": 0,
       "other_failed": 0
+    },
+    {
+      "run_id": "39639867377",
+      "phase": "reproduce",
+      "parent_run_id": "39639220194",
+      "candidate_sha": "8bb44fe03358922580990578b2040d7e2b00fa1b",
+      "workflow_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "test": "Aspire.Hosting.Tests.JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject",
+      "iterations_per_runner": 2,
+      "runners": 2,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log",
+        "/tmp/gh-aw/issue-proof/job-2.log"
+      ],
+      "iterations": [
+        {
+          "iteration": 1,
+          "executed": 1,
+          "failed": 0,
+          "outcome": "Passed",
+          "failure": null,
+          "trx": "iteration-1/real-proof.trx",
+          "log_bytes": 586,
+          "runner": 1,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39639867377-1"
+        },
+        {
+          "iteration": 2,
+          "executed": 1,
+          "failed": 0,
+          "outcome": "Passed",
+          "failure": null,
+          "trx": "iteration-2/real-proof.trx",
+          "log_bytes": 586,
+          "runner": 1,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39639867377-1"
+        },
+        {
+          "iteration": 1,
+          "executed": 1,
+          "failed": 0,
+          "outcome": "Passed",
+          "failure": null,
+          "trx": "iteration-1/real-proof.trx",
+          "log_bytes": 586,
+          "runner": 2,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39639867377-2"
+        },
+        {
+          "iteration": 2,
+          "executed": 1,
+          "failed": 0,
+          "outcome": "Passed",
+          "failure": null,
+          "trx": "iteration-2/real-proof.trx",
+          "log_bytes": 586,
+          "runner": 2,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39639867377-2"
+        }
+      ],
+      "executed": 4,
+      "failed": 0,
+      "other_failed": 0
     }
   ],
   "candidates": [],
   "requested_executions": 5,
   "enrollment_run_id": "39637945282",
-  "updated_at": "2026-10-21T17:00:24.290384+00:00",
+  "updated_at": "2026-10-21T17:05:27.292994+00:00",
   "agent_run_id": "39639282218",
   "agent_revision": "e9bf130837058b875d68c01a759b85f27db7433c",
   "worker": {
