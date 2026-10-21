@@ -1,0 +1,101 @@
+name: Flaky Proof Actions Access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  access:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe existing Actions token without exposing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path("proof-access")
+          root.mkdir()
+          report = {}
+          metadata = subprocess.run(
+              ["gh", "api", "repos/microsoft/aspire/actions/runs/38965261066"],
+              text=True, capture_output=True,
+          )
+          report["upstream_metadata"] = {"exit": metadata.returncode}
+          if metadata.returncode == 0:
+              data = json.loads(metadata.stdout)
+              report["upstream_metadata"].update({
+                  "id": data["id"], "head_sha": data["head_sha"],
+                  "run_attempt": data["run_attempt"], "path": data["path"],
+              })
+          else:
+              report["upstream_metadata"]["error"] = metadata.stderr.strip()
+
+          artifact = subprocess.run(
+              ["gh", "run", "download", "38965261066", "--repo",
+               "microsoft/aspire", "--name", "wasm-native-investigation-1-attempt1",
+               "--dir", str(root / "upstream-artifact")],
+              text=True, capture_output=True,
+          )
+          files = [p for p in (root / "upstream-artifact").rglob("*") if p.is_file()]
+          report["upstream_artifact"] = {
+              "exit": artifact.returncode, "files": len(files),
+              "bytes": sum(p.stat().st_size for p in files),
+              "error": artifact.stderr.strip(),
+          }
+          logs = subprocess.run(
+              ["gh", "api", "--allow-escape-sequences",
+               "repos/microsoft/aspire/actions/jobs/117224423096/logs"],
+              capture_output=True,
+          )
+          if logs.returncode == 0:
+              (root / "upstream-job.log").write_bytes(logs.stdout)
+          report["upstream_logs"] = {
+              "exit": logs.returncode,
+              "bytes": len(logs.stdout) if logs.returncode == 0 else 0,
+              "error": logs.stderr.decode("utf-8", errors="replace").strip(),
+          }
+
+          request = {
+              "prompt": "[automated] Bounded credential probe. Do not edit files, "
+                        "commit, create a PR, post comments, or launch any workflow. "
+                        "State that the task-creation credential probe succeeded, then stop.",
+              "create_pull_request": False,
+              "base_ref": "main",
+          }
+          creation = subprocess.run(
+              ["gh", "api", "agents/repos/radical/aspire/tasks",
+               "--method", "POST", "--input", "-"],
+              input=json.dumps(request), text=True, capture_output=True,
+          )
+          response = json.loads(creation.stdout) if creation.stdout.strip() else {}
+          report["cloud_task_creation"] = {
+              "exit": creation.returncode,
+              "id": response.get("id"),
+              "state": response.get("state"),
+              "message": response.get("message"),
+              "error": creation.stderr.strip(),
+          }
+          (root / "access-report.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report, indent=2))
+          if (
+              metadata.returncode != 0 or artifact.returncode != 0
+              or not files or logs.returncode != 0 or not logs.stdout
+          ):
+              raise SystemExit("Upstream evidence access is incomplete")
+          PY
+      - name: Preserve access evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flaky-proof-actions-access
+          path: proof-access/
+          if-no-files-found: error
