@@ -19,9 +19,13 @@ spec.loader.exec_module(real)
 
 REPOSITORY = real.REPOSITORY
 BASE = "aa56e005faa2ee6326f3c777f6d30dd43fece929"
+TARGET = os.environ.get("REPAIR_TARGET", "executable")
+if TARGET not in {"executable", "openai"}:
+    raise ValueError("Unknown repair target")
 MEMORY = "memory/flaky-repair-20261021"
 EXPERIMENT = "repair-20261021"
 SOURCE = "tests/Aspire.Hosting.Tests/ResourceFailureLoggingTests.cs"
+ISSUE = 16189
 AGENT = ".github/workflows/flaky-repair-agent.lock.yml"
 PUBLISHER = ".github/workflows/flaky-repair-publish.yml"
 WORKER = ".github/workflows/reproduce-flaky-tests.yml"
@@ -34,6 +38,40 @@ weakening the assertions. Keep the test quarantined for monitoring.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 """
+REQUIRED_CHECKS = (
+    'Assert.Contains(logLines, x => x.EndsWith("Hello from Stdout"));',
+    'Assert.Contains(logLines, x => x.EndsWith("Hello from Stderr"));',
+)
+if TARGET == "openai":
+    MEMORY = "memory/flaky-openai-repair-20261021"
+    EXPERIMENT = "openai-repair-20261021"
+    SOURCE = "tests/Aspire.Hosting.OpenAI.Tests/OpenAIFunctionalTests.cs"
+    ISSUE = 10977
+    AGENT = ".github/workflows/flaky-openai-repair-agent.lock.yml"
+    PUBLISHER = ".github/workflows/flaky-openai-repair-publish.yml"
+    ROOT = Path("/tmp/gh-aw/openai-repair-evidence")
+    real.CLASS = "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests"
+    real.METHOD = "DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy"
+    REQUIRED_CHECKS = (
+        "await app.ResourceNotifications.WaitForResourceAsync(resource.Resource.Name, KnownResourceStates.Running, cts.Token);",
+        "await app.ResourceNotifications.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Waiting, cts.Token);",
+        "healthCheckTcs.SetResult(HealthCheckResult.Healthy());",
+        "await app.ResourceNotifications.WaitForResourceHealthyAsync(resource.Resource.Name, cts.Token);",
+        "await app.ResourceNotifications.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Running, cts.Token);",
+        "await pendingStart;",
+        "await app.StopAsync();",
+    )
+    COMMIT_MESSAGE = """test: isolate OpenAI model readiness from external status checks
+
+The model readiness test can time out while its controlled blocking
+check is healthy and a separate check remains Degraded. Isolate the
+intended readiness contract without weakening its waiting-state checks.
+
+Keep the test quarantined for monitoring.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+"""
+RUNNER_OS = "ubuntu-latest" if TARGET == "openai" else "windows-latest"
 
 
 def api(endpoint, body=None):
@@ -101,9 +139,10 @@ def memory_at(run_id):
 
 def worker_identity(worker_id):
     worker = run_identity(worker_id, WORKER)
-    # Trusted run-name: Repair reproduce [39531803470] <40-character source SHA>.
+    # Trusted run-name: Repair openai reproduce [39531803470] <source SHA>.
+    prefix = r"Repair (?:executable )?" if TARGET == "executable" else r"Repair openai "
     match = re.fullmatch(
-        r"Repair (reproduce|verify) \[([0-9]+)\] ([0-9a-f]{40})",
+        prefix + r"(reproduce|verify) \[([0-9]+)\] ([0-9a-f]{40})",
         worker["display_title"],
     )
     if match is None:
@@ -193,7 +232,7 @@ def collect_worker(worker_id, configuration=None):
         }
         if checkout != expected:
             raise ValueError("Actual checkout and configuration do not match authorization")
-        job = next(j for j in jobs if j["name"] == f"windows-latest #{index}")
+        job = next(j for j in jobs if j["name"] == f"{RUNNER_OS} #{index}")
         log = subprocess.run([
             "gh", "api", "--allow-escape-sequences",
             f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs",
@@ -206,7 +245,7 @@ def collect_worker(worker_id, configuration=None):
         if index == 1:
             (ROOT / "job.log").write_bytes(log)
         receipt["job_logs"].append(str(log_path))
-        name = f"real-test-evidence-windows-latest-{index}"
+        name = f"real-test-evidence-{RUNNER_OS}-{index}"
         if not any(a["name"] == name and not a["expired"] for a in artifacts):
             receipt["evidence_error"] = "Test artifact absent; inspect the job log"
             return receipt
@@ -261,17 +300,14 @@ def validate_candidate(payload, original):
     content = payload.get("test_source")
     if not isinstance(content, str) or len(content.encode()) > 20000 or content == original:
         raise ValueError("Candidate must contain a bounded, changed source file")
-    marker = "    public async Task ExecutableExitsImmediately()\n    {"
+    marker = f"    public async Task {real.METHOD}()\n    {{"
     prefix_end = original.index(marker) + len(marker)
     suffix_start = original.index("\n    [Fact]", prefix_end)
     if not content.startswith(original[:prefix_end]) or not content.endswith(original[suffix_start:]):
         raise ValueError("Candidate changes outside the authorized target method")
-    for assertion in (
-        'Assert.Contains(logLines, x => x.EndsWith("Hello from Stdout"));',
-        'Assert.Contains(logLines, x => x.EndsWith("Hello from Stderr"));',
-    ):
-        if assertion not in content:
-            raise ValueError("Candidate must retain both output assertions")
+    body = content[prefix_end:len(content) - len(original[suffix_start:])]
+    if any(check not in body for check in REQUIRED_CHECKS):
+        raise ValueError("Candidate must retain the target's assertions and readiness checks")
     diagnosis = payload.get("diagnosis")
     if not isinstance(diagnosis, str) or not 100 <= len(diagnosis) <= 12000:
         raise ValueError("Candidate requires a substantive evidence-backed diagnosis")
@@ -282,6 +318,10 @@ def publish(agent_id):
     directory, state = memory_at(agent_id)
     if state["phase"] != "candidate-ready" or str(state["agent_run_id"]) != agent_id:
         raise ValueError("Agent did not prepare an authorized candidate")
+    if TARGET == "openai" and (
+        type(state.get("fix_attempt")) is not int or not 1 <= state["fix_attempt"] <= 3
+    ):
+        raise ValueError("Repair publication exceeds the three-attempt budget")
     payload = json.loads((directory / "candidate.json").read_text())
     content = validate_candidate(payload, source_at(BASE))
     baseline = collect_worker(str(payload["baseline_run_id"]))
@@ -289,7 +329,7 @@ def publish(agent_id):
         baseline["phase"] != "reproduce" or baseline["candidate_sha"] != BASE
         or baseline.get("executed") != baseline.get("iterations_per_runner", 0) * baseline.get("runners", 0)
         or baseline.get("failed", 0) < 1
-        or not any("Assert.Contains" in (i["failure"] or "") for i in baseline["iterations"])
+        or not any(matching_failure(i["failure"] or "") for i in baseline["iterations"])
     ):
         raise ValueError("No actual matching baseline assertion failure authorizes repair publication")
     base = api(f"git/commits/{BASE}")
@@ -307,12 +347,19 @@ def publish(agent_id):
     published = api(f"git/ref/heads/{branch}")["object"]["sha"]
     if published != commit["sha"] or published == BASE:
         raise ValueError("Published source identity was not the changed commit")
+    configuration = {
+        key: baseline[key] for key in ("iterations_per_runner", "runners", "quarantine_project")
+    }
+    if TARGET == "openai":
+        configuration["iterations_per_runner"] = max(3, configuration["iterations_per_runner"])
+        configuration["runners"] = 3
     publication = {
         "base_sha": BASE, "candidate_sha": published, "branch": branch,
         "agent_run_id": agent_id, "publisher_run_id": os.environ["GITHUB_RUN_ID"],
         "baseline_run_id": baseline["run_id"], "source_path": SOURCE,
         "diagnosis": payload["diagnosis"],
-        "configuration": {
+        "configuration": configuration,
+        "baseline_configuration": {
             key: baseline[key] for key in ("iterations_per_runner", "runners", "quarantine_project")
         },
     }
@@ -321,12 +368,21 @@ def publish(agent_id):
         "ref": "main", "inputs": {
             "controller_run_id": os.environ["GITHUB_RUN_ID"],
             "repair_phase": "verify", "candidate_sha": published,
-            "repair_iterations": str(baseline["iterations_per_runner"]),
-            "repair_runners": str(baseline["runners"]),
-            "quarantine_project": str(baseline["quarantine_project"]).lower(),
+            "repair_iterations": str(configuration["iterations_per_runner"]),
+            "repair_runners": str(configuration["runners"]),
+            "quarantine_project": str(configuration["quarantine_project"]).lower(),
+            "repair_target": TARGET,
         },
     })
     print(json.dumps({"published": published, "branch": branch}))
+
+
+def matching_failure(message):
+    if TARGET == "executable":
+        return "Assert.Contains" in message
+    return all(part in message for part in (
+        "failed to become healthy", "blocking_check: Healthy", "resource_check: Degraded",
+    ))
 
 
 def context(worker_id):
@@ -358,7 +414,7 @@ def context(worker_id):
 def prepare(worker_id):
     ROOT.mkdir(parents=True)
     issue = subprocess.run([
-        "gh", "api", "repos/microsoft/aspire/issues/16189",
+        "gh", "api", f"repos/microsoft/aspire/issues/{ISSUE}",
     ], capture_output=True, text=True, check=True)
     issue = json.loads(issue.stdout)
     if issue["state"] != "open" or "pull_request" in issue or real.METHOD not in issue["title"]:
@@ -384,7 +440,11 @@ def resume(worker_id):
         _, _, parent_id, _ = worker_identity(worker_id)
         if state["phase"] != "awaiting-reproduction" or str(state["agent_run_id"]) != parent_id:
             raise ValueError("Stale baseline callback cannot advance this checkpoint")
-    api("actions/workflows/flaky-repair-agent.lock.yml/dispatches", {
+    else:
+        publication = json.loads((ROOT / "publication.json").read_text())
+        if state["phase"] != "candidate-ready" or str(state["agent_run_id"]) != publication["agent_run_id"]:
+            raise ValueError("Stale candidate callback cannot advance this checkpoint")
+    api(f"actions/workflows/{Path(AGENT).name}/dispatches", {
         "ref": "main", "inputs": {"phase": "resume", "worker_run_id": worker_id},
     })
     print(json.dumps({"resumed": worker_id, "phase": phase}))
