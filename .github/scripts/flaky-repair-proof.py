@@ -26,7 +26,6 @@ AGENT = ".github/workflows/flaky-repair-agent.lock.yml"
 PUBLISHER = ".github/workflows/flaky-repair-publish.yml"
 WORKER = ".github/workflows/reproduce-flaky-tests.yml"
 ROOT = Path("/tmp/gh-aw/repair-evidence")
-ITERATIONS = 25
 COMMIT_MESSAGE = """test: synchronize immediate-exit assertions with log capture
 
 Expected stdout or stderr can be missing when assertions race resource
@@ -112,57 +111,125 @@ def worker_identity(worker_id):
     return worker, match[1], match[2], match[3]
 
 
-def collect_worker(worker_id):
+def validate_target_evidence(directory, iterations):
+    observations = []
+    for iteration in range(1, iterations + 1):
+        folder = directory / f"iteration-{iteration}"
+        files = list(folder.rglob("*.trx"))
+        log = folder / "output.log"
+        if len(files) != 1 or not log.is_file() or log.stat().st_size == 0:
+            raise ValueError("Missing iteration TRX or output")
+        tree = ET.parse(files[0])
+        definitions = []
+        for definition in tree.findall(".//{*}TestDefinitions/{*}UnitTest"):
+            method = definition.find("{*}TestMethod")
+            if method is not None and method.get("name") == real.METHOD and method.get("className") == real.CLASS:
+                definitions.append(definition)
+        if len(definitions) != 1:
+            raise ValueError("Quarantine selection must define the exact target once")
+        results = tree.findall(".//{*}Results/{*}UnitTestResult")
+        target = [result for result in results if result.get("testId") == definitions[0].get("id")]
+        if len(target) != 1 or target[0].get("outcome") not in {"Passed", "Failed"}:
+            raise ValueError("Target did not actually execute in the quarantine selection")
+        counters = tree.find(".//{*}ResultSummary/{*}Counters")
+        passed = sum(result.get("outcome") == "Passed" for result in results)
+        failed = sum(result.get("outcome") == "Failed" for result in results)
+        if counters is None or any(
+            int(counters.get(key, "-1")) != value
+            for key, value in {"total": len(results), "executed": passed + failed, "passed": passed, "failed": failed}.items()
+        ):
+            raise ValueError("Assembly counters disagree with actual test results")
+        target_failed = int(target[0].get("outcome") == "Failed")
+        error = target[0].find(".//{*}ErrorInfo/{*}Message")
+        observations.append({
+            "iteration": iteration, "executed": 1, "failed": target_failed,
+            "other_failed": failed - target_failed,
+            "outcome": target[0].get("outcome"),
+            "failure": error.text if error is not None else None,
+            "trx": str(files[0].relative_to(directory)),
+            "log_bytes": (folder / "output.log").stat().st_size,
+        })
+    actual = {folder.name for folder in directory.glob("iteration-*") if folder.is_dir()}
+    if actual != {f"iteration-{i}" for i in range(1, iterations + 1)}:
+        raise ValueError("Unexpected or missing quarantine iterations")
+    return observations
+
+
+def validate_configuration(configuration):
+    if (
+        type(configuration["iterations_per_runner"]) is not int
+        or not 1 <= configuration["iterations_per_runner"] <= 50
+        or type(configuration["runners"]) is not int
+        or not 1 <= configuration["runners"] <= 3
+        or type(configuration["quarantine_project"]) is not bool
+    ):
+        raise ValueError("Worker configuration exceeds the experiment budget")
+    return configuration
+
+
+def collect_worker(worker_id, configuration=None):
     worker, phase, parent_id, candidate = worker_identity(worker_id)
+    if configuration is None:
+        _, _, configuration = context(worker_id)
+    configuration = validate_configuration(configuration)
     real.wait_completed(worker_id, False)
-    receipt_dir = ROOT / f"checkout-{worker_id}"
-    download(worker_id, "repair-worker-receipt", receipt_dir)
-    checkout = json.loads((receipt_dir / "candidate-receipt.json").read_text(encoding="utf-8-sig"))
-    expected = {
-        "candidate_sha": candidate, "workflow_sha": worker["head_sha"],
-        "phase": phase, "controller_run_id": parent_id,
-        "run_id": worker_id, "run_attempt": "1",
-    }
-    if checkout != expected:
-        raise ValueError("Actual checkout does not match authorized source and workflow")
     jobs = api(f"actions/runs/{worker_id}/jobs?per_page=100")["jobs"]
-    job = next(j for j in jobs if j["name"] == "windows-latest #1")
-    log = subprocess.run([
-        "gh", "api", "--allow-escape-sequences",
-        f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs",
-    ], capture_output=True, check=True).stdout
-    if not log:
-        raise ValueError("Worker job log is empty")
-    ROOT.mkdir(parents=True, exist_ok=True)
-    (ROOT / "job.log").write_bytes(log)
     artifacts = api(f"actions/runs/{worker_id}/artifacts?per_page=100")["artifacts"]
-    artifact = ROOT / f"worker-{worker_id}"
     receipt = {
         "run_id": worker_id, "phase": phase, "parent_run_id": parent_id,
         "candidate_sha": candidate, "workflow_sha": worker["head_sha"],
-        "test": f"{real.CLASS}.{real.METHOD}", "job_id": job["id"],
-        "job_conclusion": job["conclusion"], "job_log": str(ROOT / "job.log"),
+        "test": f"{real.CLASS}.{real.METHOD}", **configuration,
+        "job_logs": [], "iterations": [],
     }
-    name = "real-test-evidence-windows-latest-1"
-    if not any(a["name"] == name and not a["expired"] for a in artifacts):
-        receipt["evidence_error"] = "Test artifact absent; inspect job.log for build or runner failure"
-        return receipt
-    download(worker_id, name, artifact)
-    try:
-        observations = real.validate_evidence(artifact, ITERATIONS)
-        failed = sum(item["failed"] for item in observations)
-        if job["conclusion"] != ("failure" if failed else "success"):
-            raise ValueError("Job outcome disagrees with executed target results")
-    except (ValueError, ET.ParseError) as error:
-        # Invalid/incomplete results are supplied as an explicit blocker, never
-        # converted into a passing observation or hidden from the resumed agent.
-        receipt["evidence_error"] = str(error)
-        receipt["artifact_directory"] = str(artifact)
-        return receipt
-    receipt.update(
-        executed=len(observations), failed=failed, iterations=observations,
-        artifact_directory=str(artifact),
-    )
+    for index in range(1, configuration["runners"] + 1):
+        receipt_dir = ROOT / f"checkout-{worker_id}-{index}"
+        download(worker_id, f"repair-worker-receipt-{index}", receipt_dir)
+        checkout = json.loads((receipt_dir / "candidate-receipt.json").read_text(encoding="utf-8-sig"))
+        expected = {
+            "candidate_sha": candidate, "workflow_sha": worker["head_sha"],
+            "phase": phase, "controller_run_id": parent_id,
+            "run_id": worker_id, "run_attempt": "1", "runner_index": index,
+            **configuration,
+        }
+        if checkout != expected:
+            raise ValueError("Actual checkout and configuration do not match authorization")
+        job = next(j for j in jobs if j["name"] == f"windows-latest #{index}")
+        log = subprocess.run([
+            "gh", "api", "--allow-escape-sequences",
+            f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs",
+        ], capture_output=True, check=True).stdout
+        if not log:
+            raise ValueError("Worker job log is empty")
+        ROOT.mkdir(parents=True, exist_ok=True)
+        log_path = ROOT / f"job-{index}.log"
+        log_path.write_bytes(log)
+        if index == 1:
+            (ROOT / "job.log").write_bytes(log)
+        receipt["job_logs"].append(str(log_path))
+        name = f"real-test-evidence-windows-latest-{index}"
+        if not any(a["name"] == name and not a["expired"] for a in artifacts):
+            receipt["evidence_error"] = "Test artifact absent; inspect the job log"
+            return receipt
+        artifact = ROOT / f"worker-{worker_id}-{index}"
+        download(worker_id, name, artifact)
+        try:
+            validator = validate_target_evidence if configuration["quarantine_project"] else real.validate_evidence
+            observations = validator(artifact, configuration["iterations_per_runner"])
+            suite_failed = sum(item["failed"] + item.get("other_failed", 0) for item in observations)
+            if job["conclusion"] != ("failure" if suite_failed else "success"):
+                raise ValueError("Job outcome disagrees with executed assembly results")
+        except (ValueError, ET.ParseError) as error:
+            # Invalid results remain explicit blockers, not passing observations.
+            receipt["evidence_error"] = str(error)
+            receipt["artifact_directory"] = str(artifact)
+            return receipt
+        receipt["iterations"].extend(
+            {**item, "runner": index, "artifact_directory": str(artifact)}
+            for item in observations
+        )
+    receipt["executed"] = len(receipt["iterations"])
+    receipt["failed"] = sum(item["failed"] for item in receipt["iterations"])
+    receipt["other_failed"] = sum(item.get("other_failed", 0) for item in receipt["iterations"])
     return receipt
 
 
@@ -220,7 +287,8 @@ def publish(agent_id):
     baseline = collect_worker(str(payload["baseline_run_id"]))
     if (
         baseline["phase"] != "reproduce" or baseline["candidate_sha"] != BASE
-        or baseline.get("executed") != ITERATIONS or baseline.get("failed", 0) < 1
+        or baseline.get("executed") != baseline.get("iterations_per_runner", 0) * baseline.get("runners", 0)
+        or baseline.get("failed", 0) < 1
         or not any("Assert.Contains" in (i["failure"] or "") for i in baseline["iterations"])
     ):
         raise ValueError("No actual matching baseline assertion failure authorizes repair publication")
@@ -244,13 +312,18 @@ def publish(agent_id):
         "agent_run_id": agent_id, "publisher_run_id": os.environ["GITHUB_RUN_ID"],
         "baseline_run_id": baseline["run_id"], "source_path": SOURCE,
         "diagnosis": payload["diagnosis"],
+        "configuration": {
+            key: baseline[key] for key in ("iterations_per_runner", "runners", "quarantine_project")
+        },
     }
     write("publication.json", publication)
     api("actions/workflows/reproduce-flaky-tests.yml/dispatches", {
         "ref": "main", "inputs": {
             "controller_run_id": os.environ["GITHUB_RUN_ID"],
             "repair_phase": "verify", "candidate_sha": published,
-            "repair_iterations": str(ITERATIONS),
+            "repair_iterations": str(baseline["iterations_per_runner"]),
+            "repair_runners": str(baseline["runners"]),
+            "quarantine_project": str(baseline["quarantine_project"]).lower(),
         },
     })
     print(json.dumps({"published": published, "branch": branch}))
@@ -265,12 +338,21 @@ def context(worker_id):
             or str(state["agent_run_id"]) != parent_id or candidate != BASE
         ):
             raise ValueError("Baseline is not authorized by its immutable parent checkpoint")
+        mode = state.get("mode", "single")
+        if mode not in {"single", "quarantine-project"}:
+            raise ValueError("Unknown reproduction mode")
+        configuration = {
+            "iterations_per_runner": state["iterations"],
+            "runners": state.get("runners", 1),
+            "quarantine_project": mode == "quarantine-project",
+        }
     else:
         publication = publication_at(parent_id)
         if candidate != publication["candidate_sha"] or candidate == BASE:
             raise ValueError("Verification did not use the actually published changed commit")
         write("publication.json", publication)
-    return phase, candidate
+        configuration = publication["configuration"]
+    return phase, candidate, validate_configuration(configuration)
 
 
 def prepare(worker_id):
@@ -284,8 +366,8 @@ def prepare(worker_id):
     write("issue.json", issue)
     candidate = BASE
     if worker_id:
-        _, candidate = context(worker_id)
-        write("receipt.json", collect_worker(worker_id))
+        _, candidate, configuration = context(worker_id)
+        write("receipt.json", collect_worker(worker_id, configuration))
     (ROOT / "test-source.cs").write_text(source_at(candidate))
     write("candidate-identity.json", {"sha": candidate, "base_sha": BASE})
 
@@ -293,11 +375,15 @@ def prepare(worker_id):
 def resume(worker_id):
     worker_identity(worker_id)
     real.wait_completed(worker_id, False)
-    phase, _ = context(worker_id)
+    phase, _, _ = context(worker_id)
     state = checkpoint()
     if state["phase"] in {"repair-verified", "verification-failed", "blocked"}:
         print("Investigation is terminal; no dispatch")
         return
+    if phase == "reproduce":
+        _, _, parent_id, _ = worker_identity(worker_id)
+        if state["phase"] != "awaiting-reproduction" or str(state["agent_run_id"]) != parent_id:
+            raise ValueError("Stale baseline callback cannot advance this checkpoint")
     api("actions/workflows/flaky-repair-agent.lock.yml/dispatches", {
         "ref": "main", "inputs": {"phase": "resume", "worker_run_id": worker_id},
     })

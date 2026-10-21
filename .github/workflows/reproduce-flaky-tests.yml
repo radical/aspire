@@ -43,9 +43,17 @@ on:
         type: string
         required: false
       repair_iterations:
-        description: Repair experiment repetitions (1-25)
+        description: Repair experiment repetitions (1-50)
         type: number
         default: 25
+      repair_runners:
+        description: Repair experiment parallel runners (1-3)
+        type: number
+        default: 1
+      quarantine_project:
+        description: Reproduce contention with other quarantined tests
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,7 +72,8 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.ExecutableExitsImmediately"'
+  TEST_FILTER: >-
+    ${{ inputs.quarantine_project && '--filter-trait "quarantined=true" --filter-not-trait "outerloop=true"' || '--filter-method "*.ExecutableExitsImmediately"' }}
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
@@ -72,7 +81,7 @@ env:
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "1"
+  RUNNERS_PER_OS: "${{ inputs.repair_phase != '' && inputs.repair_runners || 1 }}"
 
   # Number of test iterations each runner executes
   ITERATIONS_PER_RUNNER: "${{ inputs.repair_phase != '' && inputs.repair_iterations || inputs.proof_iterations }}"
@@ -97,12 +106,14 @@ jobs:
           REPAIR_PHASE: ${{ inputs.repair_phase }}
           CANDIDATE: ${{ inputs.candidate_sha }}
           REPAIR_ITERATIONS: ${{ inputs.repair_iterations }}
+          REPAIR_RUNNERS: ${{ inputs.repair_runners }}
         run: |
           if [[ -n "$REPAIR_PHASE" ]]; then
             [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "::error::Repair workflow must run on trusted main"; exit 1; }
             [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full candidate SHA"; exit 1; }
             [[ "$REPAIR_PHASE" == reproduce || "$REPAIR_PHASE" == verify ]] || { echo "::error::Invalid repair phase"; exit 1; }
-            [[ "$REPAIR_ITERATIONS" =~ ^[0-9]+$ ]] && (( REPAIR_ITERATIONS >= 1 && REPAIR_ITERATIONS <= 25 )) || { echo "::error::Repair repetitions must be between 1 and 25"; exit 1; }
+            [[ "$REPAIR_ITERATIONS" =~ ^[0-9]+$ ]] && (( REPAIR_ITERATIONS >= 1 && REPAIR_ITERATIONS <= 50 )) || { echo "::error::Repair repetitions must be between 1 and 50"; exit 1; }
+            [[ "$REPAIR_RUNNERS" =~ ^[0-9]+$ ]] && (( REPAIR_RUNNERS >= 1 && REPAIR_RUNNERS <= 3 )) || { echo "::error::Repair runners must be between 1 and 3"; exit 1; }
             [[ "$PARENT" =~ ^[0-9]+$ ]] || { echo "::error::Missing controller correlation"; exit 1; }
             exit 0
           fi
@@ -237,6 +248,10 @@ jobs:
           PHASE: ${{ inputs.repair_phase }}
           CONTROLLER: ${{ inputs.controller_run_id }}
           WORKFLOW_SHA: ${{ github.sha }}
+          ITERATIONS: ${{ inputs.repair_iterations }}
+          RUNNERS: ${{ inputs.repair_runners }}
+          RUNNER_INDEX: ${{ matrix.index }}
+          QUARANTINE_PROJECT: ${{ inputs.quarantine_project }}
         run: |
           $actual = git --no-pager rev-parse HEAD
           if ($LASTEXITCODE -ne 0 -or $actual -ne $env:CANDIDATE) {
@@ -249,6 +264,10 @@ jobs:
               controller_run_id = $env:CONTROLLER
               run_id = $env:GITHUB_RUN_ID
               run_attempt = $env:GITHUB_RUN_ATTEMPT
+              iterations_per_runner = [int]$env:ITERATIONS
+              runners = [int]$env:RUNNERS
+              runner_index = [int]$env:RUNNER_INDEX
+              quarantine_project = $env:QUARANTINE_PROJECT -eq 'true'
           } | ConvertTo-Json | Set-Content candidate-receipt.json
 
       - name: Trust HTTPS development certificate (Linux)
@@ -492,7 +511,7 @@ jobs:
         if: always() && inputs.repair_phase != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: repair-worker-receipt
+          name: repair-worker-receipt-${{ matrix.index }}
           path: candidate-receipt.json
           if-no-files-found: error
 
