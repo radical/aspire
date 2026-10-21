@@ -161,6 +161,15 @@
       "reason": "Approve only the exact Linux candidate for bounded fork validation.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
       "at": "2026-10-21T20:42:41+00:00",
       "contentRevision": 1
+    },
+    {
+      "sequence": 11,
+      "id": "pipeline-platform-windows-003",
+      "action": "approve",
+      "actor": "radical",
+      "reason": "Approve only the exact Windows candidate for bounded fork validation.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:42:41+00:00",
+      "contentRevision": 1
     }
   ]
 }
