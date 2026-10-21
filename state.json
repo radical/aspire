@@ -12,7 +12,7 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "dispatching-worker",
   "stage": "baseline",
   "agents": [
     "39637993884",
@@ -50,25 +50,53 @@
       "other_failed": 0
     }
   ],
-  "candidates": [],
-  "requested_executions": 1,
+  "candidates": [
+    {
+      "attempt": 1,
+      "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
+      "source_blob": "ce45d96e3474a5642efc75e44cc671007084f464",
+      "branch": "flaky-issue-147-candidate-1",
+      "is_probe": true,
+      "diagnosis": {
+        "error": "OperationCanceledException: Resource 'chat' failed to become healthy before cancellation; state Running, health Degraded; blocking_check Healthy, resource_check Degraded.",
+        "root_cause": "The controlled fixture ForceExternalStatusDegraded registers a resource_check that reports Degraded ('Controlled external-status outage') for the model resource, so WaitForResourceHealthyAsync can never succeed. This is an induced outage, not a natural flake.",
+        "prior_art": "Quarantine marker for microsoft/aspire#10977 is preserved; sibling test DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy uses the same pattern without the fault helper.",
+        "rationale": "Deliberately ineffective control-plane probe, not a real fix: only inserts a comment after the method's opening brace to exercise the failed-verification feedback path. Failure is expected to persist.",
+        "limitation": "This candidate is intentionally ineffective; a real repair will be authored after its verification fails and the new TRX/logs are read. No natural flake reproduction is claimed."
+      }
+    }
+  ],
+  "requested_executions": 2,
   "enrollment_run_id": "39637940652",
-  "updated_at": "2026-10-21T16:58:50.074236+00:00",
+  "updated_at": "2026-10-21T17:04:26.450297+00:00",
   "agent_run_id": "39639628984",
   "agent_revision": "26e6a383958e90fded3748388c5b46da6f6996d9",
   "worker": {
-    "phase": "reproduce",
-    "candidate_sha": "aa080c329e164aad343b6b7390d5665f47499db0",
-    "parent_run_id": "39637940652",
+    "phase": "verify",
+    "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
+    "parent_run_id": "39639366111",
     "configuration": {
       "iterations_per_runner": 1,
       "runners": 1,
       "quarantine_project": false
     },
-    "reserved_executions": 1,
-    "run_id": "39638616942"
+    "reserved_executions": 1
   },
   "resume_after": 1792601925.5313044,
   "delay_exercised": true,
-  "resumed_at": 1792601925.5314178
+  "resumed_at": 1792601925.5314178,
+  "candidate": {
+    "attempt": 1,
+    "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
+    "source_blob": "ce45d96e3474a5642efc75e44cc671007084f464",
+    "branch": "flaky-issue-147-candidate-1",
+    "is_probe": true,
+    "diagnosis": {
+      "error": "OperationCanceledException: Resource 'chat' failed to become healthy before cancellation; state Running, health Degraded; blocking_check Healthy, resource_check Degraded.",
+      "root_cause": "The controlled fixture ForceExternalStatusDegraded registers a resource_check that reports Degraded ('Controlled external-status outage') for the model resource, so WaitForResourceHealthyAsync can never succeed. This is an induced outage, not a natural flake.",
+      "prior_art": "Quarantine marker for microsoft/aspire#10977 is preserved; sibling test DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy uses the same pattern without the fault helper.",
+      "rationale": "Deliberately ineffective control-plane probe, not a real fix: only inserts a comment after the method's opening brace to exercise the failed-verification feedback path. Failure is expected to persist.",
+      "limitation": "This candidate is intentionally ineffective; a real repair will be authored after its verification fails and the new TRX/logs are read. No natural flake reproduction is claimed."
+    }
+  }
 }
