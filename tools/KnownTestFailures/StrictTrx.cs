@@ -7,13 +7,16 @@ using System.Xml.Linq;
 
 namespace KnownTestFailures;
 
-public sealed record TestResult(string TestId, string Method, string DisplayName, string Outcome, string? Message);
+public sealed record TestResult(string TestId, string Method, string DisplayName, string Outcome, string? Message)
+{
+    public string? SkipReason { get; init; }
+}
 
 public static class StrictTrx
 {
     private static readonly XNamespace s_ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
 
-    public static TestResult[] Read(string xml)
+    public static TestResult[] Read(string xml, bool allowSkipped = false, bool allowEmpty = false)
     {
         using var text = new StringReader(xml);
         using var reader = XmlReader.Create(text, new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
@@ -56,17 +59,29 @@ public static class StrictTrx
             var id = Attribute(result, "testId");
             Format.Require(ids.Add(id) && methods.ContainsKey(id), "Duplicate or unresolved TRX result testId.");
             var outcome = Attribute(result, "outcome");
-            Format.Require(outcome is "Passed" or "Failed", $"Unsupported TRX outcome '{outcome}'.");
+            Format.Require(outcome is "Passed" or "Failed" || (allowSkipped && outcome == "NotExecuted"),
+                $"Unsupported TRX outcome '{outcome}'.");
             var display = Attribute(result, "testName");
             Format.Require(display == methods[id].Display, "TRX definition/result display mismatch.");
             var outputs = result.Elements(s_ns + "Output").ToArray();
             Format.Require(outputs.Length <= 1, "Duplicate TRX Output.");
             if (outputs.Length == 1)
             {
-                Format.Require(outputs[0].Elements().All(e => e.Name.LocalName is "ErrorInfo" or "StdOut" or "StdErr"),
+                Format.Require(outputs[0].Elements().All(e => e.Name.LocalName is "ErrorInfo" or "StdOut" or "StdErr" or "TextMessages") &&
+                    outputs[0].Elements().GroupBy(e => e.Name).All(g => g.Count() == 1),
                     "Unsupported TRX Output shape.");
                 Format.Require(outputs[0].Elements().Where(e => e.Name.LocalName is "StdOut" or "StdErr").All(e => !e.HasElements),
                     "TRX stdout/stderr must be text.");
+                // xUnit's native writer emits test output as
+                // <TextMessages><Message>ordinary test output</Message></TextMessages>,
+                // distinct from ErrorInfo and run-level diagnostics.
+                // https://github.com/xunit/xunit/blob/8bf043c053/src/xunit.v3.runner.common/Results/Builtin/TrxResultWriterMesageHandler.cs
+                foreach (var messages in outputs[0].Elements(s_ns + "TextMessages"))
+                {
+                    Format.Require(messages.HasElements &&
+                        messages.Elements().All(e => e.Name == s_ns + "Message" && !e.HasElements),
+                        "Unsupported TRX text messages.");
+                }
             }
             var errors = outputs.SingleOrDefault()?.Elements(s_ns + "ErrorInfo").ToArray() ?? [];
             Format.Require(errors.Length <= 1, "Duplicate TRX ErrorInfo.");
@@ -80,9 +95,15 @@ public static class StrictTrx
                 Format.Text(message, "ErrorInfo.Message");
             }
             Format.Require((outcome == "Failed") == (message is not null), "TRX failure/message inconsistency.");
-            parsed.Add(new(id, methods[id].Method, display, outcome, message));
+            var reason = outcome == "NotExecuted" ? (string?)outputs.SingleOrDefault()?.Element(s_ns + "StdOut") : null;
+            if (outcome == "NotExecuted")
+            {
+                Format.Text(reason!, "TRX skip reason");
+            }
+            parsed.Add(new(id, methods[id].Method, display, outcome, message) { SkipReason = reason });
         }
-        Format.Require(parsed.Count > 0 && ids.SetEquals(methods.Keys), "TRX definitions/results must be nonempty and complete.");
+        Format.Require((allowEmpty || parsed.Count > 0) && ids.SetEquals(methods.Keys),
+            "TRX definitions/results must be nonempty and complete.");
         var entries = root.Elements(s_ns + "TestEntries").ToArray();
         Format.Require(entries.Length <= 1, "Duplicate TRX TestEntries.");
         if (entries.Length == 1)
@@ -108,9 +129,10 @@ public static class StrictTrx
         var expected = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["total"] = parsed.Count,
-            ["executed"] = parsed.Count,
+            ["executed"] = parsed.Count(r => r.Outcome != "NotExecuted"),
             ["passed"] = parsed.Count(r => r.Outcome == "Passed"),
-            ["failed"] = parsed.Count(r => r.Outcome == "Failed")
+            ["failed"] = parsed.Count(r => r.Outcome == "Failed"),
+            ["notExecuted"] = parsed.Count(r => r.Outcome == "NotExecuted")
         };
         foreach (var attribute in counters.Attributes())
         {
@@ -118,7 +140,8 @@ public static class StrictTrx
                 value == expected.GetValueOrDefault(attribute.Name.LocalName),
                 $"Inconsistent or unsupported TRX counter '{attribute.Name}'.");
         }
-        Format.Require(expected.Keys.All(key => counters.Attribute(key) is not null), "Missing essential TRX counters.");
+        Format.Require(expected.Where(pair => pair.Key != "notExecuted" || pair.Value != 0)
+            .All(pair => counters.Attribute(pair.Key) is not null), "Missing essential TRX counters.");
         Format.Require(summaryOutcome != "Passed" || expected["failed"] == 0, "Passed summary contradicts failures.");
         Format.Require(summaryOutcome != "Failed" || expected["failed"] > 0, "Failed summary has no failures.");
         return [.. parsed];

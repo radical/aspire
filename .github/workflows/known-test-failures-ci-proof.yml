@@ -1,0 +1,29 @@
+name: Known test failures real CI proof
+
+on:
+  push:
+    branches: [known-test-failure-allowances]
+  pull_request:
+    types: [opened, synchronize, reopened, converted_to_draft]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gate:
+    if: >-
+      github.repository == 'radical/aspire' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/known-test-failure-allowances') ||
+       (github.event_name == 'pull_request' && github.event.pull_request.draft == true &&
+        github.event.pull_request.head.repo.full_name == 'radical/aspire' &&
+        github.event.pull_request.head.ref == 'known-test-failure-allowances'))
+    uses: ./.github/workflows/run-tests.yml
+    with:
+      testShortName: Infrastructure.KnownFailures
+      testProjectPath: tests/Infrastructure.Tests/Infrastructure.Tests.csproj
+      os: ubuntu-latest
+      extraTestArgs: --filter-class "*.KnownFailurePipelineCases" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+      knownFailureProof: true
+      knownFailureLane: regular
+      knownFailureProofScenario: candidate

@@ -92,6 +92,7 @@
 
   <Import Project="$(TestsSharedDir)Aspire.Templates.Testing.targets" Condition="'$(IsTemplateTestProject)' == 'true'" />
   <Import Project="$(RepositoryEngineeringDir)Testing.targets" />
+  <Import Project="$(RepositoryEngineeringDir)KnownTestFailures.targets" />
 
   <!-- Must be after Testing.targets import where IsAzdoHelixRunner, IsGitHubActionsRunner, and RunOnAzdoHelix are computed -->
   <PropertyGroup>

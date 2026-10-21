@@ -44,7 +44,8 @@ public static class GitRegistry
     }
 
     public static async Task<string> MutateAsync(
-        string repository, string fullRef, string expectedCommit, bool initialize, RegistryEvent mutation)
+        string repository, string fullRef, string expectedCommit, bool initialize, RegistryEvent mutation,
+        string environment = "experimental")
     {
         await ValidateRefAsync(repository, fullRef).ConfigureAwait(false);
         Format.Require(fullRef.StartsWith("refs/heads/", StringComparison.Ordinal), "Management writes only local refs/heads/ branches.");
@@ -68,7 +69,7 @@ public static class GitRegistry
                 (await RunAsync(repository, ["show-ref", "--verify", "--hash", fullRef]).ConfigureAwait(false)).Trim() == expectedCommit,
                 "Registry changed: expected revision does not match.");
         }
-        var registry = zero ? new Registry(1, "experimental", []) :
+        var registry = zero ? new Registry(1, environment, []) :
             (await ReadCommitAsync(repository, expectedCommit, ManagedPath, null).ConfigureAwait(false)).Registry;
         var updated = RegistryHistory.Append(registry, mutation);
         var blob = (await RunAsync(repository, ["hash-object", "-w", "--stdin"], Format.Write(updated) + "\n").ConfigureAwait(false)).Trim();

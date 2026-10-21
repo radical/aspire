@@ -1,12 +1,143 @@
-# Experimental known-test-failure replay
+# Known-test-failure allowances
 
 `tools/KnownTestFailures` is a standalone .NET 10 tool for replaying recorded
 managed-test results against exact, approved failure allowances. It does not
-change test attributes, raw results, or production CI outcomes. An isolated
-fork-only workflow exercises a fixed fixture; there is no production enforcement
-mode or general-purpose workflow adapter.
+change test attributes or raw results. The reusable GitHub test workflow can
+apply selective allowances to Linux normal MTP runs. An independent fork-only
+workflow also exercises a fixed fixture.
 
-## Modes and exits
+## GitHub CI gate
+
+Selective execution is **off unless a repository administrator activates it**.
+No repository variables, registry branch or protections are created by the tool.
+The implementation supports Linux normal execution with reflection xUnit v3/MTP
+and a built apphost. Windows, macOS and archived execution retain their blocking
+baseline runner with an explicit warning when selective mode is requested.
+Broad `ignoreTestFailures` lanes retain their independent behavior and do not
+consume selective allowances. There is no production shadow mode.
+
+Callers must explicitly declare `knownFailureLane: regular`; an omitted lane
+cannot activate selective execution. Specialized callers, including outerloop,
+declare `specialized` and retain their baseline even when enforcement is enabled.
+The CLI independently requires `KTF_LANE=regular`; selection filters never infer
+or broaden the lane.
+
+Repository-owned activation:
+
+- `ASPIRE_KNOWN_TEST_FAILURES_MODE`: absent or `off` preserves the original
+  runner without building the allowance tool or reading registry data; `enforce`
+  selects the supported direct-module runner.
+- `ASPIRE_KNOWN_TEST_FAILURES_REGISTRY_REF`: an explicit full `refs/heads/...`
+  reference in **microsoft/aspire**. The fixed data path is `registry.json`.
+- Production registry `environment` must be `github-ci`, not `experimental`.
+- Maintainer-reviewed, access-controlled admission to that branch is an
+  operational prerequisite. Configure branch protection/review and ownership
+  before activation. Actor and approval strings are audit assertions, **not
+  authentication**. No bot write permissions or automatic admission are added.
+
+For pull requests, applicability is the **target branch**
+(`refs/heads/<base_ref>`); pushes use their actual branch ref. Allowances therefore
+apply across source forks targeting that branch when the exact project, case,
+message, platform and lane also match. Head repository/SHA and executed SHA are
+recorded separately. Changing a PR's base branch changes its allowance scope.
+
+`eng/KnownTestFailures.targets` emits a versioned `.uniqueid` when built with
+`/p:KnownTestFailures=true`. The pipeline is **build project/TFM identity → write
+sidecar → framework discovery reads sidecar → persist discovered case UIDs**.
+The identity includes repository-relative project and TFM, never checkout path or
+RID. Returning to an ordinary build removes only the generated owned sidecar;
+authored or modified identities are not overwritten. Source-generator/AOT
+adapters do not honor the sidecar and cannot receive waivers.
+
+`ci-run` resolves selected inner builds through `GetTargetPath` and
+`ComputeRunArguments`; it never scans output directories. It preserves computed
+normal MTP arguments and testing environment items, then adds
+the workflow's diagnostic and selection arguments. It does **not** merge
+Arcade/Helix `TestRunnerAdditionalArguments` into this lane. Arguments use a
+bounded Linux quote/backslash grammar with no shell expansion.
+Like native SDK `dotnet test`, modules run from their output directory, not the
+checkout or the `dotnet run`-specific `RunWorkingDirectory` property.
+The workflow's absolute build project path is normalized at CLI admission into
+a repository-relative evidence path. Outside-checkout paths and traversal
+segments are rejected before module resolution.
+
+Before execution, the runner records selected modules and discovers every case
+twice with the same selection arguments. Serializable Theory rows are individual
+cases. Ambiguous method/display bindings, duplicate or unstable UIDs and dynamic
+undiscovered rows block waivers, but do not prevent selected tests from running.
+
+All selected modules execute before policy evaluation. Native xUnit XML supplies
+assembly/test completion, error and skip evidence; native xUnit TRX supplies exact
+failure messages and per-run identity bindings. Ordinary text output is accepted,
+but framework errors, missing reports, NotRun/NotRunnable, contradictory counts,
+partial inventories, abnormal exits and hang dumps block the gate. A legitimate
+runtime skip must have matching completed XML and TRX skip evidence.
+
+Passing runs require complete evidence but **never fetch the registry**.
+An empty selection is valid only with independently empty discovery, finished
+empty reports, raw process exit zero and the existing explicit
+`--ignore-exit-code 8` argument. The specialized `allowZeroTests` input is not
+used as this normal-lane policy.
+
+Only validated failures trigger a fresh registry fetch. There is no cached or
+PR-owned registry fallback; fetched commit/blob provenance and malformed raw data
+are preserved. Expiry is evaluated using actual UTC after fetching. Every failed
+case must have exactly one live approval of its exact current content revision.
+Updates invalidate approvals; expiry, revocation and removal remain blocking.
+
+The runner records each actual process exit. Its direct-module aggregate is the
+first non-0/non-2 infrastructure exit, otherwise 2 if any module failed, otherwise
+0. This is not a claim about arbitrary SDK-wrapper exit aggregation.
+`test-exit-code.txt` retains that raw aggregate; the test step exits with the
+effective decision. Existing dump checks, uploads and summaries remain active.
+
+Evidence is uploaded in `logs-<testShortName>-<os>` under
+`testresults/known-test-failures/`: request, pre-execution inventories, both
+discovery receipts, execution receipts/stdout/stderr, lifecycle XML, native
+identity TRX (`identity.evidence`), ordinary platform TRX, fetched data/provenance
+when consumed, and `decision.json`. Only the ordinary report has a `.trx`
+extension, avoiding duplicate summary counting.
+
+### Same reusable-workflow fork proof
+
+`known-test-failures-ci-proof.yml` calls the actual `run-tests.yml` with
+Infrastructure.Tests, filtered to `KnownFailurePipelineCases` (Fact, individual
+Theory rows and runtime skip). It runs on feature-branch pushes and same-fork
+draft PR events; dispatch/default-branch registration is not required.
+
+The exception requires repository `radical/aspire`, branch
+`known-test-failure-allowances` and that dedicated caller. Checkout uses the
+requested head with credentials disabled. Failure injection has no effect in
+ordinary local or upstream runs. The default candidate genuinely fails with
+`pipeline candidate fixed failure`; its raw MTP exit remains 2 after approval.
+
+The proof reads `registry.json` from the separate fork branch
+`refs/heads/known-test-failures-ci-registry` with environment `github-ci`.
+Initialize it using the existing management entry point:
+
+```bash
+./.dotnet/dotnet artifacts/bin/KnownTestFailures/Debug/net10.0/KnownTestFailures.dll \
+  mutate --repo . --ref refs/heads/known-test-failures-ci-registry \
+  --expected 0000000000000000000000000000000000000000 \
+  --event add.json --initialize --environment github-ci
+```
+
+Construct `add.json` from the failed run's actual pre-execution UID, bound
+method/display and native failure message, using lane `regular`, its reported
+platform and target ref. Set an explicitly chosen UTC expiry, owner and verified
+issue/experimental PR link. Do not approve by test name alone or reuse the older
+fixed-fixture identity. Append an `approve` event with the returned expected
+commit through `mutate`, then publish only the registry branch. Rerunning the
+unchanged gate demonstrates native red before approval and green after approval,
+without rewriting the test result. Publication is a separate authorized action;
+the tool itself never pushes.
+
+The `knownFailureProofScenario` reusable input additionally supports `pass`,
+`mixed`, `parameter` and `changed`; overrides are accepted only by the validated
+fork proof. Unknown neighbor, new failing Theory row and changed signature remain
+blocking even when the candidate is approved.
+
+## Replay modes and exits
 
 - `off` is the default. It returns the original exit without opening registry,
   manifest, or TRX inputs, even when their paths or timestamp are invalid.
@@ -17,10 +148,11 @@ mode or general-purpose workflow adapter.
   evaluation preserves a nonzero original exit, or returns evaluator code `3`
   when the original exit was zero. Report-write errors follow the same rule.
 
-Reports distinguish `originalExitCode` from `effectiveExitCode`. Active
+Reports distinguish `originalExitCode` from `effectiveExitCode`. Replay
 evaluation requires explicit `--at` UTC time; no implicit expiry duration or
 maximum lifetime is imposed. `--report` creates a new file exclusively and will
-not overwrite evidence or existing reports.
+not overwrite evidence or existing reports. Production `ci-run` uses actual UTC
+and does not accept a synthetic evaluation time.
 
 ```bash
 dotnet run --project tools/KnownTestFailures -- evaluate --original-exit 2

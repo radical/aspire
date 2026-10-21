@@ -46,6 +46,21 @@ on:
         required: false
         type: boolean
         default: false
+      # Only regular callers explicitly opt into the current selective lane.
+      # Specialized/outerloop callers retain their independent baseline runner.
+      knownFailureLane:
+        required: false
+        type: string
+        default: unsupported
+      # Accepted only for the dedicated same-fork proof caller and exact feature branch.
+      knownFailureProof:
+        required: false
+        type: boolean
+        default: false
+      knownFailureProofScenario:
+        required: false
+        type: string
+        default: candidate
 
 permissions:
   actions: read
@@ -54,7 +69,14 @@ permissions:
 jobs:
 
   test:
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: >-
+      github.repository == 'microsoft/aspire' ||
+      (inputs.knownFailureProof && github.repository == 'radical/aspire' &&
+       startsWith(github.workflow_ref, 'radical/aspire/.github/workflows/known-test-failures-ci-proof.yml@') &&
+       ((github.event_name == 'push' && github.ref == 'refs/heads/known-test-failure-allowances') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.draft == true &&
+         github.event.pull_request.head.repo.full_name == 'radical/aspire' &&
+         github.event.pull_request.head.ref == 'known-test-failure-allowances')))
     runs-on: ${{ inputs.os }}
     timeout-minutes: 60
     name: ${{ inputs.testShortName }} (${{ inputs.os }})
@@ -99,6 +121,39 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.repository == 'radical/aspire' && inputs.knownFailureProof && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: ${{ github.repository != 'radical/aspire' || !inputs.knownFailureProof }}
+
+      - name: Configure selective known-failure gate
+        shell: pwsh
+        env:
+          REQUESTED_MODE: ${{ github.repository == 'microsoft/aspire' && (vars.ASPIRE_KNOWN_TEST_FAILURES_MODE || 'off') || (inputs.knownFailureProof && 'enforce' || 'off') }}
+          BROAD_IGNORE: ${{ inputs.ignoreTestFailures }}
+          REQUIRES_NUGETS: ${{ fromJson(inputs.properties).requiresNugets == true }}
+          REQUESTED_LANE: ${{ inputs.knownFailureLane }}
+        run: |
+          $mode = $env:REQUESTED_MODE
+          if ([string]::IsNullOrEmpty($mode)) { $mode = 'off' }
+          if ($mode -notin @('off', 'enforce')) {
+            throw "ASPIRE_KNOWN_TEST_FAILURES_MODE must be off or enforce."
+          }
+          $active = $mode -eq 'enforce'
+          if ($active -and $env:REQUESTED_LANE -ne 'regular') {
+            Write-Host "::notice::Selective allowances require an explicit regular lane; this caller retains its baseline runner."
+            $active = $false
+          }
+          if ($active -and $env:BROAD_IGNORE -eq 'true') {
+            Write-Host "::notice::Selective allowances are excluded from the independent broad-ignore lane."
+            $active = $false
+          }
+          if ($active -and (-not $IsLinux -or $env:REQUIRES_NUGETS -eq 'true')) {
+            Write-Host "::warning::Selective allowances currently support Linux normal execution only; this lane retains its blocking baseline runner."
+            $active = $false
+          }
+          "KTF_ACTIVE=$($active.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
+          if ($active) { "KTF_BUILD_ARGUMENT=/p:KnownTestFailures=true" >> $env:GITHUB_ENV }
+          else { "KTF_BUILD_ARGUMENT=" >> $env:GITHUB_ENV }
 
       - name: Set up .NET Core
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -343,6 +398,13 @@ jobs:
           -projects ${{ env.TEST_PROJECT_PATH }}
           ${{ fromJson(inputs.properties).enablePlaywrightInstall != true && '/p:InstallBrowsersForPlaywright=false' || '' }}
           ${{ inputs.versionOverrideArg }}
+          ${{ env.KTF_BUILD_ARGUMENT }}
+
+      - name: Build selective known-failure runner
+        if: env.KTF_ACTIVE == 'true'
+        run: >
+          ${{ env.DOTNET_SCRIPT }} build tools/KnownTestFailures/KnownTestFailures.csproj
+          /p:ContinuousIntegrationBuild=true --nologo -v:q
 
       - name: Build and archive test project
         if: ${{ fromJson(inputs.properties).requiresNugets == true }}
@@ -547,6 +609,18 @@ jobs:
           GITHUB_PR_HEAD_SHA: ${{ fromJson(inputs.properties).requiresCliArchive == true && github.event.pull_request.head.sha || '' }}
           ASPIRE_E2E_CLI_ARCHIVE_DIR: ${{ fromJson(inputs.properties).requiresCliArchive == true && format('{0}/cli-archives', github.workspace) || '' }}
           GH_TOKEN: ${{ (fromJson(inputs.properties).requiresGitHubToken == true || fromJson(inputs.properties).requiresCliArchive == true) && github.token || '' }}
+          KTF_BASE_ARGS: ${{ env.EFFECTIVE_MTP_BASE_ARGS }}
+          KTF_LANE: ${{ inputs.knownFailureLane }}
+          KTF_EXTRA_ARGS: ${{ inputs.extraTestArgs }}
+          KTF_VERSION_ARGS: ${{ inputs.versionOverrideArg }}
+          KTF_REGISTRY_REF: ${{ vars.ASPIRE_KNOWN_TEST_FAILURES_REGISTRY_REF }}
+          KTF_PROOF: ${{ inputs.knownFailureProof }}
+          KTF_SCENARIO: ${{ inputs.knownFailureProofScenario }}
+          KTF_HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          KTF_SCOPE_REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.base_ref) || github.ref }}
+          KTF_EXECUTED_SHA: ${{ github.repository == 'radical/aspire' && inputs.knownFailureProof && github.event.pull_request.head.sha || github.sha }}
+          KTF_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          KTF_SOURCE_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
         run: |
           # Start heartbeat monitor in background (60s interval to reduce log noise)
           ${{ env.DOTNET_SCRIPT }} ${{ github.workspace }}/tools/scripts/Heartbeat.cs 60 &
@@ -555,7 +629,20 @@ jobs:
           # Run tests. Capture the real MTP exit code without letting "set -e" abort the step:
           # "|| TEST_EXIT_CODE=$?" both records the code and keeps the compound command successful.
           TEST_EXIT_CODE=0
-          ${{ env.DOTNET_SCRIPT }} test --project ${{ env.TEST_PROJECT_PATH }} \
+          if [ "$KTF_ACTIVE" = true ]; then
+            EFFECTIVE_TEST_EXIT_CODE=0
+            # ci-run validates containment and normalizes this build-step absolute path.
+            ./.dotnet/dotnet artifacts/bin/KnownTestFailures/Debug/net10.0/KnownTestFailures.dll \
+              ci-run --repo "$GITHUB_WORKSPACE" --project "$TEST_PROJECT_PATH" \
+              --output "$GITHUB_WORKSPACE/testresults/known-test-failures" || EFFECTIVE_TEST_EXIT_CODE=$?
+            if [ -f testresults/known-test-failures/raw-exit-code.txt ]; then
+              TEST_EXIT_CODE=$(cat testresults/known-test-failures/raw-exit-code.txt)
+            else
+              TEST_EXIT_CODE=3
+              EFFECTIVE_TEST_EXIT_CODE=3
+            fi
+          else
+            ${{ env.DOTNET_SCRIPT }} test --project ${{ env.TEST_PROJECT_PATH }} \
             /p:ContinuousIntegrationBuild=true \
             /p:TrxFileNamePrefix="${{ inputs.testShortName }}" \
             -bl:${{ github.workspace }}/testresults/test.binlog \
@@ -572,7 +659,8 @@ jobs:
           # aggregated `dotnet test` result with the same helper exercised by Infrastructure.Tests.
           NORMALIZED_TEST_EXIT_CODE=0
           bash .github/workflows/normalize-mtp-exit-code.sh "$TEST_EXIT_CODE" || NORMALIZED_TEST_EXIT_CODE=$?
-          TEST_EXIT_CODE=$NORMALIZED_TEST_EXIT_CODE
+            TEST_EXIT_CODE=$NORMALIZED_TEST_EXIT_CODE
+          fi
 
           # Persist the MTP exit code so the "Verify test results exist" gate can classify the outcome
           # (test outcome vs. infrastructure failure) even though we exit 0 below when failures are ignored.
@@ -591,7 +679,10 @@ jobs:
             exit 0
           fi
 
-          exit $TEST_EXIT_CODE
+          if [ "$KTF_ACTIVE" = true ]; then
+            exit "$EFFECTIVE_TEST_EXIT_CODE"
+          fi
+          exit "$TEST_EXIT_CODE"
 
       - name: Run tests (Windows)
         if: ${{ fromJson(inputs.properties).requiresNugets != true && runner.os == 'Windows' }}

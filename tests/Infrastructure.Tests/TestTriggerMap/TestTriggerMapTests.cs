@@ -110,6 +110,10 @@ public sealed class TestTriggerMapTests
             ["test:Infrastructure.Tests"]
         },
         {
+            ".github/workflows/known-test-failures-ci-proof.yml",
+            ["test:Infrastructure.Tests"]
+        },
+        {
             ".github/workflows/prepare-installer-artifacts.yml",
             ["test:Infrastructure.Tests", "job:winget-installer", "job:homebrew-installer"]
         },
@@ -900,6 +904,21 @@ public sealed class TestTriggerMapTests
             Assert.Equal(expectedTestProjects.Order(StringComparer.Ordinal), result.TestProjects.Order(StringComparer.Ordinal));
             Assert.Equal(expectedJobs.Order(StringComparer.Ordinal), result.Jobs.Order(StringComparer.Ordinal));
         }
+    }
+
+    [Fact]
+    public void KnownFailureRunnerInputsSelectManagedTestsWithoutNonDotnetJobs()
+    {
+        var result = SelectWithRealMap("tools/KnownTestFailures/ProductionRunner.cs");
+        var expected = LoadSolutionProjectPaths()
+            .Where(path => path.StartsWith("tests/", StringComparison.Ordinal))
+            .Select(path => Path.GetFileNameWithoutExtension(path)!)
+            .Where(name => name.EndsWith(".Tests", StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal);
+        Assert.False(result.SelectsAll);
+        Assert.Empty(result.UnmatchedFiles);
+        Assert.Equal(expected, result.TestProjects.Order(StringComparer.Ordinal));
+        Assert.Empty(result.Jobs);
     }
 
     [Fact]

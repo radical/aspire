@@ -8,7 +8,7 @@ public static class RegistryHistory
     public static IReadOnlyDictionary<string, Entry> Replay(Registry registry)
     {
         Format.Require(registry.SchemaVersion == 1, "Unsupported registry schemaVersion.");
-        Format.Require(registry.Environment == "experimental", "Only experimental registries are supported.");
+        Format.Require(registry.Environment is "experimental" or "github-ci", "Unsupported registry environment.");
         var entries = new Dictionary<string, Entry>(StringComparer.Ordinal);
         var lastAt = DateTimeOffset.MinValue;
         foreach (var (item, index) in registry.History.Select((item, index) => (item, index)))

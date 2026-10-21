@@ -567,6 +567,10 @@ path_rules:
     targets: [test:Infrastructure.Tests]
     reason: Infrastructure.Tests builds and executes the isolated failure-injection fixture at runtime
   - paths:
+      - tools/KnownTestFailures/**
+    targets: [DOTNET_TESTS]
+    reason: the shared managed-test workflow executes the selective failure gate at runtime
+  - paths:
       - tools/SelectTests/**
       - eng/github-ci/test-trigger-map.yml
       - eng/github-ci/ci-skip-entirely-patterns.txt

@@ -30,7 +30,10 @@ public sealed record Evidence(
 public sealed record Invocation(
     string Id, string Project, string TrxPath, bool DirectMtpProcess,
     int ProcessExitCode, bool SetupSucceeded, bool CompletedNormally,
-    string[] Diagnostics, ExpectedCase[] ExpectedCases);
+    string[] Diagnostics, ExpectedCase[] ExpectedCases)
+{
+    public bool AllowEmpty { get; init; }
+}
 
 public sealed record ExpectedCase(string CaseId, string TestId, string Method, string DisplayName);
 

@@ -8,7 +8,9 @@ namespace KnownTestFailures;
 public static class Program
 {
     public const string Help = """
-        KnownTestFailures: standalone experimental replay and isolated fork proof.
+        KnownTestFailures: recorded replay and opt-in native GitHub CI.
+        ci-run --repo DIR --project PATH --output DIR
+          Uses repository-owned KTF_* workflow configuration; Linux normal MTP only.
         prove --repo DIR --fixture EXE --output DIR
         gate --repo DIR --fixture EXE --output DIR --remote URL
         seed --repo DIR --fixture EXE --output DIR --expires UTC --issue HTTPS --owner NAME
@@ -18,7 +20,7 @@ public static class Program
           [--registry FILE | --repo DIR --ref FULL_REF --registry-path PATH]
           [--evidence FILE --artifact-root DIR --at UTC] [--report FILE]
         mutate --repo DIR --ref refs/heads/NAME --expected COMMIT
-          --event FILE [--initialize]
+          --event FILE [--initialize --environment experimental|github-ci]
         Management appends one add/update/approve/revoke/remove/expire event.
         Branch management uses registry.json; initialize requires an all-zero expected ID.
         Off is the default and does not read registry, evidence, or TRX files.
@@ -44,10 +46,14 @@ public static class Program
             {
                 return await ProofRunner.RunAsync(args, output, error).ConfigureAwait(false);
             }
+            if (args[0] == "ci-run")
+            {
+                return await ProductionRunner.RunCommandAsync(args, output, error).ConfigureAwait(false);
+            }
             var allowed = args[0] switch
             {
                 "evaluate" => new[] { "original-exit", "mode", "opt-in", "registry", "repo", "ref", "registry-path", "evidence", "artifact-root", "at", "report" },
-                "mutate" => ["repo", "ref", "expected", "event", "initialize"],
+                "mutate" => ["repo", "ref", "expected", "event", "initialize", "environment"],
                 _ => throw new InvalidDataException("Unknown command; use --help.")
             };
             var options = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -103,8 +109,10 @@ public static class Program
                 return decision.EffectiveExitCode;
             }
             var mutation = Format.Read<RegistryEvent>(await File.ReadAllTextAsync(Required("event")).ConfigureAwait(false));
+            Format.Require(!options.ContainsKey("environment") || options.ContainsKey("initialize"),
+                "--environment applies only to explicit initialization.");
             var commit = await GitRegistry.MutateAsync(Required("repo"), Required("ref"), Required("expected"),
-                options.ContainsKey("initialize"), mutation).ConfigureAwait(false);
+                options.ContainsKey("initialize"), mutation, options.GetValueOrDefault("environment", "experimental")).ConfigureAwait(false);
             await output.WriteLineAsync(commit).ConfigureAwait(false);
             return 0;
         }
