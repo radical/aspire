@@ -1,0 +1,1 @@
+{"version":1,"experiment":"controlled-repair-v2-20261021","agent_run_id":"39542258321","candidate_sha":"aa080c329e164aad343b6b7390d5665f47499db0","base_sha":"aa080c329e164aad343b6b7390d5665f47499db0","round":1,"iterations":1,"runners":1,"mode":"single","rounds":[],"fix_attempt":0,"phase":"awaiting-reproduction","induced_failure":true}
