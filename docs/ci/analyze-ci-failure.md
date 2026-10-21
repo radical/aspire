@@ -127,6 +127,13 @@ Collection and persistence helpers live beside the workflow as
 
 Focused coverage lives in
 [`AnalyzeCiFailureWorkflowTests`](../../tests/Infrastructure.Tests/WorkflowScripts/AnalyzeCiFailureWorkflowTests.cs).
+An implementation-independent C# acceptance suite for a future whole-pipeline
+port lives in
+[`CiFailureContracts`](../../tests/Infrastructure.Tests/CiFailureContracts).
+Its [adapter contract and behavioral baseline](analyze-ci-failure-contract-tests.md)
+document intentional bug-fix expectations and how to run the inherited tests.
+The suite is abstract until bound to a real implementation; it does not replace
+the current executable helper coverage.
 When changing the workflow, helpers, or the job/artifact naming contract, keep
 the source workflow, generated lock, scripts, tests, and this document aligned.
 
