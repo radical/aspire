@@ -193,6 +193,15 @@
         "createdAt": "2026-10-21T20:47:32+00:00",
         "expiresAt": "2026-10-22T00:00:00+00:00"
       }
+    },
+    {
+      "sequence": 13,
+      "id": "pipeline-platform-macos-003",
+      "action": "approve",
+      "actor": "radical",
+      "reason": "Approve the exact observed macOS candidate for fork validation.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:47:32+00:00",
+      "contentRevision": 1
     }
   ]
 }
