@@ -12,16 +12,33 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
+  "phase": "blocked",
   "stage": "start",
   "agents": [
     "39636365853"
   ],
-  "workers": [],
+  "workers": [
+    {
+      "run_id": "39637055069",
+      "phase": "reproduce",
+      "parent_run_id": "39636875776",
+      "candidate_sha": "aa080c329e164aad343b6b7390d5665f47499db0",
+      "workflow_sha": "ff4cbcf4d6c8e427327d50e20e48ecc0d5dde236",
+      "test": "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy",
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log"
+      ],
+      "iterations": [],
+      "evidence_error": "Test artifact absent; inspect the job log"
+    }
+  ],
   "candidates": [],
   "requested_executions": 1,
   "enrollment_run_id": "39636312608",
-  "updated_at": "2026-10-21T16:41:40.701423+00:00",
+  "updated_at": "2026-10-21T16:43:03.602034+00:00",
   "agent_run_id": "39636365853",
   "agent_revision": "9f84e66ea97a9472294fe74c02a068c2bb7e0a81",
   "worker": {
@@ -35,5 +52,6 @@
     },
     "reserved_executions": 1,
     "run_id": "39637055069"
-  }
+  },
+  "explanation": "Worker evidence is incomplete or contains unrelated failures. Test artifact absent; inspect the job log"
 }
