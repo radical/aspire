@@ -1,5 +1,5 @@
 name: Flaky Proof Worker
-run-name: "Flaky proof ${{ inputs.experiment }} (${{ inputs.selection }}, ${{ inputs.iterations }})"
+run-name: "Flaky proof ${{ inputs.experiment }} (${{ inputs.selection }}, ${{ inputs.iterations }}) [${{ inputs.controller_run_id }}]"
 
 on:
   workflow_dispatch:
@@ -21,6 +21,10 @@ on:
         required: true
         type: choice
         options: [pass, fail, zero]
+      controller_run_id:
+        description: Parent agent run, when dispatched by the agent proof
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +41,7 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           ITERATIONS: ${{ inputs.iterations }}
           SELECTION: ${{ inputs.selection }}
+          CONTROLLER_RUN_ID: ${{ inputs.controller_run_id }}
         run: |
           python3 - <<'PY'
           import json
@@ -67,6 +72,7 @@ jobs:
               "passed": iterations if selection == "pass" else 0,
               "failed": iterations if selection == "fail" else 0,
               "synthetic": True,
+              "controller_run_id": os.environ["CONTROLLER_RUN_ID"],
           }
           pathlib.Path("proof").mkdir()
           pathlib.Path("proof/result.json").write_text(json.dumps(result, indent=2) + "\n")

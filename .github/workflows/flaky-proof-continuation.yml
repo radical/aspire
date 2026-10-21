@@ -19,7 +19,7 @@ jobs:
       github.repository == 'radical/aspire' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
       github.event.workflow_run.head_repository.full_name == 'radical/aspire' &&
-      github.event.workflow_run.display_title == 'Flaky proof agent-proof-20261020 (fail, 2)' &&
+      startsWith(github.event.workflow_run.display_title, 'Flaky proof agent-proof-v2-20261020 (fail, 2) [') &&
       github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -33,6 +33,7 @@ jobs:
           import base64
           import json
           import os
+          import re
           import subprocess
 
           def api(endpoint):
@@ -48,12 +49,28 @@ jobs:
           worker = api(f"{repo}/actions/runs/{worker_id}")
           if worker["path"] != ".github/workflows/flaky-proof-worker.yml":
               raise SystemExit("Unexpected worker workflow")
-          if worker["head_sha"] != "31937f1e6cf5389b0d7d36950e10de84f3344d76":
+          candidate = api(f"{repo}/git/ref/heads/flaky-proof-candidate-20261020")
+          if (
+              worker["head_branch"] != "flaky-proof-candidate-20261020"
+              or worker["head_sha"] != candidate["object"]["sha"]
+          ):
               raise SystemExit("Unexpected worker SHA")
           if worker["run_attempt"] != 1 or worker["conclusion"] != "failure":
               raise SystemExit("Unexpected worker attempt or conclusion")
-          parent_id = "39520357058"
+          match = re.fullmatch(
+              r"Flaky proof agent-proof-v2-20261020 \(fail, 2\) \[([0-9]+)\]",
+              worker["display_title"],
+          )
+          if match is None:
+              raise SystemExit("Missing parent run correlation")
+          parent_id = match[1]
           parent = api(f"{repo}/actions/runs/{parent_id}")
+          if (
+              parent["path"] != ".github/workflows/flaky-proof-agent.lock.yml"
+              or parent["event"] != "workflow_dispatch"
+              or parent["head_repository"]["full_name"] != "radical/aspire"
+          ):
+              raise SystemExit("Unexpected parent workflow")
           if parent["status"] != "completed":
               subprocess.run(
                   ["gh", "run", "watch", parent_id, "--repo", "radical/aspire",
@@ -64,8 +81,8 @@ jobs:
           if parent["conclusion"] != "success":
               raise SystemExit("Parent agent did not complete successfully")
           stored = api(
-              f"{repo}/contents/memory/flaky-proof-20261020/checkpoint.json"
-              "?ref=memory%2Fflaky-proof-20261020"
+              f"{repo}/contents/checkpoint.json"
+              "?ref=memory%2Fflaky-proof-v2-20261020"
           )
           state = json.loads(base64.b64decode(stored["content"]))
           if state.get("phase") == "evidence-collected":
@@ -74,8 +91,9 @@ jobs:
           if (
               state.get("version") != 1
               or state.get("phase") != "awaiting-reproduction"
-              or state.get("experiment") != "agent-proof-20261020"
+              or state.get("experiment") != "agent-proof-v2-20261020"
               or state.get("candidate_sha") != worker["head_sha"]
+              or str(state.get("parent_run_id")) != parent_id
           ):
               raise SystemExit("Checkpoint does not authorize this continuation")
           print(json.dumps({
