@@ -12,16 +12,47 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
-  "stage": "start",
+  "phase": "paused",
+  "stage": "baseline",
   "agents": [
     "39637993884"
   ],
-  "workers": [],
+  "workers": [
+    {
+      "run_id": "39638616942",
+      "phase": "reproduce",
+      "parent_run_id": "39637940652",
+      "candidate_sha": "aa080c329e164aad343b6b7390d5665f47499db0",
+      "workflow_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "test": "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy",
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log"
+      ],
+      "iterations": [
+        {
+          "iteration": 1,
+          "executed": 1,
+          "failed": 1,
+          "outcome": "Failed",
+          "failure": "System.OperationCanceledException : Resource 'chat' failed to become healthy before the operation was cancelled.\n- Current State: Running\n- Creation Time: 10/21/2026 16:53:54\n- Current Health: Degraded\n- Health Reports:\n  - blocking_check: Healthy @ 2026-10-21 16:56:52\n  - resource_check: Degraded @ 2026-10-21 16:56:52\n---- System.OperationCanceledException : The operation was canceled.",
+          "trx": "iteration-1/real-proof.trx",
+          "log_bytes": 22913,
+          "runner": 1,
+          "artifact_directory": "/tmp/gh-aw/issue-proof/worker-39638616942-1"
+        }
+      ],
+      "executed": 1,
+      "failed": 1,
+      "other_failed": 0
+    }
+  ],
   "candidates": [],
   "requested_executions": 1,
   "enrollment_run_id": "39637940652",
-  "updated_at": "2026-10-21T16:52:03.539456+00:00",
+  "updated_at": "2026-10-21T16:57:45.531313+00:00",
   "agent_run_id": "39637993884",
   "agent_revision": "99fd45ee8606797bceee67f3eae4c51664b0fa10",
   "worker": {
@@ -35,5 +66,7 @@
     },
     "reserved_executions": 1,
     "run_id": "39638616942"
-  }
+  },
+  "resume_after": 1792601925.5313044,
+  "delay_exercised": true
 }
