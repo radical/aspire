@@ -97,6 +97,15 @@
         "createdAt": "2026-10-21T20:06:36+00:00",
         "expiresAt": "2026-10-21T20:07:00+00:00"
       }
+    },
+    {
+      "sequence": 7,
+      "id": "pipeline-linux-expiry-002",
+      "action": "approve",
+      "actor": "radical",
+      "reason": "Record a fixture approval timestamp before absolute expiry.\nEvaluation after expiry must still block this synthetic fixture.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:06:36+00:00",
+      "contentRevision": 1
     }
   ]
 }
