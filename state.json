@@ -12,7 +12,7 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "verified",
   "stage": "verification",
   "agents": [
     "39637993884",
@@ -234,7 +234,7 @@
   ],
   "requested_executions": 11,
   "enrollment_run_id": "39637940652",
-  "updated_at": "2026-10-21T17:17:57.729779+00:00",
+  "updated_at": "2026-10-21T17:22:34.075599+00:00",
   "agent_run_id": "39642548461",
   "agent_revision": "5b59940002552237c7d572af5378c0f85fb7dd68",
   "worker": {
@@ -266,5 +266,7 @@
       "limitation": "Not run locally (no container runtime). Fixes only the induced outage path; no natural flake reproduction or elimination is claimed, and the test remains quarantined."
     }
   },
-  "failed_probe_observed": true
+  "failed_probe_observed": true,
+  "pull_request": "https://github.com/radical/aspire/pull/150",
+  "explanation": "Baseline run 39638616942 and ineffective probe run 39640507377 both failed with OperationCanceledException (chat Degraded; blocking_check Healthy, resource_check Degraded) due to the induced ForceExternalStatusDegraded fault. The real repair (candidate 2, run 39642087881) removes the inherited parent resource_check annotation inside the test method, as the sibling test does, leaving all waits, release, shutdown and the quarantine marker intact. Re-read test-source.cs (blob 95df31e7 matches) and candidate.patch (only adds the removal after the fixture call). All 9 verification executions (3 runners x 3 iterations) show outcome Passed in their TRX files; I checked TRX outcomes and tail of job-1.log only, not full logs. Limitations: no local run; this addresses the induced outage only, claims no natural flake elimination, and the test remains quarantined."
 }
