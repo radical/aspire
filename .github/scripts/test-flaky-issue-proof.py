@@ -82,7 +82,7 @@ class IssueProofChecks(unittest.TestCase):
             {"target": "../shell"}, {"unknown": True}, {"max_rounds": 0},
             {"max_executions": 999}, {"max_fix_attempts": True},
             {"resume_delay_seconds": 121}, {"retry_probe": "true"},
-            {"cancel_probe": 1}, {"version": True}, {"retry_probe": True},
+            {"cancel_probe": 1}, {"version": True}, {"retry_probe": True}, {"target": {}},
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 proof.configuration(issue({**CONFIG, **changes}))
@@ -231,6 +231,39 @@ class IssueProofChecks(unittest.TestCase):
             proof.agent_dispatch(data, "old")
         dispatch.assert_not_called()
 
+    def test_owned_agent_is_watched_and_consumed_without_requiring_callback(self):
+        data = state()
+        with patch.object(proof, "save", side_effect=["intent", "recorded"]), \
+                patch.object(proof, "dispatch", return_value="999"), \
+                patch.object(proof.repair.real, "wait_completed") as wait, \
+                patch.object(proof, "handle_agent") as handle:
+            proof.agent_dispatch(data, "previous")
+        wait.assert_called_once_with("999", True)
+        handle.assert_called_once_with(data, "recorded", "999")
+
+    def test_failed_agent_still_records_blocker_without_a_callback(self):
+        data = state()
+        with patch.dict(os.environ, {"EVENT": "intake"}), \
+                patch.object(proof, "api", return_value=issue()), \
+                patch.object(proof, "load", side_effect=[(None, None), (data, "recorded")]), \
+                patch.object(proof, "save", return_value="revision"), \
+                patch.object(proof, "dispatch", return_value="999"), \
+                patch.object(proof.repair.real, "wait_completed", side_effect=ValueError("model failed")), \
+                patch.object(proof, "finish") as finish, patch.object(proof.sys, "argv", ["proof", "advance"]):
+            with self.assertRaisesRegex(ValueError, "model failed"):
+                proof.main()
+        self.assertEqual("blocked", finish.call_args.args[2])
+        self.assertIn("model failed", finish.call_args.args[3])
+
+    def test_missing_proposal_is_an_explicit_controller_error(self):
+        data = state()
+        run = {"display_title": "Issue investigator #42 [" + data["agent_revision"] + "]"}
+        with tempfile.TemporaryDirectory() as directory, patch.object(proof, "ROOT", Path(directory)), \
+                patch.object(proof, "run_identity", return_value=run), \
+                patch.object(proof.repair.real, "wait_completed"), \
+                patch.object(proof.repair, "download"), self.assertRaisesRegex(ValueError, "without a proposal"):
+            proof.proposal_for(data, "123")
+
     def test_terminal_comment_is_idempotent_and_automated(self):
         data = state()
         data.update(phase="not-reproduced", explanation="Both exact baselines passed.")
@@ -263,6 +296,26 @@ class IssueProofChecks(unittest.TestCase):
         with patch.object(proof, "api", return_value=issue()), \
                 patch.object(proof, "load", return_value=(data, "revision")), self.assertRaisesRegex(ValueError, "different run"):
             proof.worker_state("42")
+
+    def test_matrix_provides_absolute_arcade_project_path(self):
+        data = state()
+        request = {
+            "phase": "reproduce", "parent_run_id": "900", "candidate_sha": "b" * 40,
+            "configuration": {"runners": 2},
+        }
+        title = "Issue worker #42 reproduce [900] " + "b" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "outputs"
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output), "GITHUB_WORKSPACE": "/workspace/repo"}), \
+                    patch.object(proof, "worker_state", return_value=(data, request)), \
+                    patch.object(proof, "run_identity", return_value={"display_title": title}):
+                proof.matrix("42")
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        self.assertEqual(
+            "/workspace/repo/candidate/tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj",
+            values["project"],
+        )
+        self.assertEqual({"include": [{"index": 1}, {"index": 2}]}, json.loads(values["matrix"]))
 
 
 if __name__ == "__main__":

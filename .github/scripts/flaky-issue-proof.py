@@ -217,7 +217,13 @@ def agent_dispatch(state, revision):
     })
     state.update(phase="awaiting-agent", agent_run_id=agent_id, agent_revision=intent)
     state["agents"].append(agent_id)
-    return save(state, intent)
+    revision = save(state, intent)
+    # A failed model may never emit a safe-output callback. The trusted job
+    # watches its owned agent, not CI, so failure still produces finite findings.
+    # A successful callback queued behind this job becomes a harmless duplicate.
+    repair.real.wait_completed(agent_id, True)
+    handle_agent(state, revision, agent_id)
+    return revision
 
 
 def worker_request(state, phase, candidate, iterations, runners):
@@ -309,6 +315,8 @@ def proposal_for(state, agent_id):
     directory = ROOT / f"agent-{agent_id}"
     repair.download(agent_id, "repo-memory-default", directory)
     path = directory / "proposal.json"
+    if not path.is_file():
+        raise ValueError("Agent completed without a proposal artifact")
     if path.stat().st_size > 50000:
         raise ValueError("Agent proposal is oversized")
     proposal = json.loads(path.read_text())
@@ -679,7 +687,9 @@ def matrix(issue_id):
     count = request["configuration"]["runners"]
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write("matrix=" + json.dumps({"include": [{"index": i} for i in range(1, count + 1)]}) + "\n")
-        output.write("project=" + CATALOG[state["config"]["target"]]["project"] + "\n")
+        # Arcade resolves -projects from Build.proj, not this shell's directory.
+        project = Path(os.environ["GITHUB_WORKSPACE"]) / "candidate" / CATALOG[state["config"]["target"]]["project"]
+        output.write("project=" + str(project) + "\n")
 
 
 def checkout_receipt(issue_id):
@@ -732,7 +742,7 @@ def main():
     if operation == "advance":
         try:
             advance(issue_id, os.environ["EVENT"])
-        except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        except (ValueError, OSError, KeyError, StopIteration, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             # Surface the failure on the enrolled issue, but retain failed workflow status.
             state, revision = load(issue_id)
             if state and state["phase"] not in TERMINAL:
