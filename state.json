@@ -12,16 +12,33 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "awaiting-worker",
+  "phase": "blocked",
   "stage": "start",
   "agents": [
     "39636351958"
   ],
-  "workers": [],
+  "workers": [
+    {
+      "run_id": "39637134133",
+      "phase": "reproduce",
+      "parent_run_id": "39636920095",
+      "candidate_sha": "8bb44fe03358922580990578b2040d7e2b00fa1b",
+      "workflow_sha": "ff4cbcf4d6c8e427327d50e20e48ecc0d5dde236",
+      "test": "Aspire.Hosting.Tests.JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject",
+      "iterations_per_runner": 1,
+      "runners": 1,
+      "quarantine_project": false,
+      "job_logs": [
+        "/tmp/gh-aw/issue-proof/job-1.log"
+      ],
+      "iterations": [],
+      "evidence_error": "Test artifact absent; inspect the job log"
+    }
+  ],
   "candidates": [],
   "requested_executions": 1,
   "enrollment_run_id": "39636316338",
-  "updated_at": "2026-10-21T16:42:12.449545+00:00",
+  "updated_at": "2026-10-21T16:43:42.098472+00:00",
   "agent_run_id": "39636351958",
   "agent_revision": "8b043b085765c7a3f859bf075fec455852f4d955",
   "worker": {
@@ -35,5 +52,6 @@
     },
     "reserved_executions": 1,
     "run_id": "39637134133"
-  }
+  },
+  "explanation": "Worker evidence is incomplete or contains unrelated failures. Test artifact absent; inspect the job log"
 }
