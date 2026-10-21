@@ -1,0 +1,59 @@
+name: Issue Investigation Controller
+run-name: "Issue controller #${{ github.event.issue.number || inputs.issue_number }} (${{ github.event_name == 'issues' && 'intake' || inputs.event }})"
+on:
+  issues:
+    types: [labeled, assigned]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        type: string
+        required: true
+      event:
+        type: choice
+        options: [agent, worker, resume]
+        required: true
+      agent_run_id:
+        type: string
+        required: false
+      worker_run_id:
+        type: string
+        required: false
+permissions:
+  contents: write
+  actions: write
+  issues: write
+  pull-requests: write
+concurrency:
+  group: flaky-issue-controller-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+jobs:
+  advance:
+    if: >-
+      github.repository == 'radical/aspire' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.actor == 'radical' &&
+        ((github.event.action == 'labeled' && github.event.label.name == 'flaky-agent-proof' &&
+          contains(github.event.issue.assignees.*.login, 'radical')) ||
+         (github.event.action == 'assigned' && github.event.assignee.login == 'radical' &&
+          contains(github.event.issue.labels.*.name, 'flaky-agent-proof')))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Advance only the validated issue checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          EVENT: ${{ github.event_name == 'issues' && 'intake' || inputs.event }}
+          AGENT_RUN_ID: ${{ inputs.agent_run_id }}
+          WORKER_RUN_ID: ${{ inputs.worker_run_id }}
+        run: python3 .github/scripts/flaky-issue-proof.py advance
+      - name: Preserve controller audit and publication previews
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: issue-controller-audit
+          path: /tmp/gh-aw/issue-proof/
+          if-no-files-found: ignore
