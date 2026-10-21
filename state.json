@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "dispatching-worker",
+  "phase": "awaiting-worker",
   "stage": "start",
   "agents": [
     "39636351958"
@@ -21,7 +21,7 @@
   "candidates": [],
   "requested_executions": 1,
   "enrollment_run_id": "39636316338",
-  "updated_at": "2026-10-21T16:42:08.244818+00:00",
+  "updated_at": "2026-10-21T16:42:12.449545+00:00",
   "agent_run_id": "39636351958",
   "agent_revision": "8b043b085765c7a3f859bf075fec455852f4d955",
   "worker": {
@@ -33,6 +33,7 @@
       "runners": 1,
       "quarantine_project": false
     },
-    "reserved_executions": 1
+    "reserved_executions": 1,
+    "run_id": "39637134133"
   }
 }
