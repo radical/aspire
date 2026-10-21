@@ -1,0 +1,85 @@
+name: Flaky Proof Worker
+run-name: "Flaky proof ${{ inputs.experiment }} (${{ inputs.selection }}, ${{ inputs.iterations }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: Correlation identifier
+        required: true
+        type: string
+      candidate_sha:
+        description: Expected commit of the dispatched ref
+        required: true
+        type: string
+      iterations:
+        description: Synthetic iterations (1-3)
+        required: true
+        type: number
+      selection:
+        description: Synthetic test outcome
+        required: true
+        type: choice
+        options: [pass, fail, zero]
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run bounded synthetic fixture
+        env:
+          EXPERIMENT: ${{ inputs.experiment }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          ITERATIONS: ${{ inputs.iterations }}
+          SELECTION: ${{ inputs.selection }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          experiment = os.environ["EXPERIMENT"]
+          iterations = int(os.environ["ITERATIONS"])
+          selection = os.environ["SELECTION"]
+          if not re.fullmatch(r"[a-z0-9-]{1,80}", experiment):
+              raise SystemExit("Invalid experiment identifier")
+          if not 1 <= iterations <= 3:
+              raise SystemExit("Iterations must be between 1 and 3")
+          if selection not in {"pass", "fail", "zero"}:
+              raise SystemExit("Invalid selection")
+          if os.environ["CANDIDATE_SHA"] != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Candidate SHA does not match dispatched ref")
+          result = {
+              "experiment": experiment,
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "head_sha": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "selection": selection,
+              "iterations": iterations,
+              "executed": 0 if selection == "zero" else iterations,
+              "passed": iterations if selection == "pass" else 0,
+              "failed": iterations if selection == "fail" else 0,
+              "synthetic": True,
+          }
+          pathlib.Path("proof").mkdir()
+          pathlib.Path("proof/result.json").write_text(json.dumps(result, indent=2) + "\n")
+          print(json.dumps(result))
+          if selection == "zero":
+              raise SystemExit("Zero tests executed; not a successful reproduction")
+          if selection == "fail":
+              raise SystemExit("Synthetic assertion failure")
+          PY
+      - name: Preserve fixture result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flaky-proof-result-${{ inputs.experiment }}-${{ github.run_attempt }}
+          path: proof/result.json
+          if-no-files-found: error
