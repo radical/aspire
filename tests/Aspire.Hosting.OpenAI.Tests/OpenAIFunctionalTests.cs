@@ -35,6 +35,11 @@ public class OpenAIFunctionalTests
 
         ForceExternalStatusDegraded(builder.Services);
 
+        // The model resource inherits its parent's health checks. Remove the parent's external
+        // status-page check, as the sibling test does, so only the controlled blocking check gates health.
+        var statusPageHealthCheck = Enumerable.Single(resource.Resource.Parent.Annotations, x => x is HealthCheckAnnotation hca && hca.Key == "resource_check");
+        resource.Resource.Parent.Annotations.Remove(statusPageHealthCheck);
+
         var dependentResource = builder.AddContainer("nginx", "mcr.microsoft.com/cbl-mariner/base/nginx", "1.22")
                                        .WaitFor(resource);
 
