@@ -94,6 +94,22 @@ public sealed class TestTriggerMapTests
             ["test:Infrastructure.Tests"]
         },
         {
+            "tools/KnownTestFailuresFixture/Cases.cs",
+            ["test:Infrastructure.Tests"]
+        },
+        {
+            "tools/KnownTestFailuresFixture/KnownTestFailuresFixture.csproj",
+            ["test:Infrastructure.Tests"]
+        },
+        {
+            "tools/KnownTestFailuresFixture/KnownTestFailuresFixture.uniqueid",
+            ["test:Infrastructure.Tests"]
+        },
+        {
+            ".github/workflows/known-test-failures-proof.yml",
+            ["test:Infrastructure.Tests"]
+        },
+        {
             ".github/workflows/prepare-installer-artifacts.yml",
             ["test:Infrastructure.Tests", "job:winget-installer", "job:homebrew-installer"]
         },

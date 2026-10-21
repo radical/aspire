@@ -628,6 +628,7 @@
     <Project Path="tools/CreateFailingTestIssue/CreateFailingTestIssue.csproj" />
     <Project Path="tools/CreateLayout/CreateLayout.csproj" />
     <Project Path="tools/GenerateTemplateManifest/GenerateTemplateManifest.csproj" />
+    <Project Path="tools/KnownTestFailures/KnownTestFailures.csproj" />
     <Project Path="tools/GenerateTestSummary/GenerateTestSummary.csproj" />
     <Project Path="tools/SelectTests/SelectTests.csproj" />
     <Project Path="tools/TypeScriptApiCompat/TypeScriptApiCompat.csproj" />

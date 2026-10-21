@@ -40,6 +40,7 @@
     <ProjectReference Include="..\..\tools\Aspire.TestTools\Aspire.TestTools.csproj" />
     <ProjectReference Include="..\..\tools\CreateLayout\CreateLayout.csproj" />
     <ProjectReference Include="..\..\tools\GenerateTemplateManifest\GenerateTemplateManifest.csproj" />
+    <ProjectReference Include="..\..\tools\KnownTestFailures\KnownTestFailures.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="$(TestsSharedDir)TemporaryWorkspace.cs" Link="shared/TemporaryWorkspace.cs" />
