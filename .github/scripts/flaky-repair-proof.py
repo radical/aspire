@@ -73,8 +73,8 @@ Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 """
 if TARGET == "openai-controlled":
     BASE = "aa080c329e164aad343b6b7390d5665f47499db0"
-    MEMORY = "memory/flaky-controlled-repair-20261021"
-    EXPERIMENT = "controlled-repair-20261021"
+    MEMORY = "memory/flaky-controlled-repair-v2-20261021"
+    EXPERIMENT = "controlled-repair-v2-20261021"
     AGENT = ".github/workflows/flaky-controlled-repair-agent.lock.yml"
     PUBLISHER = ".github/workflows/flaky-controlled-repair-publish.yml"
     ROOT = Path("/tmp/gh-aw/controlled-repair-evidence")
@@ -328,7 +328,16 @@ def validate_candidate(payload, original):
     if any(check not in body for check in REQUIRED_CHECKS):
         raise ValueError("Candidate must retain the target's assertions and readiness checks")
     diagnosis = payload.get("diagnosis")
-    if not isinstance(diagnosis, str) or not 100 <= len(diagnosis) <= 12000:
+    if isinstance(diagnosis, dict):
+        fields = {"error", "root_cause", "prior_art", "rationale", "limitation"}
+        if set(diagnosis) != fields or any(
+            not isinstance(value, str) or not value.strip() for value in diagnosis.values()
+        ):
+            raise ValueError("Structured diagnosis requires five nonempty textual evidence fields")
+        diagnosis_text = json.dumps(diagnosis)
+    else:
+        diagnosis_text = diagnosis
+    if not isinstance(diagnosis_text, str) or not 100 <= len(diagnosis_text) <= 12000:
         raise ValueError("Candidate requires a substantive evidence-backed diagnosis")
     return content
 

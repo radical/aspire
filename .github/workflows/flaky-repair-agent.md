@@ -133,6 +133,9 @@ Write candidate.json in repo-memory containing:
 base_sha=the supplied base_sha, baseline_run_id=the actual failed worker ID,
 test_source=the entire modified source file as a JSON string, and diagnosis
 containing the evidence, rationale, limitations and actual result counts.
+diagnosis must be a 100-12000-character string, or an object with exactly
+error, root_cause, prior_art, rationale and limitation, each a nonempty string,
+whose combined serialized size is 100-12000 characters.
 Write checkpoint.json with phase="candidate-ready", baseline_run_id and diagnosis.
 Request exactly one flaky-repair-publish dispatch on main with
 agent_run_id=current agent ID, then end. The trusted publisher independently
