@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "issue_number": 146,
+  "issue_body": "[automated] Fork-only cancellation-control validation. Start a disposable\nsleeping worker, resume a fresh agent to request cancellation of that exact\nowned run, and verify its final cancelled state.\n\nDo not cancel other CI. The sleeping probe is not a test execution and must not\nbe counted as a passing or failing test. Finish with the cancellation evidence\nand limitations on this issue; do not open a PR, close the issue or modify\nupstream.\n\n```json\n{\n  \"version\": 1,\n  \"target\": \"hosting-json\",\n  \"max_rounds\": 1,\n  \"max_fix_attempts\": 1,\n  \"max_executions\": 1,\n  \"retry_probe\": false,\n  \"resume_delay_seconds\": 0,\n  \"cancel_probe\": true\n}\n```",
+  "config": {
+    "version": 1,
+    "target": "hosting-json",
+    "max_rounds": 1,
+    "max_fix_attempts": 1,
+    "max_executions": 1,
+    "retry_probe": false,
+    "resume_delay_seconds": 0,
+    "cancel_probe": true
+  },
+  "phase": "dispatching-agent",
+  "stage": "start",
+  "agents": [],
+  "workers": [],
+  "candidates": [],
+  "requested_executions": 0,
+  "enrollment_run_id": "39636319096",
+  "updated_at": "2026-10-21T16:36:58.636596+00:00"
+}
