@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "issue_number": 144,
+  "state_revision": "9f84e66ea97a9472294fe74c02a068c2bb7e0a81",
+  "action": "reproduce",
+  "explanation": "Test contract: the quarantined OpenAI model-resource test adds a blocking custom health check, starts the app, expects the resource Running and the nginx dependent Waiting, releases the check, then expects the resource Healthy, dependent Running, and clean start/stop. The fixture ForceExternalStatusDegraded replaces the default resource_check with a Degraded check to model an external status-page outage, so the resource should never become Healthy and the test should time out; this is an induced failure, not natural flake. Requesting a first baseline with one runner and one iteration. No TRX/logs exist yet; only context.json and test-source.cs were inspected.",
+  "evidence_read": ["/tmp/gh-aw/issue-proof/context.json", "/tmp/gh-aw/issue-proof/test-source.cs (full)"],
+  "iterations": 1,
+  "runners": 1
+}
