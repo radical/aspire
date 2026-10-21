@@ -1,10 +1,11 @@
 {
   "version": 1,
   "issue_number": 148,
-  "state_revision": "e9bf130837058b875d68c01a759b85f27db7433c",
-  "action": "reproduce",
-  "explanation": "Baseline round 1 (1 runner x 1 iteration) of JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject passed (1 executed, 0 failed, run 39638615398). This is a deterministic pure JSON-flattening test with no readiness waits or shared state. Per the policy, requesting a second baseline round with 2 runners x 2 iterations (4 executions, within the remaining budget of 4). No fix is proposed; passing runs are not a reproduction.",
-  "evidence_read": ["context.json (worker receipt: executed 1, failed 0, outcome Passed)", "test-source.cs", "receipt.json", "job-1.log (not fully read)"],
+  "state_revision": "5538367d5c9db82546109580db0a3778fce65f12",
+  "action": "finish",
+  "outcome": "not-reproduced",
+  "explanation": "Both permitted baseline rounds passed for Aspire.Hosting.Tests.JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject: round 1 (run 39638615398, 1 runner x 1 iteration) 1 executed/0 failed; round 2 (run 39639867377, 2 runners x 2 iterations) 4 executed/0 failed. Total 5 executions, 0 failures, 0 other failures; execution budget exhausted (remaining 0). The test is a pure synchronous check that FlattenJsonObject on an empty JsonObject returns an empty result, with no waits, ports, files or shared state. This is a passing control, not a claimed flaky failure. Limitations: only 5 executions on one candidate commit (8bb44fe0), so this cannot prove absence of rare flakiness; job logs were only skimmed (586-byte output logs, TRX outcomes inspected). No fix, PR or unquarantine proposed; issue stays open.",
+  "evidence_read": ["context.json (both worker receipts)", "test-source.cs (target method body)", "worker-39639867377-{1,2}/iteration-{1,2}/real-proof.trx (outcome=Passed for all 4)", "receipt.json"],
   "iterations": 2,
   "runners": 2
 }
