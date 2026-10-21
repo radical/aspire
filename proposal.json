@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "issue_number": 145,
+  "state_revision": "8b043b085765c7a3f859bf075fec455852f4d955",
+  "action": "reproduce",
+  "explanation": "Target JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject builds an empty JsonObject, calls JsonFlattener.FlattenJsonObject and asserts the result is empty. It is deterministic, with no I/O, concurrency or timing, so it is a passing control. No TRX or logs exist yet. Starting baseline round 1 with 1 runner and 1 iteration. Limitation: no failure evidence yet.",
+  "evidence_read": ["/tmp/gh-aw/issue-proof/context.json", "/tmp/gh-aw/issue-proof/test-source.cs (full test source, empty-object test lines)"],
+  "iterations": 1,
+  "runners": 1
+}
