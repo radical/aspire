@@ -12,7 +12,7 @@
     "resume_delay_seconds": 60,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "dispatching-worker",
   "stage": "verification",
   "agents": [
     "39637993884",
@@ -95,40 +95,53 @@
         "rationale": "Deliberately ineffective control-plane probe, not a real fix: only inserts a comment after the method's opening brace to exercise the failed-verification feedback path. Failure is expected to persist.",
         "limitation": "This candidate is intentionally ineffective; a real repair will be authored after its verification fails and the new TRX/logs are read. No natural flake reproduction is claimed."
       }
+    },
+    {
+      "attempt": 2,
+      "candidate_sha": "5fad4dc4cb924f93c665f09b57b0e3f7ea7acf82",
+      "source_blob": "95df31e7d42b22b84eb2ebe3a9927f8de2e131ae",
+      "branch": "flaky-issue-147-candidate-2",
+      "is_probe": false,
+      "diagnosis": {
+        "error": "OperationCanceledException: Resource 'chat' failed to become healthy; Current Health Degraded; blocking_check Healthy, resource_check Degraded (baseline run 39638616942 and probe verify run 39640507377 both failed identically).",
+        "root_cause": "The controlled fixture ForceExternalStatusDegraded makes resource_check return Degraded. The model resource 'chat' has no such check itself but ResourceHealthCheckService uses TryGetAnnotationsIncludingAncestorsOfType, so it inherits the parent's resource_check annotation; the aggregate stays Degraded even after blocking_check is released, so WaitForResourceHealthyAsync times out. This is an induced outage, not a natural flake.",
+        "prior_art": "Sibling test DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy removes the 'resource_check' HealthCheckAnnotation from the resource to drop the status-page check. Quarantine marker for microsoft/aspire#10977 is preserved.",
+        "rationale": "Inside the test method only: after the unchanged fixture invocation, remove the parent resource's resource_check HealthCheckAnnotation, as the sibling does. All readiness waits, the blocking-check release, shutdown and the quarantine attribute are unchanged; the probe comment is removed.",
+        "limitation": "Not run locally (no container runtime). Fixes only the induced outage path; no natural flake reproduction or elimination is claimed, and the test remains quarantined."
+      }
     }
   ],
-  "requested_executions": 2,
+  "requested_executions": 11,
   "enrollment_run_id": "39637940652",
-  "updated_at": "2026-10-21T17:09:46.949515+00:00",
+  "updated_at": "2026-10-21T17:14:52.939033+00:00",
   "agent_run_id": "39641305932",
   "agent_revision": "2a9b3624f1dc768e6bf964f4d2a58bd5f320de82",
   "worker": {
     "phase": "verify",
-    "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
-    "parent_run_id": "39639366111",
+    "candidate_sha": "5fad4dc4cb924f93c665f09b57b0e3f7ea7acf82",
+    "parent_run_id": "39641247376",
     "configuration": {
-      "iterations_per_runner": 1,
-      "runners": 1,
+      "iterations_per_runner": 3,
+      "runners": 3,
       "quarantine_project": false
     },
-    "reserved_executions": 1,
-    "run_id": "39640507377"
+    "reserved_executions": 9
   },
   "resume_after": 1792601925.5313044,
   "delay_exercised": true,
   "resumed_at": 1792601925.5314178,
   "candidate": {
-    "attempt": 1,
-    "candidate_sha": "dcc8008d3856796f2608e2b05aff40e9c687567f",
-    "source_blob": "ce45d96e3474a5642efc75e44cc671007084f464",
-    "branch": "flaky-issue-147-candidate-1",
-    "is_probe": true,
+    "attempt": 2,
+    "candidate_sha": "5fad4dc4cb924f93c665f09b57b0e3f7ea7acf82",
+    "source_blob": "95df31e7d42b22b84eb2ebe3a9927f8de2e131ae",
+    "branch": "flaky-issue-147-candidate-2",
+    "is_probe": false,
     "diagnosis": {
-      "error": "OperationCanceledException: Resource 'chat' failed to become healthy before cancellation; state Running, health Degraded; blocking_check Healthy, resource_check Degraded.",
-      "root_cause": "The controlled fixture ForceExternalStatusDegraded registers a resource_check that reports Degraded ('Controlled external-status outage') for the model resource, so WaitForResourceHealthyAsync can never succeed. This is an induced outage, not a natural flake.",
-      "prior_art": "Quarantine marker for microsoft/aspire#10977 is preserved; sibling test DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy uses the same pattern without the fault helper.",
-      "rationale": "Deliberately ineffective control-plane probe, not a real fix: only inserts a comment after the method's opening brace to exercise the failed-verification feedback path. Failure is expected to persist.",
-      "limitation": "This candidate is intentionally ineffective; a real repair will be authored after its verification fails and the new TRX/logs are read. No natural flake reproduction is claimed."
+      "error": "OperationCanceledException: Resource 'chat' failed to become healthy; Current Health Degraded; blocking_check Healthy, resource_check Degraded (baseline run 39638616942 and probe verify run 39640507377 both failed identically).",
+      "root_cause": "The controlled fixture ForceExternalStatusDegraded makes resource_check return Degraded. The model resource 'chat' has no such check itself but ResourceHealthCheckService uses TryGetAnnotationsIncludingAncestorsOfType, so it inherits the parent's resource_check annotation; the aggregate stays Degraded even after blocking_check is released, so WaitForResourceHealthyAsync times out. This is an induced outage, not a natural flake.",
+      "prior_art": "Sibling test DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy removes the 'resource_check' HealthCheckAnnotation from the resource to drop the status-page check. Quarantine marker for microsoft/aspire#10977 is preserved.",
+      "rationale": "Inside the test method only: after the unchanged fixture invocation, remove the parent resource's resource_check HealthCheckAnnotation, as the sibling does. All readiness waits, the blocking-check release, shutdown and the quarantine attribute are unchanged; the probe comment is removed.",
+      "limitation": "Not run locally (no container runtime). Fixes only the induced outage path; no natural flake reproduction or elimination is claimed, and the test remains quarantined."
     }
   },
   "failed_probe_observed": true
