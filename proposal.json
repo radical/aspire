@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "issue_number": 148,
+  "state_revision": "efdf97d5a4f8ef7eefcb013a38bf896b6c31efcf",
+  "action": "reproduce",
+  "explanation": "Test contract: FlattenJsonObject_HandlesEmptyObject is a synchronous, deterministic test that builds an empty JsonObject, calls JsonFlattener.FlattenJsonObject, and asserts the result is empty. No timing, I/O, ports or shared state. Issue describes a passing control; starting with the first baseline round (1 runner, 1 iteration). Limitation: only source inspected, no run evidence yet.",
+  "evidence_read": ["/tmp/gh-aw/issue-proof/context.json", "/tmp/gh-aw/issue-proof/test-source.cs lines 67-78 (target test)"],
+  "iterations": 1,
+  "runners": 1
+}
