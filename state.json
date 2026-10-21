@@ -12,11 +12,12 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "dispatching-agent",
+  "phase": "awaiting-agent",
   "stage": "baseline",
   "agents": [
     "39637986705",
-    "39639282218"
+    "39639282218",
+    "39640665207"
   ],
   "workers": [
     {
@@ -117,9 +118,9 @@
   "candidates": [],
   "requested_executions": 5,
   "enrollment_run_id": "39637945282",
-  "updated_at": "2026-10-21T17:05:27.292994+00:00",
-  "agent_run_id": "39639282218",
-  "agent_revision": "e9bf130837058b875d68c01a759b85f27db7433c",
+  "updated_at": "2026-10-21T17:05:31.878282+00:00",
+  "agent_run_id": "39640665207",
+  "agent_revision": "5538367d5c9db82546109580db0a3778fce65f12",
   "worker": {
     "phase": "reproduce",
     "candidate_sha": "8bb44fe03358922580990578b2040d7e2b00fa1b",
