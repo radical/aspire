@@ -1,0 +1,29 @@
+{
+  "experiment": "real-test-20261021",
+  "issue_url": "https://github.com/microsoft/aspire/issues/16189",
+  "test": "Aspire.Hosting.Tests.ExecutableResourceFailureLoggingTests.ExecutableExitsImmediately",
+  "candidate_sha": "aa56e005faa2ee6326f3c777f6d30dd43fece929",
+  "source_interpretation": "The test adds a pwsh executable that writes 'Hello from Stdout' to stdout and 'Hello from Stderr' to stderr then exits, starts the app, waits for the resource to reach Finished, disposes the app, then asserts captured fake-log lines end with both messages. Issue 16189 reports a Windows (Hosting-2) CI failure: Assert.Contains found only the stdout line (plus 'No custom certificate'), i.e. the stderr line was missing from collected logs, plausibly because log streaming lags the Finished state or is cut off at disposal. This is an observation of the report, not a proven cause; the test is quarantined.",
+  "rounds": [
+    {
+      "run_id": "39532076460",
+      "round": 1,
+      "executed": 1,
+      "failed": 0
+    },
+    {
+      "run_id": "39532798611",
+      "round": 2,
+      "executed": 2,
+      "failed": 0
+    }
+  ],
+  "total_executions": 3,
+  "total_failures": 0,
+  "evidence_read": [
+    "receipt.json",
+    "TRX and output.log for each iteration",
+    "job.log"
+  ],
+  "limitations": "This proves CI orchestration only (start -> dispatch -> resume -> second dispatch -> resume). It is not a reproduced flake, a code fix, or an upstream deployment. 3 passing runs do not show the flake is absent."
+}

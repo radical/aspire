@@ -1,7 +1,7 @@
 {
   "version": 1,
   "experiment": "real-test-20261021",
-  "phase": "awaiting-reproduction",
+  "phase": "orchestration-proven",
   "candidate_sha": "aa56e005faa2ee6326f3c777f6d30dd43fece929",
   "round": 2,
   "iterations": 2,
@@ -23,7 +23,25 @@
       ],
       "job_log_evidence": "job.log shows --filter-method \"*.ExecutableExitsImmediately\"; iteration summary Passed: 1 / 1, Failed: 0 / 1; output.log: total 1, failed 0, succeeded 1.",
       "interpretation": "TRX outcome=Passed (duration ~8.9s) on Windows. One passing execution does not establish whether the flake is fixed or reproducible; no build/runner failure observed. A larger run is needed for more signal."
+    },
+    {
+      "run_id": "39532798611",
+      "round": 2,
+      "executed": 2,
+      "failed": 0,
+      "candidate_sha": "aa56e005faa2ee6326f3c777f6d30dd43fece929",
+      "artifact_paths_read": [
+        "receipt.json",
+        "artifact/iteration-1/real-proof.trx",
+        "artifact/iteration-1/output.log",
+        "artifact/iteration-2/real-proof.trx",
+        "artifact/iteration-2/output.log",
+        "job.log"
+      ],
+      "job_log_evidence": "job.log shows --filter-method \"*.ExecutableExitsImmediately\"; summary Passed: 2 / 2, Failed: 0 / 2. Both TRX files show outcome=Passed, executed=1, failed=0 (~7.9s, ~5.1s); output.logs total 1 failed 0.",
+      "interpretation": "Two more real passing executions on Windows, no build/runner failure. Not a reproduction or proof of a fix; shows only that the CI orchestration ran the real test."
     }
   ],
-  "initial_analysis": "The test adds a pwsh executable that writes 'Hello from Stdout' to stdout and 'Hello from Stderr' to stderr then exits, starts the app, waits for the resource to reach Finished, disposes the app, then asserts captured fake-log lines end with both messages. Issue 16189 reports a Windows (Hosting-2) CI failure: Assert.Contains found only the stdout line (plus 'No custom certificate'), i.e. the stderr line was missing from collected logs, plausibly because log streaming lags the Finished state or is cut off at disposal. This is an observation of the report, not a proven cause; the test is quarantined."
+  "initial_analysis": "The test adds a pwsh executable that writes 'Hello from Stdout' to stdout and 'Hello from Stderr' to stderr then exits, starts the app, waits for the resource to reach Finished, disposes the app, then asserts captured fake-log lines end with both messages. Issue 16189 reports a Windows (Hosting-2) CI failure: Assert.Contains found only the stdout line (plus 'No custom certificate'), i.e. the stderr line was missing from collected logs, plausibly because log streaming lags the Finished state or is cut off at disposal. This is an observation of the report, not a proven cause; the test is quarantined.",
+  "final_agent_run_id": "39533271567"
 }
