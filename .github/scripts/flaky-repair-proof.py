@@ -20,7 +20,7 @@ spec.loader.exec_module(real)
 REPOSITORY = real.REPOSITORY
 BASE = "aa56e005faa2ee6326f3c777f6d30dd43fece929"
 TARGET = os.environ.get("REPAIR_TARGET", "executable")
-if TARGET not in {"executable", "openai"}:
+if TARGET not in {"executable", "openai", "openai-controlled"}:
     raise ValueError("Unknown repair target")
 MEMORY = "memory/flaky-repair-20261021"
 EXPERIMENT = "repair-20261021"
@@ -42,7 +42,7 @@ REQUIRED_CHECKS = (
     'Assert.Contains(logLines, x => x.EndsWith("Hello from Stdout"));',
     'Assert.Contains(logLines, x => x.EndsWith("Hello from Stderr"));',
 )
-if TARGET == "openai":
+if TARGET.startswith("openai"):
     MEMORY = "memory/flaky-openai-repair-20261021"
     EXPERIMENT = "openai-repair-20261021"
     SOURCE = "tests/Aspire.Hosting.OpenAI.Tests/OpenAIFunctionalTests.cs"
@@ -71,7 +71,26 @@ Keep the test quarantined for monitoring.
 
 Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
 """
-RUNNER_OS = "ubuntu-latest" if TARGET == "openai" else "windows-latest"
+if TARGET == "openai-controlled":
+    BASE = "aa080c329e164aad343b6b7390d5665f47499db0"
+    MEMORY = "memory/flaky-controlled-repair-20261021"
+    EXPERIMENT = "controlled-repair-20261021"
+    AGENT = ".github/workflows/flaky-controlled-repair-agent.lock.yml"
+    PUBLISHER = ".github/workflows/flaky-controlled-repair-publish.yml"
+    ROOT = Path("/tmp/gh-aw/controlled-repair-evidence")
+    REQUIRED_CHECKS += ("ForceExternalStatusDegraded(builder.Services);",)
+    COMMIT_MESSAGE = """test: isolate model readiness from inherited external status
+
+The controlled external status check remains Degraded after the intended
+blocking check becomes Healthy. Isolate the readiness contract while
+preserving the injected dependency failure and every original state wait.
+
+This verifies repair of an induced failure, not natural reproduction of
+the quarantine flake. Keep the test quarantined.
+
+Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+"""
+RUNNER_OS = "ubuntu-latest" if TARGET.startswith("openai") else "windows-latest"
 
 
 def api(endpoint, body=None):
@@ -140,7 +159,7 @@ def memory_at(run_id):
 def worker_identity(worker_id):
     worker = run_identity(worker_id, WORKER)
     # Trusted run-name: Repair openai reproduce [39531803470] <source SHA>.
-    prefix = r"Repair (?:executable )?" if TARGET == "executable" else r"Repair openai "
+    prefix = r"Repair (?:executable )?" if TARGET == "executable" else f"Repair {TARGET} "
     match = re.fullmatch(
         prefix + r"(reproduce|verify) \[([0-9]+)\] ([0-9a-f]{40})",
         worker["display_title"],
@@ -318,7 +337,7 @@ def publish(agent_id):
     directory, state = memory_at(agent_id)
     if state["phase"] != "candidate-ready" or str(state["agent_run_id"]) != agent_id:
         raise ValueError("Agent did not prepare an authorized candidate")
-    if TARGET == "openai" and (
+    if TARGET.startswith("openai") and (
         type(state.get("fix_attempt")) is not int or not 1 <= state["fix_attempt"] <= 3
     ):
         raise ValueError("Repair publication exceeds the three-attempt budget")
@@ -350,13 +369,14 @@ def publish(agent_id):
     configuration = {
         key: baseline[key] for key in ("iterations_per_runner", "runners", "quarantine_project")
     }
-    if TARGET == "openai":
+    if TARGET.startswith("openai"):
         configuration["iterations_per_runner"] = max(3, configuration["iterations_per_runner"])
         configuration["runners"] = 3
     publication = {
         "base_sha": BASE, "candidate_sha": published, "branch": branch,
         "agent_run_id": agent_id, "publisher_run_id": os.environ["GITHUB_RUN_ID"],
         "baseline_run_id": baseline["run_id"], "source_path": SOURCE,
+        "induced_failure": TARGET == "openai-controlled",
         "diagnosis": payload["diagnosis"],
         "configuration": configuration,
         "baseline_configuration": {

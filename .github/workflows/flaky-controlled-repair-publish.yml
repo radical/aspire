@@ -1,0 +1,34 @@
+name: Publish Controlled Repair Candidate
+run-name: "Publish repair [${{ inputs.agent_run_id }}]"
+on:
+  workflow_dispatch:
+    inputs:
+      agent_run_id:
+        type: string
+        required: true
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: flaky-controlled-repair-publish-20261021
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish the scoped repair while preserving the induced failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_RUN_ID: ${{ inputs.agent_run_id }}
+          REPAIR_TARGET: openai-controlled
+        run: python3 .github/scripts/flaky-repair-proof.py publish
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repair-publication
+          path: /tmp/gh-aw/controlled-repair-evidence/publication.json
+          if-no-files-found: error
