@@ -10,7 +10,8 @@ public static class Program
     public const string Help = """
         KnownTestFailures: recorded replay and opt-in native GitHub CI.
         ci-run --repo DIR --project PATH --output DIR
-          Uses repository-owned KTF_* workflow configuration; Linux normal MTP only.
+          Uses repository-owned KTF_* workflow configuration; normal or prepared archives.
+        prepare-archives --repo DIR --project PATH --output DIR --manifest FILE
         prove --repo DIR --fixture EXE --output DIR
         gate --repo DIR --fixture EXE --output DIR --remote URL
         seed --repo DIR --fixture EXE --output DIR --expires UTC --issue HTTPS --owner NAME
@@ -49,6 +50,11 @@ public static class Program
             if (args[0] == "ci-run")
             {
                 return await ProductionRunner.RunCommandAsync(args, output, error).ConfigureAwait(false);
+            }
+            if (args[0] == "prepare-archives")
+            {
+                await ArchivedExecution.PrepareAsync(args).ConfigureAwait(false);
+                return 0;
             }
             var allowed = args[0] switch
             {

@@ -788,6 +788,9 @@ affected_project_rules:
 # Layer 2 selected tests, to a fixpoint (a derived test is itself expanded; cycle-safe). This is how
 # a job fires based on WHICH tests run, regardless of which file triggered them.
 derived_targets:
+  - tests: [test:ConfigurationSchemaGenerator.Tests]
+    targets: [test:Infrastructure.Tests]
+    reason: infrastructure archive coverage builds and executes this multi-TFM fixture at runtime
   - tests: [test:Aspire.Acquisition.Tests]
     targets: [job:winget-installer, job:homebrew-installer]
     reason: acquisition covers the installers; prepare the WinGet/Homebrew installer artifacts too

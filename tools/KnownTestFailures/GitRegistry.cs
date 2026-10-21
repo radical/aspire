@@ -7,6 +7,9 @@ namespace KnownTestFailures;
 
 public static class GitRegistry
 {
+    public static async Task<string> HeadAsync(string repository) =>
+        (await RunAsync(repository, ["rev-parse", "--verify", "HEAD"]).ConfigureAwait(false)).Trim();
+
     public const string ManagedPath = "registry.json";
 
     public static async Task<RegistryInput> FetchBranchAsync(

@@ -2,15 +2,21 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 
 namespace KnownTestFailures;
 
 public sealed record ProductionModule(
     string Id, string Project, string Framework, string Assembly, string Command, string[] PrefixArguments,
-    string WorkingDirectory, string[] Arguments, Dictionary<string, string> Environment, bool SupportedAdapter);
+    string WorkingDirectory, string[] Arguments, Dictionary<string, string> Environment, bool SupportedAdapter)
+{
+    public string? ArchivePath { get; init; }
+    public string? ArchiveAssembly { get; init; }
+}
 
 public sealed record ProductionRequest(
     ProductionModule[] Modules, string OutputDirectory, string Lane, string Platform, string Ref,
@@ -58,11 +64,29 @@ public static class ProductionRunner
             var lane = Environment.GetEnvironmentVariable("KTF_LANE");
             Format.Require(lane == "regular", "Selective CI execution requires an explicit supported KTF_LANE=regular.");
             var scenario = proof ? Environment.GetEnvironmentVariable("KTF_SCENARIO") ?? "candidate" : "pass";
-            Format.Require(scenario is "pass" or "candidate" or "mixed" or "parameter" or "changed", "Unknown proof scenario.");
-            var modules = await ResolveAsync(repo, NormalizeProjectPath(repo, args[4]), directory,
-                Environment.GetEnvironmentVariable("KTF_BASE_ARGS") ?? "",
-                Environment.GetEnvironmentVariable("KTF_EXTRA_ARGS") ?? "",
-                Environment.GetEnvironmentVariable("KTF_VERSION_ARGS") ?? "").ConfigureAwait(false);
+            Format.Require(scenario is "pass" or "candidate" or "mixed" or "parameter" or "changed" or "crash" or "empty", "Unknown proof scenario.");
+            var project = NormalizeProjectPath(repo, args[4]);
+            var kind = Environment.GetEnvironmentVariable("KTF_EXECUTION_KIND") ?? "normal";
+            Format.Require(kind is "normal" or "archive", "Unknown selective execution kind.");
+            ProductionModule[] modules;
+            if (kind == "archive")
+            {
+                var prepared = Format.Read<PreparedArchives>(File.ReadAllText(
+                    Environment.GetEnvironmentVariable("KTF_ARCHIVE_MANIFEST") ?? ""));
+                Format.Require(prepared.SchemaVersion == 1 && prepared.Project == project &&
+                    prepared.ExecutedSha == executedSha && prepared.Modules.Length > 0 &&
+                    prepared.Modules.All(m => m.Project == project) &&
+                    prepared.Modules.Select(m => m.Framework).Distinct(StringComparer.Ordinal).Count() == prepared.Modules.Length,
+                    "Prepared archives differ from the selected project, checkout or frameworks.");
+                modules = prepared.Modules;
+            }
+            else
+            {
+                modules = await ResolveAsync(repo, project, directory,
+                    Environment.GetEnvironmentVariable("KTF_BASE_ARGS") ?? "",
+                    Environment.GetEnvironmentVariable("KTF_EXTRA_ARGS") ?? "",
+                    Environment.GetEnvironmentVariable("KTF_VERSION_ARGS") ?? "", false).ConfigureAwait(false);
+            }
             if (proof)
             {
                 modules = modules.Select(module => module with
@@ -70,7 +94,8 @@ public static class ProductionRunner
                     Environment = new(module.Environment)
                     {
                         ["ASPIRE_KNOWN_FAILURE_PIPELINE_PROOF"] = "true",
-                        ["ASPIRE_KNOWN_FAILURE_PIPELINE_SCENARIO"] = scenario
+                        ["ASPIRE_KNOWN_FAILURE_PIPELINE_SCENARIO"] = scenario,
+                        ["ASPIRE_KNOWN_FAILURE_PIPELINE_ARCHIVE"] = kind == "archive" ? "true" : "false"
                     }
                 }).ToArray();
             }
@@ -125,16 +150,17 @@ public static class ProductionRunner
     }
 
     public static async Task<ProductionModule[]> ResolveAsync(
-        string repo, string project, string directory, string baseArguments, string extraArguments, string versionArguments)
+        string repo, string project, string directory, string baseArguments, string extraArguments, string versionArguments, bool archived)
     {
         Format.Path(project, "project");
         Format.Require(project.EndsWith(".csproj", StringComparison.Ordinal), "Expected a repository-relative csproj.");
         var dotnet = Path.Combine(repo, ".dotnet", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-        var properties = NativeEvidence.Arguments(versionArguments);
+        var properties = NativeEvidence.Arguments(versionArguments, OperatingSystem.IsWindows());
         Format.Require(properties.All(p => p.StartsWith("/p:", StringComparison.Ordinal) || p.StartsWith("-p:", StringComparison.Ordinal)),
             "Version overrides must be MSBuild property arguments.");
         var common = new[] { "msbuild", project, "-nologo", "-p:ContinuousIntegrationBuild=true", "-p:KnownTestFailures=true" }
-            .Concat(properties).ToArray();
+            .Concat(properties).Concat(archived ?
+                ["-p:PrepareForHelix=true", "-p:ArchiveTests=true", "-p:RequiresNugets=true", "-p:IsGitHubActionsRunner=true"] : []).ToArray();
         var frameworks = await ExecuteAsync(dotnet, [.. common, "-getProperty:TargetFramework,TargetFrameworks"],
             repo, new Dictionary<string, string>(), directory, "frameworks", TimeSpan.FromMinutes(5)).ConfigureAwait(false);
         Format.Require(frameworks.ExitCode == 0 && !frameworks.TimedOut, "Cannot evaluate selected frameworks.");
@@ -151,7 +177,7 @@ public static class ProductionRunner
             var resolved = await ExecuteAsync(dotnet,
                 [.. common, "-p:TargetFramework=" + selected[index], "-target:KnownTestFailuresModule",
                  "-bl:" + Path.Combine(directory, $"module-{index}-evaluation.binlog"),
-                 "-getProperty:TargetPath,RunCommand,RunArguments,RunWorkingDirectory,DefineConstants,PublishAot,IsTestProject",
+                 "-getProperty:TargetPath,RunCommand,RunArguments,RunWorkingDirectory,DefineConstants,PublishAot,IsTestProject,TestArchivePath,TestsArchiveSourceDir",
                  "-getItem:TestingPlatformEnvironmentVariable,PackageReference"],
                 repo, new Dictionary<string, string>(), directory, $"module-{index}-metadata", TimeSpan.FromMinutes(5)).ConfigureAwait(false);
             Format.Require(resolved.ExitCode == 0 && !resolved.TimedOut, "Cannot resolve selected test module.");
@@ -160,13 +186,18 @@ public static class ProductionRunner
             var values = root.GetProperty("Properties");
             string Value(string key) => values.GetProperty(key).GetString()!;
             var assembly = Value("TargetPath");
-            var command = Value("RunCommand");
-            var arguments = NativeEvidence.Arguments(Value("RunArguments")).Concat(NativeEvidence.Arguments(baseArguments))
-                .Concat(NativeEvidence.Arguments(extraArguments)).ToArray();
+            var command = archived ? dotnet : Value("RunCommand");
+            // Archived execution has always used explicit workflow arguments plus
+            // category=failing exclusion, not normal RunArguments or Arcade/Helix args.
+            var arguments = (archived ? ["--filter-not-trait", "category=failing"] :
+                NativeEvidence.Arguments(Value("RunArguments"), OperatingSystem.IsWindows()))
+                .Concat(NativeEvidence.Arguments(baseArguments, OperatingSystem.IsWindows()))
+                .Concat(NativeEvidence.Arguments(extraArguments, OperatingSystem.IsWindows())).ToArray();
             Format.Require(arguments.All(a => !a.StartsWith("--report-", StringComparison.Ordinal) &&
                 a is not "--results-directory" and not "--list-tests"), "Runner owns discovery and report options.");
             var environment = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var item in root.GetProperty("Items").GetProperty("TestingPlatformEnvironmentVariable").EnumerateArray())
+            foreach (var item in root.GetProperty("Items").GetProperty("TestingPlatformEnvironmentVariable").EnumerateArray()
+                .Where(_ => !archived))
             {
                 environment.Add(item.GetProperty("Identity").GetString()!, item.GetProperty("Value").GetString()!);
             }
@@ -174,13 +205,21 @@ public static class ProductionRunner
                 .Any(p => p.GetProperty("Identity").GetString() == "xunit.v3.mtp-v2") &&
                 !Value("DefineConstants").Split(';').Contains("XUNIT_GENERATOR", StringComparer.Ordinal) &&
                 !Value("PublishAot").Equals("true", StringComparison.OrdinalIgnoreCase);
-            Format.Require(File.Exists(assembly) && File.Exists(command), "Selected module must already be built with an apphost.");
+            Format.Require(File.Exists(assembly) && File.Exists(command), "Selected module must already be built with its launch command.");
             // Native SDK dotnet test uses the module directory, even when the
             // dotnet-run RunWorkingDirectory property is set. Launching from the
             // checkout instead changes relative fixture/resource lookup behavior.
-            modules.Add(new($"module-{index}", project, selected[index], assembly, command, [],
-                Path.GetDirectoryName(assembly)!, arguments, environment, adapter));
+            modules.Add(new ProductionModule($"module-{index}", project, selected[index], assembly, command, [],
+                Path.GetDirectoryName(assembly)!, arguments, environment, adapter)
+            {
+                ArchivePath = archived ? Value("TestArchivePath") : null,
+                ArchiveAssembly = archived ? Path.GetRelativePath(Value("TestsArchiveSourceDir"), assembly).Replace(Path.DirectorySeparatorChar, '/') : null
+            });
         }
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        Format.Require(modules.Select(m => m.Assembly).Distinct(comparer).Count() == modules.Count &&
+            (!archived || modules.Select(m => m.ArchivePath).Distinct(comparer).Count() == modules.Count),
+            "Selected frameworks resolve to overlapping assembly or archive outputs.");
         return [.. modules];
     }
 
@@ -240,6 +279,9 @@ public static class ProductionRunner
         }
         Directory.CreateDirectory(request.OutputDirectory);
         Save(request.OutputDirectory, "request.json", request);
+        // Invalid/absent/duplicate timeouts are configuration errors, not permission
+        // to substitute a shorter budget or launch a potentially unbounded process.
+        var deadlines = request.Modules.ToDictionary(m => m.Id, m => ExecutionDeadline(m.Arguments), StringComparer.Ordinal);
         var diagnostics = new List<string>();
         var inventories = new Dictionary<string, DiscoveredCase[]>(StringComparer.Ordinal);
         // Persist every selected invocation BEFORE discovery/execution. A bad discovery
@@ -292,7 +334,7 @@ public static class ProductionRunner
                  "--report-xunit-trx", "--report-xunit-trx-filename", "identity.evidence",
                  "--report-xunit-xml", "--report-xunit-xml-filename", "lifecycle.xml",
                  "--results-directory", directory, "--no-ansi"],
-                module.WorkingDirectory, module.Environment, directory, "execution", TimeSpan.FromMinutes(25)).ConfigureAwait(false);
+                module.WorkingDirectory, module.Environment, directory, "execution", deadlines[module.Id]).ConfigureAwait(false);
             rawExits.Add(process.ExitCode);
             await output.WriteLineAsync($"{module.Id} ({module.Project}/{module.Framework}): raw MTP exit={process.ExitCode}").ConfigureAwait(false);
             ExpectedCase[] expected = [];
@@ -340,6 +382,35 @@ public static class ProductionRunner
         Save(request.OutputDirectory, "evidence.json", evidence);
         File.WriteAllText(Path.Combine(request.OutputDirectory, "raw-exit-code.txt"), raw.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return capture;
+    }
+
+    public static TimeSpan ExecutionDeadline(string[] arguments)
+    {
+        var positions = arguments.Select((value, index) => (value, index))
+            .Where(arg => arg.value == "--timeout").Select(arg => arg.index).ToArray();
+        Format.Require(positions.Length == 1 && positions[0] + 1 < arguments.Length,
+            "Selective execution requires exactly one explicit positive MTP --timeout value.");
+        // MTP accepts explicit units, including "30m", "5400s" and "1.5h";
+        // bare numbers, disabled timeouts and duplicate options must not silently
+        // fall back to a different budget. Keep the original arguments unchanged.
+        // https://github.com/microsoft/testfx/blob/main/src/Platform/Microsoft.Testing.Platform/Helpers/TimeSpanParser.cs
+        var match = Regex.Match(arguments[positions[0] + 1],
+            @"\A(?<value>[0-9]+(?:\.[0-9]+)?)\s*(?<unit>ms|mils?|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hours?|d|days?)\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        Format.Require(match.Success,
+            "Invalid MTP --timeout duration; a positive value and explicit unit are required.");
+        Format.Require(double.TryParse(match.Groups["value"].Value,
+            NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value),
+            "Invalid numeric MTP --timeout duration.");
+        var unit = match.Groups["unit"].Value.ToLowerInvariant();
+        var milliseconds = value * (unit.StartsWith("ms", StringComparison.Ordinal) || unit.StartsWith("mil", StringComparison.Ordinal) ? 1 :
+            unit[0] switch { 's' => 1_000, 'm' => 60_000, 'h' => 3_600_000, _ => 86_400_000 });
+        // Five minutes covers report flushing, MTP shutdown and pipe draining after
+        // the configured session timeout. Never shorten the test's own deadline.
+        var grace = TimeSpan.FromMinutes(5);
+        Format.Require(milliseconds > 0 && milliseconds <= uint.MaxValue - 1 - grace.TotalMilliseconds,
+            "MTP --timeout plus reporting/shutdown grace exceeds the supported process timer range.");
+        return TimeSpan.FromMilliseconds(milliseconds) + grace;
     }
 
     private static bool SupportedException(Exception ex) =>
@@ -410,12 +481,12 @@ public static class ProductionRunner
             await stdoutFile.DisposeAsync().ConfigureAwait(false);
             await stderrFile.DisposeAsync().ConfigureAwait(false);
             var text = await File.ReadAllTextAsync(stdoutPath).ConfigureAwait(false);
-            Save(directory, name + ".process.json", new { process.ExitCode, timedOut, command, arguments });
+            Save(directory, name + ".process.json", new { process.ExitCode, timedOut, command, arguments, deadlineMilliseconds = limit.TotalMilliseconds });
             return new(process.ExitCode, text, timedOut);
         }
         catch (Exception ex) when (SupportedException(ex))
         {
-            Save(directory, name + ".process.json", new { exitCode = Evaluator.BlockedExitCode, startError = ex.Message, command, arguments });
+            Save(directory, name + ".process.json", new { exitCode = Evaluator.BlockedExitCode, startError = ex.Message, command, arguments, deadlineMilliseconds = limit.TotalMilliseconds });
             File.WriteAllText(Path.Combine(directory, name + ".stdout.txt"), "");
             File.WriteAllText(Path.Combine(directory, name + ".stderr.txt"), ex.Message);
             return new(Evaluator.BlockedExitCode, "", false);

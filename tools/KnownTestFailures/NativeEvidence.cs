@@ -122,12 +122,12 @@ public static class NativeEvidence
         foreach (var collection in assembly.Elements("collection"))
         {
             var names = collection.Elements("test").Select(t => (string?)t.Attribute("name")).ToHashSet(StringComparer.Ordinal);
-            Totals(collection, results.Where(r => names.Contains(r.DisplayName)).ToArray());
+            Totals(collection, results.Where(r => names.Contains(LifecycleText(r.DisplayName))).ToArray());
         }
         foreach (var result in results)
         {
             var matching = tests.Where(t => (string?)t.Attribute("type") + "." + (string?)t.Attribute("method") == result.Method &&
-                (string?)t.Attribute("name") == result.DisplayName).ToArray();
+                (string?)t.Attribute("name") == LifecycleText(result.DisplayName)).ToArray();
             Format.Require(matching.Length == 1, "Lifecycle test identity is ambiguous.");
             var test = matching[0];
             Finished(test);
@@ -142,7 +142,7 @@ public static class NativeEvidence
             Format.Require(test.Elements("reason").Count() == (outcome == "Skip" ? 1 : 0) &&
                 test.Elements("failure").Count() == (outcome == "Fail" ? 1 : 0),
                 "Lifecycle failure/skip details contradict outcome.");
-            Format.Require(outcome != "Skip" || test.Element("reason")!.Value == result.SkipReason,
+            Format.Require(outcome != "Skip" || test.Element("reason")!.Value == LifecycleText(result.SkipReason!, false),
                 "Lifecycle skip reason contradicts TRX.");
             foreach (var traits in test.Elements("traits"))
             {
@@ -153,17 +153,40 @@ public static class NativeEvidence
             {
                 Format.Require(failure.Elements().All(e => e.Name.LocalName is "message" or "stack-trace" && !e.HasElements) &&
                     failure.Elements("message").Count() == 1 && failure.Elements("stack-trace").Count() <= 1 &&
-                    failure.Element("message")!.Value == result.Message, "Lifecycle failure contradicts TRX.");
+                    failure.Element("message")!.Value == LifecycleText(result.Message!, false), "Lifecycle failure contradicts TRX.");
             }
         }
     }
 
-    public static string[] Arguments(string text)
+    private static string LifecycleText(string value, bool escapeNewlines = true)
+    {
+        // xUnit's XML attributes/text add a reversible escape layer beyond XML:
+        // display `M(value: "C:\work")` becomes `M(value: \"C:\\work\")`.
+        // Compare the expected escaped text, never heuristically unescape identities.
+        // https://github.com/xunit/xunit/blob/8bf043c053/src/xunit.v3.runner.common/Utility/XmlUtility.cs
+        return string.Concat(value.Select((c, index) => c switch
+        {
+            '"' => "\\\"", '\\' => "\\\\", '\0' => "\\0", '\a' => "\\a",
+            '\b' => "\\b", '\f' => "\\f", '\t' => "\\t", '\v' => "\\v",
+            '\n' => escapeNewlines ? "\\n" : "\n", '\r' => escapeNewlines ? "\\r" : "\r",
+            < ' ' => "\\x" + ((int)c).ToString("x2", CultureInfo.InvariantCulture),
+            '\ufffe' or '\uffff' => "\\x" + ((int)c).ToString("x4", CultureInfo.InvariantCulture),
+            _ when char.IsHighSurrogate(c) && (index + 1 == value.Length || !char.IsLowSurrogate(value[index + 1])) ||
+                char.IsLowSurrogate(c) && (index == 0 || !char.IsHighSurrogate(value[index - 1])) =>
+                    "\\x" + ((int)c).ToString("x4", CultureInfo.InvariantCulture),
+            _ => c.ToString()
+        }));
+    }
+
+    public static string[] Arguments(string text, bool powerShell = false)
     {
         // Trusted workflow/MSBuild option strings, e.g.:
         // --filter-class "*.Cases" --filter-not-trait 'category=failing'
-        // This bounded Linux grammar supports quotes/backslash escaping, but performs
-        // NO variable, command, pathname or shell expansion. Every token uses ArgumentList.
+        // Examples: --filter-class "*.Tests" /p:OutDir="C:\work tree\"
+        // Windows workflow literals use PowerShell quotes/backtick escaping, where
+        // backslashes are ordinary characters; Unix literals use backslash escaping.
+        // No variable, command or pathname expansion occurs. Tokens use ArgumentList.
+        // https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_quoting_rules
         var args = new List<string>();
         var token = new StringBuilder();
         char quote = '\0';
@@ -182,19 +205,30 @@ public static class NativeEvidence
                 continue;
             }
             started = true;
+            if (powerShell && quote != '\0' && c == quote && index + 1 < text.Length && text[index + 1] == quote)
+            {
+                token.Append(c);
+                index++;
+                continue;
+            }
             if (c is '\'' or '"' && (quote == '\0' || quote == c))
             {
                 quote = quote == '\0' ? c : '\0';
             }
-            else if (c == '\\' && quote != '\'')
+            else if (c == (powerShell ? '`' : '\\') && quote != '\'')
             {
                 Format.Require(++index < text.Length, "Trailing argument escape.");
                 var next = text[index];
-                if (quote == '"' && next is not ('"' or '\\' or '$' or '`'))
+                if (!powerShell && quote == '"' && next is not ('"' or '\\' or '$' or '`'))
                 {
                     token.Append('\\');
                 }
-                token.Append(next);
+                token.Append(powerShell ? next switch
+                {
+                    '0' => '\0', 'a' => '\a', 'b' => '\b', 'e' => '\u001b',
+                    'f' => '\f', 'n' => '\n', 'r' => '\r', 't' => '\t', 'v' => '\v',
+                    _ => next
+                } : next);
             }
             else
             {

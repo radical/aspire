@@ -23,12 +23,37 @@
                       Condition="'$(KnownTestFailures)' == 'true'" />
     <Delete Files="$(_KnownFailureSidecar);$(_KnownFailureOwner)"
             Condition="'$(KnownTestFailures)' != 'true' and Exists('$(_KnownFailureOwner)')" />
+    <Delete Files="$(TargetDir)aspire-known-test-failures.xml"
+            Condition="'$(KnownTestFailures)' != 'true'" />
+  </Target>
+
+  <!-- Author the receipt in the actual archive source before ZipDirectory. Consumers
+       select exact inner-TFM archive outputs, not whichever DLLs happen to be present. -->
+  <Target Name="KnownTestFailuresArchiveManifest" BeforeTargets="ZipTestArchive"
+          DependsOnTargets="ComputeTestArchivePaths"
+          Condition="'$(KnownTestFailures)' == 'true' and '$(_ShouldArchiveTests)' == 'true'">
+    <ItemGroup>
+      <_KnownFailureAdapter Include="@(PackageReference)" Condition="'%(Identity)' == 'xunit.v3.mtp-v2'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_KnownFailureManifest>$(TestsArchiveSourceDir)/aspire-known-test-failures.xml</_KnownFailureManifest>
+      <_KnownFailureAssembly>$([MSBuild]::MakeRelative('$(TestsArchiveSourceDir)', '$(TargetPath)').Replace('\', '/'))</_KnownFailureAssembly>
+      <_KnownFailureProject>$([MSBuild]::MakeRelative('$(RepoRoot)', '$(MSBuildProjectFullPath)').Replace('\', '/'))</_KnownFailureProject>
+      <_KnownFailureSupported>false</_KnownFailureSupported>
+      <_KnownFailureSupported Condition="'@(_KnownFailureAdapter)' != '' and !$([System.String]::Copy('$(DefineConstants)').Contains('XUNIT_GENERATOR')) and '$(PublishAot)' != 'true'">true</_KnownFailureSupported>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(_KnownFailureManifest)" Overwrite="true"
+                      Lines="&lt;module schemaVersion=&quot;1&quot; project=&quot;&quot; framework=&quot;&quot; assembly=&quot;&quot; supportedAdapter=&quot;&quot; /&gt;" />
+    <XmlPoke XmlInputPath="$(_KnownFailureManifest)" Query="/module/@project" Value="$(_KnownFailureProject)" />
+    <XmlPoke XmlInputPath="$(_KnownFailureManifest)" Query="/module/@framework" Value="$(TargetFramework)" />
+    <XmlPoke XmlInputPath="$(_KnownFailureManifest)" Query="/module/@assembly" Value="$(_KnownFailureAssembly)" />
+    <XmlPoke XmlInputPath="$(_KnownFailureManifest)" Query="/module/@supportedAdapter" Value="$(_KnownFailureSupported)" />
   </Target>
 
   <!-- Evaluated by the same inner build used for testing, never by scanning bin/.
        RunArguments contains the normal MTP arguments after ComputeRunArguments.
        TestRunnerAdditionalArguments belongs to Arcade/Helix and is NOT composed here. -->
-  <Target Name="KnownTestFailuresModule" DependsOnTargets="GetTargetPath;ComputeRunArguments">
+  <Target Name="KnownTestFailuresModule" DependsOnTargets="GetTargetPath;ComputeRunArguments;ComputeTestArchivePaths">
     <Error Condition="'$(IsTestProject)' != 'true' or '$(IsTestingPlatformApplication)' != 'true' or '$(TargetFramework)' == ''"
            Text="Known-test-failure execution requires an inner MTP test project." />
   </Target>

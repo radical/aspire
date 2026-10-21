@@ -12,6 +12,11 @@ permissions:
 
 jobs:
   gate:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJson(vars.ASPIRE_KNOWN_TEST_FAILURES_PROOF_MATRIX || '[{"os":"ubuntu-latest","scenario":"candidate"}]') }}
     if: >-
       github.repository == 'radical/aspire' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/known-test-failure-allowances') ||
@@ -20,10 +25,83 @@ jobs:
         github.event.pull_request.head.ref == 'known-test-failure-allowances'))
     uses: ./.github/workflows/run-tests.yml
     with:
-      testShortName: Infrastructure.KnownFailures
+      testShortName: ${{ format('Infrastructure.KnownFailures-normal-{0}', contains(fromJson('["pass","candidate","mixed","parameter","changed","crash","empty"]'), matrix.scenario) && matrix.scenario || 'invalid') }}
       testProjectPath: tests/Infrastructure.Tests/Infrastructure.Tests.csproj
-      os: ubuntu-latest
-      extraTestArgs: --filter-class "*.KnownFailurePipelineCases" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+      os: ${{ matrix.os }}
+      extraTestArgs: ${{ matrix.scenario == 'empty' && '--filter-method "*.NoSuchKnownFailureProofCase" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"' || '--filter-class "*.KnownFailurePipelineCases" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"' }}
       knownFailureProof: true
       knownFailureLane: regular
-      knownFailureProofScenario: candidate
+      knownFailureProofScenario: ${{ matrix.scenario }}
+
+  packages:
+    if: >-
+      vars.ASPIRE_KNOWN_TEST_FAILURES_ARCHIVE_PROOF_MATRIX != '' &&
+      github.repository == 'radical/aspire' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/known-test-failure-allowances') ||
+       (github.event_name == 'pull_request' && github.event.pull_request.draft == true &&
+        github.event.pull_request.head.repo.full_name == 'radical/aspire' &&
+        github.event.pull_request.head.ref == 'known-test-failure-allowances'))
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: windows-latest, rid: win-x64 }
+          - { os: macos-latest, rid: osx-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Build real proof package artifacts
+        shell: pwsh
+        env:
+          PROOF_RID: ${{ matrix.rid }}
+        run: |
+          $build = if ($IsWindows) { './build.cmd' } else { './build.sh' }
+          & $build -restore -build -ci -pack -projects "eng/dcppack/Aspire.Hosting.Orchestration.$env:PROOF_RID.csproj" /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($IsLinux) {
+            & $build -restore -build -ci -pack -projects src/Components/Aspire.StackExchange.Redis/Aspire.StackExchange.Redis.csproj /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Upload managed packages
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: built-nugets
+          path: artifacts/packages
+          if-no-files-found: error
+      - name: Upload RID packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: built-nugets-for-${{ matrix.rid }}
+          path: artifacts/packages/Debug/Shipping/Aspire.Hosting.Orchestration.${{ matrix.rid }}.*.nupkg
+          if-no-files-found: error
+      - name: Upload package build logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: known-failure-package-logs-${{ matrix.rid }}
+          path: artifacts/log
+
+  archive_gate:
+    needs: packages
+    if: vars.ASPIRE_KNOWN_TEST_FAILURES_ARCHIVE_PROOF_MATRIX != ''
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJson(vars.ASPIRE_KNOWN_TEST_FAILURES_ARCHIVE_PROOF_MATRIX || '[{"os":"ubuntu-latest","scenario":"candidate"}]') }}
+    uses: ./.github/workflows/run-tests.yml
+    with:
+      testShortName: ${{ format('Infrastructure.KnownFailures-archive-{0}', contains(fromJson('["pass","candidate","mixed","parameter","changed","crash","empty"]'), matrix.scenario) && matrix.scenario || 'invalid') }}
+      testProjectPath: tests/Infrastructure.Tests/Infrastructure.Tests.csproj
+      properties: '{"requiresNugets":true}'
+      os: ${{ matrix.os }}
+      extraTestArgs: ${{ matrix.scenario == 'empty' && '--filter-method "*.NoSuchKnownFailureProofCase" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"' || '--filter-class "*.KnownFailurePipelineCases" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"' }}
+      knownFailureProof: true
+      knownFailureLane: regular
+      knownFailureProofScenario: ${{ matrix.scenario }}

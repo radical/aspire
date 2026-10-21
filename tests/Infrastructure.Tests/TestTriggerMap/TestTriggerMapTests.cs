@@ -906,10 +906,12 @@ public sealed class TestTriggerMapTests
         }
     }
 
-    [Fact]
-    public void KnownFailureRunnerInputsSelectManagedTestsWithoutNonDotnetJobs()
+    [Theory]
+    [InlineData("tools/KnownTestFailures/ProductionRunner.cs")]
+    [InlineData("tools/KnownTestFailures/ArchivedExecution.cs")]
+    public void KnownFailureRunnerInputsSelectManagedTestsWithoutNonDotnetJobs(string path)
     {
-        var result = SelectWithRealMap("tools/KnownTestFailures/ProductionRunner.cs");
+        var result = SelectWithRealMap(path);
         var expected = LoadSolutionProjectPaths()
             .Where(path => path.StartsWith("tests/", StringComparison.Ordinal))
             .Select(path => Path.GetFileNameWithoutExtension(path)!)
@@ -918,6 +920,18 @@ public sealed class TestTriggerMapTests
         Assert.False(result.SelectsAll);
         Assert.Empty(result.UnmatchedFiles);
         Assert.Equal(expected, result.TestProjects.Order(StringComparer.Ordinal));
+        Assert.Empty(result.Jobs);
+    }
+
+    [Theory]
+    [InlineData("tests/ConfigurationSchemaGenerator.Tests/ConfigurationSchemaGenerator.Tests.csproj")]
+    [InlineData("src/Tools/ConfigurationSchemaGenerator/Program.cs")]
+    public void KnownFailureArchiveFixtureSelectionIncludesItsRuntimeConsumer(string path)
+    {
+        var result = SelectWithRealMap(path, "ConfigurationSchemaGenerator.Tests");
+        Assert.False(result.SelectsAll);
+        Assert.Equal(["ConfigurationSchemaGenerator.Tests", "Infrastructure.Tests"],
+            result.TestProjects.Order(StringComparer.Ordinal));
         Assert.Empty(result.Jobs);
     }
 

@@ -32,7 +32,6 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
     [InlineData(true)]
     public async Task CiEntryPointResolvesTheEvaluatedModuleAndCannotEnableForkFailureInjectionUpstream(bool absoluteProject)
     {
-        Assert.SkipUnless(!OperatingSystem.IsWindows(), "The production command currently exports the Linux normal argument contract.");
         using var fixture = new KnownTestFailuresProductionFixture(output);
         using var assets = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(RepoRoot.Path, "artifacts", "obj", "Infrastructure.Tests", "project.assets.json")));
@@ -50,6 +49,7 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
                 ["MSBUILDTERMINALLOGGER"] = "false",
                 ["GITHUB_REPOSITORY"] = "microsoft/aspire",
                 ["KTF_LANE"] = "regular",
+                ["KTF_EXECUTION_KIND"] = "normal",
                 ["KTF_SCOPE_REF"] = "refs/heads/main",
                 ["KTF_EXECUTED_SHA"] = "",
                 ["KTF_BASE_ARGS"] = "--ignore-exit-code 8 --timeout 2m",
@@ -133,6 +133,7 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
                 ["NUGET_PACKAGES"] = assets.RootElement.GetProperty("packageFolders").EnumerateObject().First().Name,
                 ["KTF_EXECUTED_SHA"] = "",
                 ["KTF_LANE"] = lane,
+                ["KTF_EXECUTION_KIND"] = "normal",
                 ["KTF_SCOPE_REF"] = "refs/heads/main",
                 ["KTF_BASE_ARGS"] = "--ignore-exit-code 8 --timeout 2m",
                 ["KTF_EXTRA_ARGS"] = "--filter-method '*.KnownFailurePipelineCases.Pass' --filter-not-trait 'quarantined=true' --filter-not-trait 'outerloop=true'",
@@ -153,7 +154,8 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
             Modules = [fixture.Module with
             {
                 Arguments = ["--filter-class", "*.MtpExitCodeScriptTests", "--filter-not-trait", "category=failing",
-                    "--filter-not-trait", "quarantined=true", "--filter-not-trait", "outerloop=true", "--ignore-exit-code", "8"]
+                    "--filter-not-trait", "quarantined=true", "--filter-not-trait", "outerloop=true", "--ignore-exit-code", "8",
+                    "--timeout", "2m"]
             }]
         };
         using var log = new StringWriter();
@@ -170,10 +172,16 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
         Assert.Equal(8, Assert.Single(decision.Evidence!.Invocations).ExpectedCases.Length);
     }
 
-    [Fact]
-    public async Task RealMixedOutputRequiresFreshProductionApprovalAndRejectsNeighborParameterSignatureAndUpdates()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealMixedOutputRequiresFreshProductionApprovalAndRejectsNeighborParameterSignatureAndUpdates(bool archived)
     {
         using var fixture = new KnownTestFailuresProductionFixture(output);
+        if (archived)
+        {
+            await fixture.UseArchiveAsync();
+        }
         fixture.Files.InitializeGit();
         var remote = Path.Combine(fixture.Files.Path, "registry-source");
         GitCli.Run(fixture.Files.Path, "init", "--initial-branch=main", remote);
@@ -239,6 +247,14 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
         Assert.Empty(wrongLane.Matches);
         Assert.Equal("outerloop", wrongLane.Evidence!.Lane);
         Assert.Equal(allowed.RegistrySource!.Commit, wrongLane.RegistrySource!.Commit);
+        var fetchesBeforeCrash = fetches;
+        var crash = await Run("abnormal-exit", "crash");
+        // The native MTP controller reports its actual incomplete-session exit 7,
+        // not the child test's requested termination status.
+        Assert.Equal(7, crash.OriginalExitCode);
+        Assert.Equal(7, crash.EffectiveExitCode);
+        Assert.Equal("blocked", crash.Status);
+        Assert.Equal(fetchesBeforeCrash, fetches);
 
         foreach (var scenario in new[] { "mixed", "parameter", "changed" })
         {
@@ -326,7 +342,7 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
         {
             Modules = [fixture.Module with
             {
-                Arguments = ["--filter-method", "*.NoSuchPipelineCase", "--ignore-exit-code", "8"]
+                Arguments = ["--filter-method", "*.NoSuchPipelineCase", "--ignore-exit-code", "8", "--timeout", "2m"]
             }]
         };
         using var log = new StringWriter();
@@ -363,7 +379,7 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
         {
             Modules = [fixture.Module with
             {
-                Arguments = ["--filter-method", "*.KnownFailurePipelineCases.Skip", "--ignore-exit-code", "8"]
+                Arguments = ["--filter-method", "*.KnownFailurePipelineCases.Skip", "--ignore-exit-code", "8", "--timeout", "2m"]
             }]
         };
         using var log = new StringWriter();
@@ -416,6 +432,84 @@ public sealed class KnownTestFailuresProductionTests(ITestOutputHelper output)
         XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
         trx.Descendants(ns + "TextMessages").First().Add(new XElement(ns + "ErrorInfo", "not ordinary output"));
         Assert.Throws<InvalidDataException>(() => StrictTrx.Read(trx.ToString(), true));
+    }
+
+    [Fact]
+    public async Task RealExecutionUsesThirtyMinuteSessionPlusShutdownGrace()
+    {
+        using var fixture = new KnownTestFailuresProductionFixture(output);
+        var request = fixture.Request("long-session-budget");
+        request = request with
+        {
+            Modules = [fixture.Module with
+            {
+                Arguments = ["--filter-method", "*.KnownFailurePipelineCases.Pass", "--timeout", "30m"]
+            }]
+        };
+        using var log = new StringWriter();
+        var decision = await ProductionRunner.RunAsync(request,
+            () => throw new IOException("Passing execution must not fetch."), log);
+        Assert.True(decision.EffectiveExitCode == 0, log.ToString());
+        using var receipt = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(request.OutputDirectory, "module-0", "execution.process.json")));
+        Assert.Equal(TimeSpan.FromMinutes(35).TotalMilliseconds,
+            receipt.RootElement.GetProperty("deadlineMilliseconds").GetDouble());
+        var arguments = receipt.RootElement.GetProperty("arguments").EnumerateArray().Select(a => a.GetString()).ToArray();
+        Assert.Equal("30m", arguments[Array.IndexOf(arguments, "--timeout") + 1]);
+        Assert.False(receipt.RootElement.GetProperty("timedOut").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("--timeout 0s")]
+    [InlineData("--timeout 30m --timeout 1m")]
+    [InlineData("--timeout invalid")]
+    public async Task InvalidTimeoutConfigurationCannotLaunchAnUnboundedProcess(string text)
+    {
+        using var fixture = new KnownTestFailuresProductionFixture(output);
+        var request = fixture.Request("invalid-session-budget");
+        request = request with { Modules = [fixture.Module with { Arguments = NativeEvidence.Arguments(text) }] };
+        using var log = new StringWriter();
+        await Assert.ThrowsAsync<InvalidDataException>(() => ProductionRunner.CaptureAsync(request, log));
+        var recorded = Format.Read<ProductionRequest>(File.ReadAllText(Path.Combine(request.OutputDirectory, "request.json")));
+        Assert.Equal(request.Modules[0].Arguments, recorded.Modules[0].Arguments);
+        Assert.False(File.Exists(Path.Combine(request.OutputDirectory, "module-0", "execution.process.json")));
+    }
+
+    [Theory]
+    [InlineData("30m", 2_100_000)]
+    [InlineData("20m", 1_500_000)]
+    [InlineData("90s", 390_000)]
+    [InlineData("1.5h", 5_700_000)]
+    [InlineData("500ms", 300_500)]
+    [InlineData("2 minutes", 420_000)]
+    [InlineData("1H", 3_900_000)]
+    [InlineData("1d", 86_700_000)]
+    public void ExecutionDeadlinePreservesTheEffectiveMtpTimeoutPlusShutdownGrace(string duration, double expectedMilliseconds)
+    {
+        string[] arguments = ["--filter-method", "*.Cases", "--timeout", duration, "--ignore-exit-code", "8"];
+        var original = arguments.ToArray();
+        Assert.Equal(TimeSpan.FromMilliseconds(expectedMilliseconds), ProductionRunner.ExecutionDeadline(arguments));
+        Assert.Equal(original, arguments);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("--timeout")]
+    [InlineData("--timeout 0s")]
+    [InlineData("--timeout -1m")]
+    [InlineData("--timeout infinite")]
+    [InlineData("--timeout 30")]
+    [InlineData("--timeout 30x")]
+    [InlineData("--timeout 30m --timeout 1m")]
+    [InlineData("--timeout 1m --timeout 30m")]
+    [InlineData("--timeout=30m")]
+    [InlineData("--timeout 999999999999999999999999999999999h")]
+    public void InvalidOrAmbiguousTimeoutsAreRejectedWithoutRewritingArguments(string text)
+    {
+        var arguments = NativeEvidence.Arguments(text);
+        var original = arguments.ToArray();
+        Assert.Throws<InvalidDataException>(() => ProductionRunner.ExecutionDeadline(arguments));
+        Assert.Equal(original, arguments);
     }
 
     [Theory]

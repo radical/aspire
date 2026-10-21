@@ -3,16 +3,16 @@
 `tools/KnownTestFailures` is a standalone .NET 10 tool for replaying recorded
 managed-test results against exact, approved failure allowances. It does not
 change test attributes or raw results. The reusable GitHub test workflow can
-apply selective allowances to Linux normal MTP runs. An independent fork-only
+apply selective allowances to normal and archived MTP runs on Linux, Windows
+and macOS. An independent fork-only
 workflow also exercises a fixed fixture.
 
 ## GitHub CI gate
 
 Selective execution is **off unless a repository administrator activates it**.
 No repository variables, registry branch or protections are created by the tool.
-The implementation supports Linux normal execution with reflection xUnit v3/MTP
-and a built apphost. Windows, macOS and archived execution retain their blocking
-baseline runner with an explicit warning when selective mode is requested.
+The implementation supports reflection xUnit v3/MTP with a built apphost for
+normal execution, or the exact evaluated assembly from a prepared test archive.
 Broad `ignoreTestFailures` lanes retain their independent behavior and do not
 consume selective allowances. There is no production shadow mode.
 
@@ -49,17 +49,35 @@ RID. Returning to an ordinary build removes only the generated owned sidecar;
 authored or modified identities are not overwritten. Source-generator/AOT
 adapters do not honor the sidecar and cannot receive waivers.
 
-`ci-run` resolves selected inner builds through `GetTargetPath` and
-`ComputeRunArguments`; it never scans output directories. It preserves computed
+`ci-run` resolves selected inner builds through `GetTargetPath`,
+`ComputeRunArguments` and `ComputeTestArchivePaths`; it never scans output
+directories. Normal execution preserves computed
 normal MTP arguments and testing environment items, then adds
 the workflow's diagnostic and selection arguments. It does **not** merge
 Arcade/Helix `TestRunnerAdditionalArguments` into this lane. Arguments use a
-bounded Linux quote/backslash grammar with no shell expansion.
+bounded Unix quote/backslash or Windows PowerShell quote/backtick grammar with
+no shell expansion. Process arguments are passed as individual tokens.
 Like native SDK `dotnet test`, modules run from their output directory, not the
 checkout or the `dotnet run`-specific `RunWorkingDirectory` property.
 The workflow's absolute build project path is normalized at CLI admission into
 a repository-relative evidence path. Outside-checkout paths and traversal
 segments are rejected before module resolution.
+
+For archive execution, `KnownTestFailuresArchiveManifest` records the project,
+TFM, relative assembly and supported adapter in the actual archive source before
+`ZipTestArchive`. The portable `.uniqueid` is generated before packaging.
+`prepare-archives` evaluates each selected inner TFM and extracts only its exact
+`TestArchivePath`, checking the embedded manifest against that evaluation.
+Traversal, symlinks, duplicate paths and mismatched module receipts are rejected.
+Each TFM gets an isolated extraction directory; no stale ZIP/DLL glob is used.
+The prepared manifest is bound to the current checkout SHA.
+
+Archived modules retain the baseline archive-root working directory, inherited
+workflow environment, explicit base/selection arguments and `category=failing`
+exclusion. They do not inherit normal `RunArguments`, testing environment items
+or Helix-only runner arguments. The archive workflow still downloads the real
+managed/RID package artifacts into `BUILT_NUGETS_PATH` and retains its isolated
+runtime NuGet cache.
 
 Before execution, the runner records selected modules and discovers every case
 twice with the same selection arguments. Serializable Theory rows are individual
@@ -90,6 +108,13 @@ first non-0/non-2 infrastructure exit, otherwise 2 if any module failed, otherwi
 0. This is not a claim about arbitrary SDK-wrapper exit aggregation.
 `test-exit-code.txt` retains that raw aggregate; the test step exits with the
 effective decision. Existing dump checks, uploads and summaries remain active.
+
+The outer execution deadline is the effective MTP `--timeout` plus five minutes
+for reporting, shutdown and pipe draining. For example, the CLI E2E 30-minute
+session receives a 35-minute outer deadline, not the normal lane's 25-minute
+budget. Exactly one explicit positive timeout is required; missing, malformed,
+duplicate, disabled or unrepresentable durations fail configuration admission
+without rewriting arguments or substituting a shorter timeout.
 
 Evidence is uploaded in `logs-<testShortName>-<os>` under
 `testresults/known-test-failures/`: request, pre-execution inventories, both
@@ -133,9 +158,49 @@ without rewriting the test result. Publication is a separate authorized action;
 the tool itself never pushes.
 
 The `knownFailureProofScenario` reusable input additionally supports `pass`,
-`mixed`, `parameter` and `changed`; overrides are accepted only by the validated
+`mixed`, `parameter`, `changed`, `crash` and `empty`; overrides are accepted only by the validated
 fork proof. Unknown neighbor, new failing Theory row and changed signature remain
-blocking even when the candidate is approved.
+blocking even when the candidate is approved. `crash` terminates the test child
+with exit 42 before completion; the runner preserves the MTP controller's actual
+incomplete-session exit (7 in local validation), not the child's requested exit.
+`empty` selects no tests and exercises the
+existing explicit ignore-exit-8 policy.
+
+The fork caller defaults to one Linux normal candidate. Repository variables
+`ASPIRE_KNOWN_TEST_FAILURES_PROOF_MATRIX` and
+`ASPIRE_KNOWN_TEST_FAILURES_ARCHIVE_PROOF_MATRIX` accept JSON `include` arrays of
+`{"os":"windows-latest","scenario":"candidate"}` entries; each matrix limits
+concurrency to three. An absent archive matrix schedules no archive proof or
+package builds. Use `ubuntu-latest`, `windows-latest` and `macos-latest` to
+exercise both execution kinds with passing, candidate and negative scenarios.
+Approvals must match each run's actual platform and TFM identity.
+
+Archive proof builds and uploads real Redis and per-RID orchestration packages.
+The Infrastructure fixture opens these artifacts from the actual consumer feed
+and verifies their package metadata and binary payloads. This proves the shared
+archive build, extraction, environment and artifact-consumption path, **not**
+generated AppHost restore or Templates package behavior. Its build disables
+unrelated outside-repository support-file generation. Native Windows/macOS and
+Templates behavior still require their corresponding CI runs; local macOS
+coverage must not be reported as native Windows validation.
+
+Local behavioral validation (the repository SDK must already be restored):
+
+```bash
+MSBUILDTERMINALLOGGER=false ./.dotnet/dotnet test \
+  --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj \
+  --no-launch-profile -- \
+  --filter-class '*.KnownTestFailures*' --filter-class '*.TestTriggerMapTests' \
+  --filter-not-trait 'quarantined=true' --filter-not-trait 'outerloop=true'
+actionlint -shellcheck= .github/workflows/run-tests.yml \
+  .github/workflows/known-test-failures-ci-proof.yml
+git --no-pager diff --check
+```
+
+The archive tests invoke the production `prepare-archives`/`ci-run` entry points
+and the real multi-TFM ConfigurationSchemaGenerator build/archive targets.
+`eng/github-ci/test-trigger-map.yml` derives Infrastructure coverage whenever
+that runtime fixture project is selected.
 
 ## Replay modes and exits
 
