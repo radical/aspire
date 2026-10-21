@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "issue_number": 149,
+  "issue_body": "[automated] Fork-only validation of finite failure handling when an owned\ninvestigator is interrupted before producing its proposal or callback.\n\nAn operator will cancel only this issue's precisely identified investigator\nrun. The trusted controller must post a blocked finding without publishing a\ncandidate or starting a test worker. This is an investigator interruption,\nnot a failed or cancelled test execution. Do not alter other CI, close this\nissue or modify upstream.\n\n```json\n{\n  \"version\": 1,\n  \"target\": \"hosting-json\",\n  \"max_rounds\": 1,\n  \"max_fix_attempts\": 1,\n  \"max_executions\": 1,\n  \"retry_probe\": false,\n  \"resume_delay_seconds\": 0,\n  \"cancel_probe\": false\n}\n```",
+  "config": {
+    "version": 1,
+    "target": "hosting-json",
+    "max_rounds": 1,
+    "max_fix_attempts": 1,
+    "max_executions": 1,
+    "retry_probe": false,
+    "resume_delay_seconds": 0,
+    "cancel_probe": false
+  },
+  "phase": "dispatching-agent",
+  "stage": "start",
+  "agents": [],
+  "workers": [],
+  "candidates": [],
+  "requested_executions": 0,
+  "enrollment_run_id": "39638810878",
+  "updated_at": "2026-10-21T16:53:32.021017+00:00"
+}
