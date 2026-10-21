@@ -1,6 +1,14 @@
 name: Build native CLI archives
 
 on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        type: string
+        default: Release
+      targets:
+        type: string
+        default: '[{"os":"windows-latest","runner":"windows-11-vs2026-arm","rids":"win-arm64"}]'
   workflow_call:
     inputs:
       versionOverrideArg:
@@ -31,7 +39,7 @@ jobs:
 
   build_cli_archives:
     name: Build CLI (${{ matrix.targets.rids }})
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ${{ matrix.targets.runner }}
     strategy:
       matrix:
