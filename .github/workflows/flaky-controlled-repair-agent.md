@@ -34,7 +34,7 @@ tools:
   bash: true
   edit:
   repo-memory:
-    branch-name: memory/flaky-controlled-repair-20261021
+    branch-name: memory/flaky-controlled-repair-v2-20261021
     file-glob: ["*.json"]
 safe-outputs:
   report-failure-as-issue: false
@@ -66,7 +66,7 @@ Phase `${{ inputs.phase }}`; worker `${{ inputs.worker_run_id }}`.
 Read `/tmp/gh-aw/controlled-repair-evidence/issue.json`, test-source.cs and
 candidate-identity.json. Use the supplied repo-memory directory. Read the actual
 GITHUB_RUN_ID. Each checkpoint requires version=1,
-experiment="controlled-repair-20261021", agent_run_id=current ID, candidate_sha,
+experiment="controlled-repair-v2-20261021", agent_run_id=current ID, candidate_sha,
 base_sha, round, iterations, runners, mode, rounds[], fix_attempt and phase.
 
 ## Start
@@ -98,8 +98,11 @@ early success, swallowed errors or weakened readiness assertions.
 The adjacent test and helper must remain byte-for-byte unchanged.
 
 Write candidate.json in repo-memory: base_sha=the supplied base, baseline_run_id
-the failed worker, test_source=the full changed file, diagnosis=actual error,
-root cause, prior art, repair rationale and induced-failure limitation.
+the failed worker and test_source=the full changed file as a JSON string.
+diagnosis must be either one string (100-12000 characters), or an object with
+exactly five nonempty string fields: error, root_cause, prior_art, rationale,
+limitation. Its serialized size must be 100-12000 characters. Describe the actual
+error, root cause, prior art, repair rationale and induced-failure limitation.
 Write checkpoint phase="candidate-ready", agent_run_id=current ID,
 baseline_run_id, incremented fix_attempt, baseline observations and evidence paths.
 Request one flaky-controlled-repair-publish dispatch on main with

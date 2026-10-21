@@ -112,7 +112,11 @@ If the correct repair needs broader changes, stop blocked and explain why.
 Write candidate.json in repo-memory with base_sha=the supplied base_sha,
 baseline_run_id=the actual failed worker, test_source=the entire modified source
 file as a JSON string, and diagnosis with actual assertion/exception evidence,
-root cause, chosen repair, prior art and limitations. Write checkpoint with
+root cause, chosen repair, prior art and limitations. Keep
+diagnosis represented as one 100-12000-character string, or an object with
+exactly error, root_cause, prior_art, rationale and limitation, all nonempty
+strings with a combined serialized size of 100-12000 characters.
+Write checkpoint with
 phase="candidate-ready", agent_run_id=current ID, incremented fix_attempt,
 baseline_run_id and diagnosis. Request one flaky-openai-repair-publish dispatch
 on main with agent_run_id=current ID, then end. The trusted publisher validates
