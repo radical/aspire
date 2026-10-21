@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "issue_number": 148,
+  "issue_body": "[automated] Fork-only validation of finite non-reproduction handling, not a bug\nreport. Run the real Hosting JSON empty-object test using bounded single and\nparallel reproduction rounds. It is a passing control, not a claimed flaky\nfailure.\n\nIf both rounds pass, post the actual counts, run links and limitations on this\nissue without inventing a repair or opening a PR. Keep this issue open and do\nnot modify upstream.\n\n```json\n{\"version\":1,\"target\":\"hosting-json\",\"max_rounds\":2,\"max_fix_attempts\":1,\"max_executions\":5,\"retry_probe\":false,\"resume_delay_seconds\":0,\"cancel_probe\":false}\n```",
+  "config": {
+    "version": 1,
+    "target": "hosting-json",
+    "max_rounds": 2,
+    "max_fix_attempts": 1,
+    "max_executions": 5,
+    "retry_probe": false,
+    "resume_delay_seconds": 0,
+    "cancel_probe": false
+  },
+  "phase": "dispatching-agent",
+  "stage": "start",
+  "agents": [],
+  "workers": [],
+  "candidates": [],
+  "requested_executions": 0,
+  "enrollment_run_id": "39637945282",
+  "updated_at": "2026-10-21T16:47:46.965226+00:00"
+}
