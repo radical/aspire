@@ -56,6 +56,15 @@
         "createdAt": "2026-10-21T17:38:33+00:00",
         "expiresAt": "2026-10-22T00:00:00+00:00"
       }
+    },
+    {
+      "sequence": 4,
+      "id": "pipeline-linux-candidate-001",
+      "action": "approve",
+      "actor": "radical",
+      "reason": "Approve only the edited content revision for the fork validation.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T17:45:01+00:00",
+      "contentRevision": 2
     }
   ]
 }
