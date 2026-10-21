@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": true
   },
-  "phase": "awaiting-agent",
+  "phase": "cancelled",
   "stage": "awaiting-cancellation",
   "agents": [
     "39636364877",
@@ -22,7 +22,7 @@
   "candidates": [],
   "requested_executions": 0,
   "enrollment_run_id": "39636319096",
-  "updated_at": "2026-10-21T16:42:19.899013+00:00",
+  "updated_at": "2026-10-21T16:47:21.324353+00:00",
   "agent_run_id": "39637153149",
   "agent_revision": "084fc13ac3b8e1d760b197c4c197f293b102ab46",
   "worker": {
@@ -36,5 +36,7 @@
     },
     "reserved_executions": 0,
     "run_id": "39637096299"
-  }
+  },
+  "cancelled_run": "39637096299",
+  "explanation": "Context stage is awaiting-cancellation with owned cancel-probe worker run 39637096299. Requesting cancellation of exactly that run. The sleeping probe is not a test execution; no test results are claimed."
 }
