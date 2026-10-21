@@ -1,1 +1,11 @@
-{"version":1,"issue_number":146,"state_revision":"cdfeb37c95b32d0b3009a511d628d9ba01b3dbcb","action":"cancel-probe","explanation":"Issue config has cancel_probe=true; requesting a disposable sleeping worker for cancellation-control validation. Not a test execution; no source or test outcome is claimed.","evidence_read":["/tmp/gh-aw/issue-proof/context.json (issue body, config, revision)","/tmp/gh-aw/issue-proof/test-source.cs (head; JsonFlattenerTests)"],"iterations":0,"runners":0}
+{
+  "version": 1,
+  "issue_number": 146,
+  "state_revision": "084fc13ac3b8e1d760b197c4c197f293b102ab46",
+  "action": "cancel",
+  "worker_run_id": "39637096299",
+  "explanation": "Context stage is awaiting-cancellation with owned cancel-probe worker run 39637096299. Requesting cancellation of exactly that run. The sleeping probe is not a test execution; no test results are claimed.",
+  "evidence_read": ["/tmp/gh-aw/issue-proof/context.json: stage=awaiting-cancellation, worker.run_id=39637096299, phase=cancel-probe"],
+  "iterations": 1,
+  "runners": 1
+}
