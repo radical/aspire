@@ -10,7 +10,7 @@
 # who modify the env vars below and push to trigger a run.
 
 name: Reproduce Flaky Tests
-run-name: "Real test proof round ${{ inputs.proof_round }} [${{ inputs.controller_run_id }}]"
+run-name: "${{ inputs.repair_phase != '' && format('Repair {0} [{1}] {2}', inputs.repair_phase, inputs.controller_run_id, inputs.candidate_sha) || format('Real test proof round {0} [{1}]', inputs.proof_round, inputs.controller_run_id) }}"
 
 on:
   workflow_dispatch:
@@ -22,17 +22,30 @@ on:
       expected_sha:
         description: Expected frozen candidate commit
         type: string
-        required: true
+        required: false
       proof_round:
         description: Bounded experiment round
         type: choice
         options: ['1', '2']
-        required: true
+        required: false
       proof_iterations:
         description: Bounded experiment iterations
         type: choice
         options: ['1', '2']
-        required: true
+        required: false
+      repair_phase:
+        description: Fork-only repair experiment phase
+        type: choice
+        options: [reproduce, verify]
+        required: false
+      candidate_sha:
+        description: Exact source commit, separate from the trusted workflow ref
+        type: string
+        required: false
+      repair_iterations:
+        description: Repair experiment repetitions (1-25)
+        type: number
+        default: 25
 
 permissions:
   contents: read
@@ -62,7 +75,7 @@ env:
   RUNNERS_PER_OS: "1"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "${{ inputs.proof_iterations }}"
+  ITERATIONS_PER_RUNNER: "${{ inputs.repair_phase != '' && inputs.repair_iterations || inputs.proof_iterations }}"
 
 jobs:
 
@@ -81,7 +94,18 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           ROUND: ${{ inputs.proof_round }}
           ITERATIONS: ${{ inputs.proof_iterations }}
+          REPAIR_PHASE: ${{ inputs.repair_phase }}
+          CANDIDATE: ${{ inputs.candidate_sha }}
+          REPAIR_ITERATIONS: ${{ inputs.repair_iterations }}
         run: |
+          if [[ -n "$REPAIR_PHASE" ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "::error::Repair workflow must run on trusted main"; exit 1; }
+            [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full candidate SHA"; exit 1; }
+            [[ "$REPAIR_PHASE" == reproduce || "$REPAIR_PHASE" == verify ]] || { echo "::error::Invalid repair phase"; exit 1; }
+            [[ "$REPAIR_ITERATIONS" =~ ^[0-9]+$ ]] && (( REPAIR_ITERATIONS >= 1 && REPAIR_ITERATIONS <= 25 )) || { echo "::error::Repair repetitions must be between 1 and 25"; exit 1; }
+            [[ "$PARENT" =~ ^[0-9]+$ ]] || { echo "::error::Missing controller correlation"; exit 1; }
+            exit 0
+          fi
           [[ "$GITHUB_REF" == refs/heads/flaky-real-candidate-20261021 ]] || exit 1
           [[ "$EXPECTED_SHA" == "$GITHUB_SHA" ]] || exit 1
           [[ "$PARENT" =~ ^[0-9]+$ ]] || exit 1
@@ -203,6 +227,29 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.candidate_sha || github.sha }}
+
+      - name: Record exact source checkout independently from workflow commit
+        if: inputs.repair_phase != ''
+        shell: pwsh
+        env:
+          CANDIDATE: ${{ inputs.candidate_sha }}
+          PHASE: ${{ inputs.repair_phase }}
+          CONTROLLER: ${{ inputs.controller_run_id }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          $actual = git --no-pager rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:CANDIDATE) {
+              throw "Candidate checkout did not match authorized SHA"
+          }
+          @{
+              candidate_sha = $actual
+              workflow_sha = $env:WORKFLOW_SHA
+              phase = $env:PHASE
+              controller_run_id = $env:CONTROLLER
+              run_id = $env:GITHUB_RUN_ID
+              run_attempt = $env:GITHUB_RUN_ATTEMPT
+          } | ConvertTo-Json | Set-Content candidate-receipt.json
 
       - name: Trust HTTPS development certificate (Linux)
         if: runner.os == 'Linux'
@@ -441,6 +488,14 @@ jobs:
           path: all-results/
           if-no-files-found: error
 
+      - name: Preserve source checkout receipt
+        if: always() && inputs.repair_phase != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repair-worker-receipt
+          path: candidate-receipt.json
+          if-no-files-found: error
+
   results:
     if: ${{ always() && github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
@@ -491,7 +546,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKER_RUN_ID: ${{ github.run_id }}
+          REPAIR_PHASE: ${{ inputs.repair_phase }}
         run: |
-          gh workflow run flaky-real-continuation.yml \
+          workflow=flaky-real-continuation.yml
+          if [[ -n "$REPAIR_PHASE" ]]; then workflow=flaky-repair-continuation.yml; fi
+          gh workflow run "$workflow" \
             --repo radical/aspire --ref main \
             -f "worker_run_id=$WORKER_RUN_ID"
