@@ -1,0 +1,27 @@
+name: Controlled Repair Continuation
+on:
+  workflow_dispatch:
+    inputs:
+      worker_run_id:
+        type: string
+        required: true
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: flaky-controlled-repair-continuation-20261021
+  cancel-in-progress: false
+jobs:
+  resume:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          WORKER_RUN_ID: ${{ inputs.worker_run_id }}
+          REPAIR_TARGET: openai-controlled
+        run: python3 .github/scripts/flaky-repair-proof.py resume

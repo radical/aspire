@@ -57,7 +57,7 @@ on:
       repair_target:
         description: Approved fork-only repair target
         type: choice
-        options: [executable, openai]
+        options: [executable, openai, openai-controlled]
         default: executable
 
 permissions:
@@ -69,7 +69,7 @@ permissions:
 env:
   # Test project shortname (maps to tests/Aspire.{name}.Tests/ or tests/{name}.Tests/)
   # Examples: Hosting, Core, Dashboard, Components.Common, Cli.EndToEnd
-  TEST_PROJECT: "${{ inputs.repair_target == 'openai' && 'Hosting.OpenAI' || 'Hosting' }}"
+  TEST_PROJECT: "${{ startsWith(inputs.repair_target, 'openai') && 'Hosting.OpenAI' || 'Hosting' }}"
 
   # Test filter arguments passed to dotnet test (after the -- separator).
   # Use quotes around wildcard patterns to prevent shell glob expansion.
@@ -78,11 +78,11 @@ env:
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
   TEST_FILTER: >-
-    ${{ inputs.quarantine_project && '--filter-trait "quarantined=true" --filter-not-trait "outerloop=true"' || inputs.repair_target == 'openai' && '--filter-method "*.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy"' || '--filter-method "*.ExecutableExitsImmediately"' }}
+    ${{ inputs.quarantine_project && '--filter-trait "quarantined=true" --filter-not-trait "outerloop=true"' || startsWith(inputs.repair_target, 'openai') && '--filter-method "*.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy"' || '--filter-method "*.ExecutableExitsImmediately"' }}
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "${{ inputs.repair_target == 'openai' && 'ubuntu-latest' || 'windows-latest' }}"
+  TARGET_OSES: "${{ startsWith(inputs.repair_target, 'openai') && 'ubuntu-latest' || 'windows-latest' }}"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
@@ -118,7 +118,7 @@ jobs:
             [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "::error::Repair workflow must run on trusted main"; exit 1; }
             [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full candidate SHA"; exit 1; }
             [[ "$REPAIR_PHASE" == reproduce || "$REPAIR_PHASE" == verify ]] || { echo "::error::Invalid repair phase"; exit 1; }
-            [[ "$REPAIR_TARGET" == executable || "$REPAIR_TARGET" == openai ]] || { echo "::error::Unapproved repair target"; exit 1; }
+            [[ "$REPAIR_TARGET" == executable || "$REPAIR_TARGET" == openai || "$REPAIR_TARGET" == openai-controlled ]] || { echo "::error::Unapproved repair target"; exit 1; }
             [[ "$REPAIR_ITERATIONS" =~ ^[0-9]+$ ]] && (( REPAIR_ITERATIONS >= 1 && REPAIR_ITERATIONS <= 50 )) || { echo "::error::Repair repetitions must be between 1 and 50"; exit 1; }
             [[ "$REPAIR_RUNNERS" =~ ^[0-9]+$ ]] && (( REPAIR_RUNNERS >= 1 && REPAIR_RUNNERS <= 3 )) || { echo "::error::Repair runners must be between 1 and 3"; exit 1; }
             [[ "$PARENT" =~ ^[0-9]+$ ]] || { echo "::error::Missing controller correlation"; exit 1; }
@@ -578,6 +578,7 @@ jobs:
           workflow=flaky-real-continuation.yml
           if [[ -n "$REPAIR_PHASE" ]]; then workflow=flaky-repair-continuation.yml; fi
           if [[ "$REPAIR_TARGET" == openai ]]; then workflow=flaky-openai-repair-continuation.yml; fi
+          if [[ "$REPAIR_TARGET" == openai-controlled ]]; then workflow=flaky-controlled-repair-continuation.yml; fi
           gh workflow run "$workflow" \
             --repo radical/aspire --ref main \
             -f "worker_run_id=$WORKER_RUN_ID"
