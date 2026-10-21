@@ -33,6 +33,29 @@
       "reason": "Approve the exact fixed-fixture error for this fork-only experiment; not production authorization.",
       "at": "2026-10-21T03:10:10+00:00",
       "contentRevision": 1
+    },
+    {
+      "sequence": 3,
+      "id": "proof-candidate",
+      "action": "update",
+      "actor": "experiment-author",
+      "reason": "Change ownership without reapproval to prove that any content edit invalidates the previous approval.",
+      "at": "2026-10-21T03:13:49+00:00",
+      "contentRevision": 2,
+      "content": {
+        "project": "tools/KnownTestFailuresFixture/KnownTestFailuresFixture.csproj",
+        "method": "KnownTestFailuresFixture.Cases.Candidate",
+        "displayName": "KnownTestFailuresFixture.Cases.Candidate",
+        "caseId": "e854eb0274c5c1edd1c085679680e238c22644079e82b1901893abca80e7c83d",
+        "lane": "experimental-proof",
+        "platform": "linux-x64",
+        "ref": "refs/heads/known-test-failure-allowances",
+        "message": "proof candidate fixed failure",
+        "issue": "https://github.com/radical/aspire/pull/143",
+        "owner": "experimental-proof-updated",
+        "createdAt": "2026-10-21T03:07:56.704345+00:00",
+        "expiresAt": "2026-10-21T08:00:00+00:00"
+      }
     }
   ]
 }
