@@ -10,9 +10,32 @@
 # who modify the env vars below and push to trigger a run.
 
 name: Reproduce Flaky Tests
+run-name: "Real test proof round ${{ inputs.proof_round }} [${{ inputs.controller_run_id }}]"
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      controller_run_id:
+        description: Fork-only parent agent correlation
+        type: string
+        required: true
+      expected_sha:
+        description: Expected frozen candidate commit
+        type: string
+        required: true
+      proof_round:
+        description: Bounded experiment round
+        type: choice
+        options: ['1', '2']
+        required: true
+      proof_iterations:
+        description: Bounded experiment iterations
+        type: choice
+        options: ['1', '2']
+        required: true
+
+permissions:
+  contents: read
 
 # ============================================================
 # CONFIGURATION — Edit these values to customize the test run
@@ -28,28 +51,41 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
+  TEST_FILTER: '--filter-method "*.ExecutableExitsImmediately"'
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
+  TARGET_OSES: "windows-latest"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "3"
+  RUNNERS_PER_OS: "1"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
+  ITERATIONS_PER_RUNNER: "${{ inputs.proof_iterations }}"
 
 jobs:
 
   setup:
     name: Generate matrix
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
       is_cli_e2e: ${{ steps.detect_cli_e2e.outputs.is_cli_e2e }}
     steps:
+      - name: Validate bounded experiment receipt
+        shell: bash
+        env:
+          PARENT: ${{ inputs.controller_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ROUND: ${{ inputs.proof_round }}
+          ITERATIONS: ${{ inputs.proof_iterations }}
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/flaky-real-candidate-20261021 ]] || exit 1
+          [[ "$EXPECTED_SHA" == "$GITHUB_SHA" ]] || exit 1
+          [[ "$PARENT" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$ROUND" =~ ^[12]$ && "$ITERATIONS" == "$ROUND" ]] || exit 1
       - name: Validate configuration
         shell: bash
         run: |
@@ -127,7 +163,7 @@ jobs:
   build_cli_e2e_image:
     name: Build CLI E2E Docker image
     needs: setup
-    if: ${{ needs.setup.outputs.is_cli_e2e == 'true' }}
+    if: ${{ github.repository == 'radical/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
     uses: ./.github/workflows/build-cli-e2e-image.yml
 
   reproduce:
@@ -135,6 +171,7 @@ jobs:
     needs: [setup, build_cli_e2e_image]
     if: >-
       ${{
+        github.repository == 'radical/aspire' &&
         !cancelled() &&
         needs.setup.result == 'success' &&
         (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
@@ -163,7 +200,9 @@ jobs:
           echo "${{ github.workspace }}\.dotnet" >> $env:GITHUB_PATH
 
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Trust HTTPS development certificate (Linux)
         if: runner.os == 'Linux'
@@ -276,19 +315,22 @@ jobs:
               -- \
               --timeout 10m \
               --results-directory "${{ github.workspace }}/testresults" \
+              --report-trx --report-trx-filename real-proof.trx \
               ${{ env.TEST_FILTER }} \
               2>&1 | tee "$ITER_OUTPUT"
             RESULT=${PIPESTATUS[0]}
             set -e
 
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.props masks exit code 8)
+            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
             if [ "$RESULT" -eq 0 ]; then
               if ! grep -qiE "total:\s*[1-9]" "$ITER_OUTPUT" 2>/dev/null; then
                 echo "::error::Iteration $i: Zero tests executed. Verify TEST_FILTER and quarantine settings."
                 RESULT=8
               fi
             fi
-            rm -f "$ITER_OUTPUT"
+            mkdir -p "${{ github.workspace }}/all-results/iteration-$i"
+            mv "$ITER_OUTPUT" "${{ github.workspace }}/all-results/iteration-$i/output.log"
+            cp -r "${{ github.workspace }}/testresults/." "${{ github.workspace }}/all-results/iteration-$i/"
 
             if [ "$RESULT" -eq 0 ]; then
               echo "✅ Iteration $i: PASS"
@@ -342,11 +384,12 @@ jobs:
               -- `
               --timeout 10m `
               --results-directory "${{ github.workspace }}/testresults" `
+              --report-trx --report-trx-filename real-proof.trx `
               ${{ env.TEST_FILTER }} *> $iterOutput
             $result = $LASTEXITCODE
             Get-Content $iterOutput
 
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.props masks exit code 8)
+            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
             if ($result -eq 0) {
               $content = Get-Content $iterOutput -Raw -ErrorAction SilentlyContinue
               if (-not ($content -match '(?i)total:\s*[1-9]')) {
@@ -354,7 +397,10 @@ jobs:
                 $result = 8
               }
             }
-            Remove-Item $iterOutput -ErrorAction SilentlyContinue
+            $evidence = "${{ github.workspace }}/all-results/iteration-$i"
+            New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+            Move-Item $iterOutput (Join-Path $evidence "output.log")
+            Copy-Item -Recurse "${{ github.workspace }}/testresults/*" $evidence
 
             if ($result -eq 0) {
               Write-Host "✅ Iteration ${i}: PASS"
@@ -381,17 +427,26 @@ jobs:
 
       - name: Upload failure logs
         if: failure()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: failures-${{ matrix.os }}-${{ matrix.index }}
           path: all-results/
           if-no-files-found: ignore
 
+      - name: Preserve actual iteration evidence, including passing results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-test-evidence-${{ matrix.os }}-${{ matrix.index }}
+          path: all-results/
+          if-no-files-found: error
+
   results:
-    if: always()
+    if: ${{ always() && github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     name: Reproduce Results
     needs: [reproduce]
+    permissions: {}
     steps:
       - name: Summary
         shell: bash
@@ -419,3 +474,24 @@ jobs:
       - name: Fail if reproduce did not succeed
         if: ${{ needs.reproduce.result != 'success' }}
         run: exit 1
+
+  notify:
+    needs: [setup, reproduce, results]
+    if: >-
+      always() &&
+      github.repository == 'radical/aspire' &&
+      needs.setup.result == 'success' &&
+      inputs.controller_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+    steps:
+      - name: Notify trusted continuation without candidate checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+        run: |
+          gh workflow run flaky-real-continuation.yml \
+            --repo radical/aspire --ref main \
+            -f "worker_run_id=$WORKER_RUN_ID"

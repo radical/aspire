@@ -1,0 +1,32 @@
+name: Real Flaky Test Continuation
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_run_id:
+        description: Actual reproduction run that completed
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: flaky-real-continuation-20261021
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate completed reproduction and start fresh agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKER_RUN_ID: ${{ inputs.worker_run_id }}
+        run: python3 .github/scripts/flaky-real-proof.py resume
