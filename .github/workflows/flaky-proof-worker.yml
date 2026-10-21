@@ -89,3 +89,23 @@ jobs:
           name: flaky-proof-result-${{ inputs.experiment }}-${{ github.run_attempt }}
           path: proof/result.json
           if-no-files-found: error
+  notify:
+    needs: fixture
+    if: >-
+      always() &&
+      github.repository == 'radical/aspire' &&
+      inputs.experiment == 'agent-proof-v3-20261020' &&
+      inputs.controller_run_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch trusted completion router without test checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKER_RUN_ID: ${{ github.run_id }}
+        run: |
+          gh workflow run flaky-proof-continuation.yml \
+            --repo radical/aspire --ref main \
+            -f "worker_run_id=$WORKER_RUN_ID"
