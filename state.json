@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "not-reproduced",
   "stage": "baseline",
   "agents": [
     "39637986705",
@@ -118,7 +118,7 @@
   "candidates": [],
   "requested_executions": 5,
   "enrollment_run_id": "39637945282",
-  "updated_at": "2026-10-21T17:05:31.878282+00:00",
+  "updated_at": "2026-10-21T17:09:53.403667+00:00",
   "agent_run_id": "39640665207",
   "agent_revision": "5538367d5c9db82546109580db0a3778fce65f12",
   "worker": {
@@ -132,5 +132,6 @@
     },
     "reserved_executions": 4,
     "run_id": "39639867377"
-  }
+  },
+  "explanation": "Both permitted baseline rounds passed for Aspire.Hosting.Tests.JsonFlattenerTests.FlattenJsonObject_HandlesEmptyObject: round 1 (run 39638615398, 1 runner x 1 iteration) 1 executed/0 failed; round 2 (run 39639867377, 2 runners x 2 iterations) 4 executed/0 failed. Total 5 executions, 0 failures, 0 other failures; execution budget exhausted (remaining 0). The test is a pure synchronous check that FlattenJsonObject on an empty JsonObject returns an empty result, with no waits, ports, files or shared state. This is a passing control, not a claimed flaky failure. Limitations: only 5 executions on one candidate commit (8bb44fe0), so this cannot prove absence of rare flakiness; job logs were only skimmed (586-byte output logs, TRX outcomes inspected). No fix, PR or unquarantine proposed; issue stays open."
 }
