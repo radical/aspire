@@ -65,6 +65,15 @@
       "reason": "Approve content revision two after observing the old approval no longer permits this failure.",
       "at": "2026-10-21T03:17:14+00:00",
       "contentRevision": 2
+    },
+    {
+      "sequence": 5,
+      "id": "proof-candidate",
+      "action": "remove",
+      "actor": "experiment-author",
+      "reason": "Remove the experimental allowance after the successful reapproval proof; retain its complete history.",
+      "at": "2026-10-21T03:20:11+00:00",
+      "contentRevision": 2
     }
   ]
 }
