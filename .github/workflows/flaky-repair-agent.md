@@ -5,7 +5,7 @@ on:
     inputs:
       phase:
         type: choice
-        options: [start, resume]
+        options: [start, resume, escalate]
         required: true
       worker_run_id:
         type: string
@@ -59,6 +59,8 @@ Read `/tmp/gh-aw/repair-evidence/issue.json`, `test-source.cs` and
 `candidate-identity.json`. Use the supplied repo-memory directory; do not guess
 its path. Read GITHUB_RUN_ID to identify this agent. Every checkpoint must have
 version=1, experiment="repair-20261021", phase, and agent_run_id=current ID.
+Preserve a rounds array recording every completed baseline and its actual
+configuration, candidate SHA, execution/failure counts and evidence read.
 
 ## Start
 
@@ -67,20 +69,50 @@ reported assertion and affected OS. Historical reports are not a fresh baseline.
 This agent is on Linux; the reported failure is Windows-specific, so explicitly
 record the local reproduction OS mismatch rather than claiming a local run.
 Write checkpoint.json with phase="awaiting-reproduction", candidate_sha from
-candidate-identity.json, iterations=25 and your initial evidence/hypotheses.
+candidate-identity.json, round=1, iterations=25, runners=1, mode="single",
+rounds=[] and your initial evidence/hypotheses.
 Request one reproduce-flaky-tests dispatch on main, with:
 controller_run_id=current agent ID, repair_phase="reproduce",
 candidate_sha=the supplied SHA, repair_iterations="25".
 End immediately; safe-output dispatch happens after the agent finishes.
+
+## Escalate an existing unsuccessful baseline
+
+Require phase=escalate and an existing blocked checkpoint/report showing that
+the first 25-execution Windows baseline actually passed. Preserve that
+observation in rounds. This is not evidence that the historical failure is fixed.
+Set phase="awaiting-reproduction", round=2, iterations=50, runners=1,
+mode="single", agent_run_id=current ID. Request one reproduce-flaky-tests dispatch
+on main with controller_run_id=current ID, repair_phase="reproduce",
+candidate_sha=base_sha, repair_iterations="50", repair_runners="1",
+quarantine_project="false". End without waiting.
 
 ## Resume after reproduction
 
 Read receipt.json, actual referenced TRX files, output.log files and relevant
 job.log excerpts. Confirm the exact method actually executed and distinguish
 assertion failures from build/restore/infrastructure failures.
-If evidence_error is present, or no expected assertion failure was reproduced,
-write phase="blocked" and report.json explaining the evidence and limitation.
-Do not invent a failure, manufacture a patch or publish a speculative fix.
+If evidence_error is present, write phase="blocked" and report.json explaining
+the incomplete evidence. Never treat another test's failure as this target's
+failure. Append the target observation to rounds and preserve previous rounds.
+
+If no target assertion failure was reproduced and round=1, set round=2,
+iterations=50, runners=1, mode="single", phase="awaiting-reproduction" and
+agent_run_id=current ID. Request one reproduce-flaky-tests dispatch on main with
+controller_run_id=current ID, repair_phase="reproduce", candidate_sha=base_sha,
+repair_iterations="50", repair_runners="1", quarantine_project="false".
+
+If no target assertion failure was reproduced and round=2, set round=3,
+iterations=3, runners=3, mode="quarantine-project", phase="awaiting-reproduction"
+and agent_run_id=current ID. Request one reproduce-flaky-tests dispatch on main
+with controller_run_id=current ID, repair_phase="reproduce",
+candidate_sha=base_sha, repair_iterations="3", repair_runners="3",
+quarantine_project="true". This runs other non-outerloop quarantined tests in
+the assembly to exercise contention. End without waiting after either dispatch.
+
+If no target failure was reproduced in round=3, stop with phase="blocked" and
+report.json. Do not invent a failure, manufacture a patch or publish a
+speculative fix. The historical failure may no longer reproduce.
 
 If a matching failure was reproduced, diagnose it by reading the actual failing
 results, test, relevant production code and existing repository helpers/prior
@@ -115,8 +147,11 @@ passing and failing TRX/output files and relevant job.log evidence.
 Require candidate_sha equal to the actual publication SHA and different from
 base_sha. Keep baseline evidence distinct from candidate verification.
 If evidence_error is present, or any target execution failed, set
-phase="verification-failed". Otherwise require exactly 25 actual target executions
-and zero failures, then set phase="repair-verified".
+phase="verification-failed". Otherwise require the same reproduction mode, runner
+count and iterations per runner as the failed baseline, actual positive target
+execution counts equal to runners times iterations, and zero target failures,
+then set phase="repair-verified". Report unrelated failures separately; never
+claim that the entire assembly passed when another test failed.
 Write report.json with the diagnosis, baseline and verification counts/run IDs,
 published SHA and branch, evidence paths actually read, and limitations.
 Passing repetitions support this candidate; they do not prove permanent absence
