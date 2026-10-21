@@ -170,6 +170,29 @@
       "reason": "Approve only the exact Windows candidate for bounded fork validation.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
       "at": "2026-10-21T20:42:41+00:00",
       "contentRevision": 1
+    },
+    {
+      "sequence": 12,
+      "id": "pipeline-platform-macos-003",
+      "action": "add",
+      "actor": "radical",
+      "reason": "Record the observed native macOS candidate for fork validation.\nThis fixture expires at 2026-10-22T00:00:00Z.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:47:32+00:00",
+      "contentRevision": 1,
+      "content": {
+        "project": "tests/Infrastructure.Tests/Infrastructure.Tests.csproj",
+        "method": "Infrastructure.Tests.KnownFailurePipelineCases.Candidate",
+        "displayName": "Infrastructure.Tests.KnownFailurePipelineCases.Candidate",
+        "caseId": "e31391a985360a798b5ed0fbed7a2bb5922a0cab3d965fa713a0f0982a1b991e",
+        "lane": "regular",
+        "platform": "osx-arm64",
+        "ref": "refs/heads/known-test-failure-allowances",
+        "message": "pipeline candidate fixed failure",
+        "issue": "https://github.com/radical/aspire/pull/143",
+        "owner": "radical",
+        "createdAt": "2026-10-21T20:47:32+00:00",
+        "expiresAt": "2026-10-22T00:00:00+00:00"
+      }
     }
   ]
 }
