@@ -29,11 +29,17 @@ public class OpenAIFunctionalTests
             return healthCheckTcs.Task;
         });
 
-        var resource = builder.AddOpenAI("resource")
-                      .AddModel("chat", "gpt-4o-mini")
-                      .WithHealthCheck("blocking_check");
+        var openAI = builder.AddOpenAI("resource");
+
+        var resource = openAI.AddModel("chat", "gpt-4o-mini")
+                             .WithHealthCheck("blocking_check");
 
         ForceExternalStatusDegraded(builder.Services);
+
+        // The model reports its parent's health, so remove the external status page check from the parent
+        // to isolate this test to the controlled blocking_check, as the adjacent test does.
+        var statusPageHealthCheck = Enumerable.Single(openAI.Resource.Annotations, x => x is HealthCheckAnnotation hca && hca.Key == "resource_check");
+        openAI.Resource.Annotations.Remove(statusPageHealthCheck);
 
         var dependentResource = builder.AddContainer("nginx", "mcr.microsoft.com/cbl-mariner/base/nginx", "1.22")
                                        .WaitFor(resource);
