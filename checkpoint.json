@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "experiment": "real-test-20261021",
+  "phase": "awaiting-reproduction",
+  "candidate_sha": "aa56e005faa2ee6326f3c777f6d30dd43fece929",
+  "round": 1,
+  "iterations": 1,
+  "parent_run_id": "39531803470",
+  "issue_url": "https://github.com/microsoft/aspire/issues/16189",
+  "test": "Aspire.Hosting.Tests.ExecutableResourceFailureLoggingTests.ExecutableExitsImmediately",
+  "rounds": [],
+  "initial_analysis": "The test adds a pwsh executable that writes 'Hello from Stdout' to stdout and 'Hello from Stderr' to stderr then exits, starts the app, waits for the resource to reach Finished, disposes the app, then asserts captured fake-log lines end with both messages. Issue 16189 reports a Windows (Hosting-2) CI failure: Assert.Contains found only the stdout line (plus 'No custom certificate'), i.e. the stderr line was missing from collected logs, plausibly because log streaming lags the Finished state or is cut off at disposal. This is an observation of the report, not a proven cause; the test is quarantined."
+}
