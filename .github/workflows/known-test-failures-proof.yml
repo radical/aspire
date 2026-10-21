@@ -1,0 +1,83 @@
+name: Known test failures proof
+
+on:
+  push:
+    branches: [known-test-failure-allowances]
+  pull_request:
+    types: [opened, synchronize, reopened, converted_to_draft]
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    name: ${{ matrix.command }}
+    if: >-
+      github.repository == 'radical/aspire' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/known-test-failure-allowances') ||
+       (github.event_name == 'pull_request' && github.event.pull_request.draft == true &&
+        github.event.pull_request.head.repo.full_name == 'radical/aspire' &&
+        github.event.pull_request.head.ref == 'known-test-failure-allowances'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        command: [prove, gate]
+    env:
+      MSBUILDTERMINALLOGGER: 'false'
+      PROOF_COMMAND: ${{ matrix.command }}
+      EXECUTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_NAME: ${{ github.event_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Record executed head
+        shell: bash
+        run: |
+          mkdir -p artifacts/known-test-failures-proof
+          python3 - <<'PY'
+          import json, os, subprocess
+          sha = subprocess.check_output(["git", "--no-pager", "rev-parse", "HEAD"], text=True).strip()
+          assert sha == os.environ["EXECUTED_SHA"], "Checkout differs from requested head"
+          record = {"event": os.environ["EVENT_NAME"], "executedSha": sha,
+                    "testRef": "refs/heads/known-test-failure-allowances"}
+          with open("artifacts/known-test-failures-proof/event.json", "w") as file:
+              json.dump(record, file, indent=2)
+          print(json.dumps(record))
+          PY
+
+      - name: Restore SDK and dependencies
+        run: ./restore.sh
+
+      - name: Build isolated fixture and runner
+        shell: bash
+        run: |
+          ./.dotnet/dotnet build tools/KnownTestFailuresFixture/KnownTestFailuresFixture.csproj --nologo -v:q
+          ./.dotnet/dotnet build tools/KnownTestFailures/KnownTestFailures.csproj --nologo -v:q
+
+      - name: Run proof with native effective exit
+        shell: bash
+        run: |
+          export DOTNET_ROOT="$PWD/.dotnet"
+          runner=artifacts/bin/KnownTestFailures/Debug/net10.0/KnownTestFailures
+          fixture="$PWD/artifacts/bin/KnownTestFailuresFixture/Debug/net11.0/KnownTestFailuresFixture"
+          output="$PWD/artifacts/known-test-failures-proof/run"
+          if [[ "$PROOF_COMMAND" == gate ]]; then
+            "$runner" gate --repo "$PWD" --fixture "$fixture" --output "$output" \
+              --remote https://github.com/radical/aspire.git
+          else
+            "$runner" prove --repo "$PWD" --fixture "$fixture" --output "$output"
+          fi
+
+      - name: Preserve raw evidence even when the gate is red
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: known-test-failures-${{ matrix.command }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/known-test-failures-proof/
+          if-no-files-found: error
+          retention-days: 7

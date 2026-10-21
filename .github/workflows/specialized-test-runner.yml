@@ -185,6 +185,7 @@ jobs:
       extraTestArgs: ${{ inputs.extraTestArgs }}
       ignoreTestFailures: ${{ inputs.ignoreTestFailures || matrix.tests.properties.nonBlockingTestFailures }}
       allowZeroTests: ${{ inputs.allowZeroTests }}
+      knownFailureLane: specialized
 
 
   results:

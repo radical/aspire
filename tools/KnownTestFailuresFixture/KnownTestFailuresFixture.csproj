@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../tests/Shared/RepoTesting/Aspire.RepoTesting.props" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <RunOnGithubActionsWindows>false</RunOnGithubActionsWindows>
+    <RunOnGithubActionsLinux>false</RunOnGithubActionsLinux>
+    <RunOnGithubActionsMacOS>false</RunOnGithubActionsMacOS>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.assert" />
+    <None Include="KnownTestFailuresFixture.uniqueid" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
