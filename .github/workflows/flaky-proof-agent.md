@@ -100,7 +100,17 @@ Operate in `radical/aspire` only. Do not run builds or install dependencies.
 5. Update the repo-memory checkpoint to phase="evidence-collected" and record
    the worker run ID/attempt, observed counts and evidence. Do not dispatch a
    second worker in this phase.
-6. Write `/tmp/gh-aw/repo-memory-default/report.json` with what was actually observed,
+6. Independently probe read-only access to microsoft/aspire run 38965261066.
+   Attempt metadata, download exactly artifact
+   `wasm-native-investigation-1-attempt1`, and fetch job 117224423096 logs.
+   Use only the existing configured credentials and tools, never a new token
+   or a workaround for a denied network/permission boundary. Record each
+   outcome independently as upstream_access; this extra capability result
+   must not be confused with the synthetic fixture's result. Confirm real
+   downloaded file sizes and one short failure excerpt if accessible. The
+   public artifact contains Windows logs; detect actual encoding rather than
+   assuming every log is UTF-16.
+7. Write `/tmp/gh-aw/repo-memory-default/report.json` with what was actually observed,
    including separate read/download/log outcomes and distinct current run
    identity. Call the terminal noop safe output with a concise completion
    summary, then end. Repo-memory persists the report.
