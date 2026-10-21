@@ -12,7 +12,7 @@
     "resume_delay_seconds": 0,
     "cancel_probe": false
   },
-  "phase": "awaiting-agent",
+  "phase": "blocked",
   "stage": "start",
   "agents": [
     "39638852014"
@@ -21,7 +21,8 @@
   "candidates": [],
   "requested_executions": 0,
   "enrollment_run_id": "39638810878",
-  "updated_at": "2026-10-21T16:53:36.764663+00:00",
+  "updated_at": "2026-10-21T16:57:10.240524+00:00",
   "agent_run_id": "39638852014",
-  "agent_revision": "c2aad1847214f82a65e2bff01c7025f75848e775"
+  "agent_revision": "c2aad1847214f82a65e2bff01c7025f75848e775",
+  "explanation": "Controller stopped: CalledProcessError: Command '['gh', 'run', 'watch', '39638852014', '--repo', 'radical/aspire', '--interval', '15', '--exit-status']' returned non-zero exit status 1."
 }
