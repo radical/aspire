@@ -41,15 +41,9 @@ jobs:
        (github.event_name == 'pull_request' && github.event.pull_request.draft == true &&
         github.event.pull_request.head.repo.full_name == 'radical/aspire' &&
         github.event.pull_request.head.ref == 'known-test-failure-allowances'))
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        include:
-          - { os: ubuntu-latest, rid: linux-x64 }
-          - { os: windows-latest, rid: win-x64 }
-          - { os: macos-latest, rid: osx-arm64 }
-    runs-on: ${{ matrix.os }}
+    # Common.projitems repacks downloaded RID binaries without executing them.
+    # A single producer avoids blocking every archive lane on macOS capacity.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,34 +51,44 @@ jobs:
           persist-credentials: false
       - name: Build real proof package artifacts
         shell: pwsh
-        env:
-          PROOF_RID: ${{ matrix.rid }}
         run: |
-          $build = if ($IsWindows) { './build.cmd' } else { './build.sh' }
-          & $build -restore -build -ci -pack -projects "eng/dcppack/Aspire.Hosting.Orchestration.$env:PROOF_RID.csproj" /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($IsLinux) {
-            & $build -restore -build -ci -pack -projects src/Components/Aspire.StackExchange.Redis/Aspire.StackExchange.Redis.csproj /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
+          foreach ($rid in @('linux-x64', 'win-x64', 'osx-arm64')) {
+            $ridProject = Join-Path $env:GITHUB_WORKSPACE "eng/dcppack/Aspire.Hosting.Orchestration.$rid.csproj"
+            & ./build.sh -restore -build -ci -pack -projects "$ridProject" /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+          $managedProject = Join-Path $env:GITHUB_WORKSPACE 'src/Components/Aspire.StackExchange.Redis/Aspire.StackExchange.Redis.csproj'
+          & ./build.sh -restore -build -ci -pack -projects "$managedProject" /p:SkipNativeBuild=true /p:InstallBrowsersForPlaywright=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload managed packages
-        if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: built-nugets
           path: artifacts/packages
           if-no-files-found: error
-      - name: Upload RID packages
+      - name: Upload Linux RID packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: built-nugets-for-${{ matrix.rid }}
-          path: artifacts/packages/Debug/Shipping/Aspire.Hosting.Orchestration.${{ matrix.rid }}.*.nupkg
+          name: built-nugets-for-linux-x64
+          path: artifacts/packages/Debug/Shipping/Aspire.Hosting.Orchestration.linux-x64.*.nupkg
+          if-no-files-found: error
+      - name: Upload Windows RID packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: built-nugets-for-win-x64
+          path: artifacts/packages/Debug/Shipping/Aspire.Hosting.Orchestration.win-x64.*.nupkg
+          if-no-files-found: error
+      - name: Upload macOS RID packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: built-nugets-for-osx-arm64
+          path: artifacts/packages/Debug/Shipping/Aspire.Hosting.Orchestration.osx-arm64.*.nupkg
           if-no-files-found: error
       - name: Upload package build logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: known-failure-package-logs-${{ matrix.rid }}
+          name: known-failure-package-logs
           path: artifacts/log
 
   archive_gate:

@@ -176,6 +176,10 @@ exercise both execution kinds with passing, candidate and negative scenarios.
 Approvals must match each run's actual platform and TFM identity.
 
 Archive proof builds and uploads real Redis and per-RID orchestration packages.
+One Ubuntu producer cross-packs all three RID content packages, so Linux and
+Windows archive runs do not wait for a macOS package runner.
+`eng/dcppack/Common.projitems` downloads and repacks the corresponding native
+payloads without executing them; cross-packing is not native platform validation.
 The Infrastructure fixture opens these artifacts from the actual consumer feed
 and verifies their package metadata and binary payloads. This proves the shared
 archive build, extraction, environment and artifact-consumption path, **not**
