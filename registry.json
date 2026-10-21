@@ -220,6 +220,15 @@
       "reason": "Remove the experimental Windows approval after native CI validation.\nRetain its complete audit history.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
       "at": "2026-10-21T20:58:07+00:00",
       "contentRevision": 1
+    },
+    {
+      "sequence": 16,
+      "id": "pipeline-platform-macos-003",
+      "action": "remove",
+      "actor": "radical",
+      "reason": "Remove the experimental macOS approval after local native validation.\nRetain its complete audit history.\n\nCo-authored-by: Copilot App \u003C223556219\u002BCopilot@users.noreply.github.com\u003E",
+      "at": "2026-10-21T20:58:07+00:00",
+      "contentRevision": 1
     }
   ]
 }
