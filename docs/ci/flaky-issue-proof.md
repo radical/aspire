@@ -6,8 +6,8 @@ worker contribution.
 
 ## Enrollment
 
-An owner-authored open issue carrying `flaky-agent-proof` can be enrolled by
-adding that label or assigning the labeled issue to `radical`. The issue must
+An owner-authored open issue requires both `flaky-agent-proof` and assignment
+to `radical`; whichever enrollment condition is added last starts it. The issue must
 contain exactly one JSON block:
 
 ```json
@@ -47,6 +47,8 @@ Controller writes use immutable parent revisions and nonforced Git ref updates;
 agent memory is a proposal transport, not the authority for execution budgets.
 Deferred safe outputs can dispatch before memory persistence finishes, so the
 controller waits for the entire parent run before reading its proposal artifact.
+The trusted controller also watches its owned model run, so a failed model that
+cannot emit a callback still ends with findings instead of a stranded issue.
 Server-returned dispatch IDs identify owned workers; the newest run is not
 assumed to belong to the investigation.
 
