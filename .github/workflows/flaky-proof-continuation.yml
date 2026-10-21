@@ -1,9 +1,12 @@
 name: Flaky Proof Continuation
 
 on:
-  workflow_run:
-    workflows: [Flaky Proof Worker]
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      worker_run_id:
+        description: Synthetic worker run whose fixture job has completed
+        type: string
+        required: true
 
 permissions:
   actions: write
@@ -16,18 +19,14 @@ concurrency:
 jobs:
   resume:
     if: >-
-      github.repository == 'radical/aspire' &&
-      github.event.workflow_run.event == 'workflow_dispatch' &&
-      github.event.workflow_run.head_repository.full_name == 'radical/aspire' &&
-      startsWith(github.event.workflow_run.display_title, 'Flaky proof agent-proof-v2-20261020 (fail, 2) [') &&
-      github.event.workflow_run.conclusion == 'failure'
+      github.repository == 'radical/aspire'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Validate evidence identity and resume agent
         env:
           GH_TOKEN: ${{ github.token }}
-          WORKER_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKER_RUN_ID: ${{ inputs.worker_run_id }}
         run: |
           python3 - <<'PY'
           import base64
@@ -49,16 +48,25 @@ jobs:
           worker = api(f"{repo}/actions/runs/{worker_id}")
           if worker["path"] != ".github/workflows/flaky-proof-worker.yml":
               raise SystemExit("Unexpected worker workflow")
-          candidate = api(f"{repo}/git/ref/heads/flaky-proof-candidate-20261020")
+          candidate = api(f"{repo}/git/ref/heads/flaky-proof-candidate-v3-20261020")
           if (
-              worker["head_branch"] != "flaky-proof-candidate-20261020"
+              worker["head_branch"] != "flaky-proof-candidate-v3-20261020"
               or worker["head_sha"] != candidate["object"]["sha"]
+              or worker["head_repository"]["full_name"] != "radical/aspire"
+              or worker["event"] != "workflow_dispatch"
           ):
               raise SystemExit("Unexpected worker SHA")
+          if worker["status"] != "completed":
+              subprocess.run(
+                  ["gh", "run", "watch", worker_id, "--repo", "radical/aspire",
+                   "--interval", "10"],
+                  check=True, timeout=120, stdout=subprocess.DEVNULL,
+              )
+              worker = api(f"{repo}/actions/runs/{worker_id}")
           if worker["run_attempt"] != 1 or worker["conclusion"] != "failure":
               raise SystemExit("Unexpected worker attempt or conclusion")
           match = re.fullmatch(
-              r"Flaky proof agent-proof-v2-20261020 \(fail, 2\) \[([0-9]+)\]",
+              r"Flaky proof agent-proof-v3-20261020 \(fail, 2\) \[([0-9]+)\]",
               worker["display_title"],
           )
           if match is None:
@@ -82,7 +90,7 @@ jobs:
               raise SystemExit("Parent agent did not complete successfully")
           stored = api(
               f"{repo}/contents/checkpoint.json"
-              "?ref=memory%2Fflaky-proof-v2-20261020"
+              "?ref=memory%2Fflaky-proof-v3-20261020"
           )
           state = json.loads(base64.b64decode(stored["content"]))
           if state.get("phase") == "evidence-collected":
@@ -91,7 +99,7 @@ jobs:
           if (
               state.get("version") != 1
               or state.get("phase") != "awaiting-reproduction"
-              or state.get("experiment") != "agent-proof-v2-20261020"
+              or state.get("experiment") != "agent-proof-v3-20261020"
               or state.get("candidate_sha") != worker["head_sha"]
               or str(state.get("parent_run_id")) != parent_id
           ):
