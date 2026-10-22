@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   native:
+    if: ${{ !contains(github.event.head_commit.message, 'windows-only') }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
       configuration: Release
@@ -25,6 +26,7 @@ jobs:
         ]
 
   infrastructure:
+    if: ${{ !contains(github.event.head_commit.message, 'windows-only') }}
     name: Publish conditions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -49,3 +51,28 @@ jobs:
           path: |
             artifacts/log/**
             artifacts/TestResults/**
+
+  windows_comparison:
+    if: ${{ contains(github.event.head_commit.message, 'windows-only') }}
+    name: Windows comparison (${{ matrix.revision }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [baseline, current]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.revision == 'baseline' && '8f73d674d0689589521e23e525e7e7f5dba5c764' || 'd47f0dc9fc86cf96ba34ded9e31a6c754c25138a' }}
+      - name: Compare unchanged macOS-on-Windows test with current regressions
+        shell: pwsh
+        env:
+          MSBUILDTERMINALLOGGER: 'false'
+          REVISION: ${{ matrix.revision }}
+        run: |
+          if ($env:REVISION -eq 'baseline') {
+            ./dotnet.cmd test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-method "*.BundlePreservesPtyLayoutAndRejectsMissingSidecars" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          } else {
+            ./dotnet.cmd test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-class "*.BundleBuildPhaseTests" --filter-class "*.Hex1bNativePublishingTests" --filter-class "*.CreateLayoutTests" --filter-class "*.AutoRerunTransientCiFailuresTests" --filter-class "*.TestTriggerMapTests" --filter-not-method "*.BundlePreservesPtyLayoutAndRejectsMissingSidecars" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          }
+          exit $LASTEXITCODE
