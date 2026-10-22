@@ -31,9 +31,10 @@ jobs:
 
   build_cli_archives:
     name: Build CLI (${{ matrix.targets.rids }})
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ${{ matrix.targets.runner }}
     strategy:
+      fail-fast: false
       matrix:
         targets: ${{ fromJson(inputs.targets) }}
     # Compute the Aspire CLI channel from the triggering GH Actions event,

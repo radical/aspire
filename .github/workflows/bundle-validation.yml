@@ -1,0 +1,51 @@
+name: Bundle validation
+
+on:
+  push:
+    branches: [ankj/native-bundle-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    uses: ./.github/workflows/build-cli-native-archives.yml
+    with:
+      configuration: Release
+      versionOverrideArg: /p:VersionSuffix=validation.bundle /p:DotNetFinalVersionKind=prerelease
+      targets: >-
+        [
+          {"os":"ubuntu-latest","runner":"ubuntu-latest","rids":"linux-x64"},
+          {"os":"ubuntu-latest","runner":"ubuntu-24.04-arm","rids":"linux-arm64"},
+          {"os":"windows-latest","runner":"windows-latest","rids":"win-x64"},
+          {"os":"windows-latest","runner":"windows-11-vs2026-arm","rids":"win-arm64"},
+          {"os":"macos-latest","runner":"macos-latest","rids":"osx-arm64"},
+          {"os":"macos-latest","runner":"macos-latest","rids":"osx-x64"}
+        ]
+
+  infrastructure:
+    name: Publish conditions (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Run publish and payload regression tests
+        shell: pwsh
+        env:
+          MSBUILDTERMINALLOGGER: 'false'
+        run: |
+          $dotnet = if ($IsWindows) { "./dotnet.cmd" } else { "./dotnet.sh" }
+          & $dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-class "*.BundleBuildPhaseTests" --filter-class "*.Hex1bNativePublishingTests" --filter-class "*.CreateLayoutTests" --filter-class "*.AutoRerunTransientCiFailuresTests" --filter-class "*.TestTriggerMapTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          exit $LASTEXITCODE
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: infrastructure-logs-${{ matrix.os }}
+          path: |
+            artifacts/log/**
+            artifacts/TestResults/**
