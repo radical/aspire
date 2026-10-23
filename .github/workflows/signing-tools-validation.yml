@@ -1,0 +1,63 @@
+name: Signing tools validation
+
+on:
+  push:
+    branches: [ankj/signing-tools-gh-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    uses: ./.github/workflows/build-cli-native-archives.yml
+    with:
+      configuration: Release
+      versionOverrideArg: /p:VersionSuffix=validation.signingtools /p:DotNetFinalVersionKind=prerelease
+      targets: >-
+        [
+          {"os":"ubuntu-latest","runner":"ubuntu-latest","rids":"linux-x64"},
+          {"os":"windows-latest","runner":"windows-latest","rids":"win-x64"},
+          {"os":"macos-latest","runner":"macos-latest","rids":"osx-arm64"}
+        ]
+
+  signing_tools:
+    name: Signing tool restore (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Restore tools once and sign twice without project restore
+        shell: pwsh
+        env:
+          MSBUILDTERMINALLOGGER: 'false'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dotnet = if ($IsWindows) { './dotnet.cmd' } else { './dotnet.sh' }
+          $build = if ($IsWindows) { './build.cmd' } else { './build.sh' }
+          $artifacts = Join-Path $PWD 'artifacts/signing-tool-probe'
+          New-Item -ItemType Directory -Force "$artifacts/log" | Out-Null
+          $properties = @("/p:ArtifactsDir=$artifacts/", '/p:Configuration=Release')
+          & $dotnet msbuild eng/RestoreSigningTools.proj /t:Restore @properties "/bl:$artifacts/log/restore.binlog"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($pass in 1..2) {
+            & $build -sign -configuration Release @properties /p:DotNetSignType=test /p:ForceDryRunSigning=true /p:AllowEmptySignList=true "/bl:$artifacts/log/sign-$pass.binlog"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Run wrapper regression coverage
+        shell: pwsh
+        run: |
+          $dotnet = if ($IsWindows) { './dotnet.cmd' } else { './dotnet.sh' }
+          & $dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-class "*.BundleBuildWrapperTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: signing-tools-logs-${{ matrix.os }}
+          path: |
+            artifacts/signing-tool-probe/log/**
+            artifacts/log/**
+            artifacts/TestResults/**
