@@ -31,7 +31,6 @@ jobs:
 
   build_cli_archives:
     name: Build CLI (${{ matrix.targets.rids }})
-    if: ${{ github.repository == 'microsoft/aspire' }}
     runs-on: ${{ matrix.targets.runner }}
     strategy:
       matrix:
