@@ -77,7 +77,7 @@ if ($SignedAppPath) {
     # notarization, and RestoreSignedTray targets have all succeeded.
     $app = Get-Item -LiteralPath $SignedAppPath
     if (-not $app.PSIsContainer) { throw "Signed app directory is missing: $SignedAppPath" }
-    foreach ($file in Get-ChildItem -LiteralPath $app.FullName -Recurse -File) {
+    foreach ($file in Get-ChildItem -LiteralPath $app.FullName -Recurse -File -Force) {
         Add-ReceiptFile $file.FullName 'whole-app-signing'
     }
 }

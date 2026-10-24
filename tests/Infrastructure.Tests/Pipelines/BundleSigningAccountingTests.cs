@@ -21,6 +21,7 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
     [InlineData("updating", null)]
     [InlineData("already-signed", null)]
     [InlineData("mac-transport", null)]
+    [InlineData("hidden", "dashboard/.helper.exe")]
     [RequiresTools(["pwsh"])]
     public async Task AccountsForActualPayloadBytes(string scenario, string? error)
     {
@@ -48,6 +49,10 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
         {
             File.Move(Path.Combine(directory, "helper.exe"), Path.Combine(directory, "conpty.dll"));
         }
+        if (scenario == "hidden")
+        {
+            File.Move(Path.Combine(directory, "helper.exe"), Path.Combine(directory, ".helper.exe"));
+        }
         if (scenario == "different-copy")
         {
             bytes[127] = 1;
@@ -56,7 +61,7 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
         var log = Path.Combine(workspace.Path, "sign.log");
         var processed = scenario switch
         {
-            "missing" or "upstream" or "unknown-native" => "",
+            "missing" or "upstream" or "unknown-native" or "hidden" => "",
             "updating" => $"Updating '{source}' with signed content (TaskId:3)",
             "already-signed" => $"File '{source}' is already signed. (TaskId:3)",
             _ => $"PE file {source} is signed properly"

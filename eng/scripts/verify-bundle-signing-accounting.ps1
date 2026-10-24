@@ -25,7 +25,7 @@ foreach ($entry in $receipts) {
 $entries = [Collections.Generic.List[object]]::new()
 $missing = [Collections.Generic.List[string]]::new()
 $nativeCount = 0
-foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName) {
+foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace('\', '/')
     $stream = [IO.File]::OpenRead($file.FullName)
     try {
