@@ -8,6 +8,62 @@ namespace Infrastructure.Tests;
 
 public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
 {
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task ComponentSigningLoggerSurvivesBuildEntryPoint()
+    {
+        using var workspace = TemporaryWorkspace.Create(output);
+        var root = workspace.CreateDirectory("repository with spaces").FullName;
+        var engineering = Directory.CreateDirectory(Path.Combine(root, "eng")).FullName;
+        var common = Directory.CreateDirectory(Path.Combine(engineering, "common")).FullName;
+        File.Copy(Path.Combine(RepoRoot.Path, "eng", "build.ps1"), Path.Combine(engineering, "build.ps1"));
+        File.Copy(Path.Combine(RepoRoot.Path, "build.cmd"), Path.Combine(root, "build.cmd"));
+        await File.WriteAllTextAsync(Path.Combine(common, "build.ps1"), """
+            $ErrorActionPreference = 'Stop'
+            $loggerArguments = @($args | Where-Object { $_ -like '/flp:*' -or $_ -like '@*' })
+            & $env:TEST_DOTNET msbuild "$env:TEST_ROOT/logger.proj" -nologo @loggerArguments
+            exit $LASTEXITCODE
+            """);
+        await File.WriteAllTextAsync(Path.Combine(root, "logger.proj"), """
+            <Project DefaultTargets="Build">
+              <Target Name="Build">
+                <Message Importance="low" Text="SIGNING_ACCOUNTING_DIAGNOSTIC_PROBE" />
+              </Target>
+            </Project>
+            """);
+        var buildScript = Path.Combine(root, OperatingSystem.IsWindows() ? "build.cmd" : "build.sh");
+        if (!OperatingSystem.IsWindows())
+        {
+            await File.WriteAllTextAsync(buildScript, """
+                #!/usr/bin/env bash
+                exec pwsh -NoProfile -File "$TEST_ROOT/eng/common/build.ps1" "$@"
+                """);
+            File.SetUnixFileMode(buildScript, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        var launcher = Path.Combine(root, "launch.ps1");
+        await File.WriteAllTextAsync(launcher, """
+            $ErrorActionPreference = 'Stop'
+            & $env:TEST_DOTNET msbuild "$env:TEST_REPO/eng/Bundle.proj" `
+              /t:_InitializeBundleBuild,_SignBundleComponents `
+              /p:TargetRid=win-x64 /p:Configuration=Release `
+              /p:BuildDistributionPackages=true /p:Sign=true /p:DotNetSignType=test `
+              "/p:_ArtifactsDir=$env:TEST_ROOT/artifacts/" `
+              "/p:_BuildScriptPath=$env:TEST_BUILD_SCRIPT"
+            exit $LASTEXITCODE
+            """);
+        using var command = new PowerShellCommand(launcher, output)
+            .WithTimeout(TimeSpan.FromMinutes(1))
+            .WithEnvironmentVariable("TEST_ROOT", root)
+            .WithEnvironmentVariable("TEST_REPO", RepoRoot.Path)
+            .WithEnvironmentVariable("TEST_BUILD_SCRIPT", buildScript)
+            .WithEnvironmentVariable("TEST_DOTNET", Path.Combine(RepoRoot.Path, ".dotnet", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"))
+            .WithEnvironmentVariable("TreatWarningsAsErrors", "false");
+        var result = await command.ExecuteAsync();
+        result.EnsureSuccessful();
+        Assert.Contains("SIGNING_ACCOUNTING_DIAGNOSTIC_PROBE",
+            await File.ReadAllTextAsync(Path.Combine(root, "artifacts", "log", "Release", "SignBundleComponents.log")));
+    }
+
     [Theory]
     [InlineData("processed", null)]
     [InlineData("missing", "dashboard/helper.exe")]

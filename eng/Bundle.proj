@@ -260,6 +260,7 @@
 
       <_SignOnlyCommand>&quot;$(_BuildScriptPath)&quot; -sign -configuration $(Configuration) $(_BundleChildArgs) $(_BundleSigningArgs)</_SignOnlyCommand>
       <_ComponentSigningLog>$(_ArtifactsLogDir)SignBundleComponents.log</_ComponentSigningLog>
+      <_ComponentSigningResponseFile>$(_ArtifactsLogDir)SignBundleComponents.rsp</_ComponentSigningResponseFile>
       <_BundleSigningReceipt>$(_ArtifactsLogDir)BundleSigningReceipt.json</_BundleSigningReceipt>
       <_ComponentSigningTempDir>$([MSBuild]::NormalizeDirectory('$(_ArtifactsDir)', 'tmp', '$(Configuration)', 'BundleComponentSigning'))</_ComponentSigningTempDir>
     </PropertyGroup>
@@ -463,7 +464,13 @@
     </ItemGroup>
     <Delete Files="@(_OldComponentSigningRequest)" />
     <MakeDir Directories="$(_ComponentSigningTempDir)" Condition="'$(Sign)' == 'true'" />
-    <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; &quot;/flp:LogFile=$(_ComponentSigningLog);Verbosity=diagnostic&quot;"
+    <!-- build.cmd forwards through powershell -Command. Keep the logger's
+         semicolon out of that shell command so it cannot become a statement. -->
+    <WriteLinesToFile File="$(_ComponentSigningResponseFile)"
+                      Lines="&quot;/flp:LogFile=$(_ComponentSigningLog)%3BVerbosity=diagnostic&quot;"
+                      Overwrite="true"
+                      Condition="'$(Sign)' == 'true'" />
+    <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; &quot;@$(_ComponentSigningResponseFile)&quot;"
           EnvironmentVariables="$(_NuGetCacheEnvironmentVariables)"
           Condition="'$(Sign)' == 'true'" />
 

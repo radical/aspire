@@ -1,0 +1,35 @@
+name: Signing logger regression validation
+
+on:
+  push:
+    branches: [ankj/bundle-signing-accounting-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  logger:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Reproduce previous logger failure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $original = [IO.File]::ReadAllBytes('eng/Bundle.proj')
+          try {
+            $baseline = git --no-pager show 2830d028628:eng/Bundle.proj
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            [IO.File]::WriteAllLines("$PWD/eng/Bundle.proj", $baseline)
+            ./dotnet.cmd test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-method "*.ComponentSigningLoggerSurvivesBuildEntryPoint" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+            if ($LASTEXITCODE -eq 0) { throw 'Previous implementation unexpectedly passed the regression.' }
+          }
+          finally {
+            [IO.File]::WriteAllBytes("$PWD/eng/Bundle.proj", $original)
+          }
+      - name: Verify fixed logging and accounting
+        shell: pwsh
+        run: |
+          ./dotnet.cmd test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-class "*.BundleSigningAccountingTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+          exit $LASTEXITCODE
