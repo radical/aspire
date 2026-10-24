@@ -13,6 +13,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - name: Reproduce previous logger failure
         shell: pwsh
         run: |
@@ -28,6 +30,23 @@ jobs:
           finally {
             [IO.File]::WriteAllBytes("$PWD/eng/Bundle.proj", $original)
           }
+          exit 0
+      - name: Reproduce previous error propagation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $original = [IO.File]::ReadAllBytes('build.cmd')
+          try {
+            $baseline = git --no-pager show 2830d028628:build.cmd
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            [IO.File]::WriteAllLines("$PWD/build.cmd", $baseline)
+            ./dotnet.cmd test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --no-launch-profile -- --filter-method "*.WindowsBuildEntryPointStopsOnPowerShellError" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+            if ($LASTEXITCODE -eq 0) { throw 'Previous entry point unexpectedly passed the regression.' }
+          }
+          finally {
+            [IO.File]::WriteAllBytes("$PWD/build.cmd", $original)
+          }
+          exit 0
       - name: Verify fixed logging and accounting
         shell: pwsh
         run: |

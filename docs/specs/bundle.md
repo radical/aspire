@@ -458,6 +458,8 @@ MicroBuild `FilesToSign` requests and successful-pass diagnostic records.
 Component signing passes diagnostic logger options through an MSBuild response
 file, avoiding semicolon reinterpretation by the Windows `build.cmd` PowerShell
 command wrapper.
+The Windows build entry point treats PowerShell errors as terminating so a
+wrapper failure cannot reuse a successful native command's exit code.
 It records processed/already-signed output files and their SHA-256 digests, plus the
 separately signed macOS app after its signing/notarization targets succeed.
 `verify-bundle-signing-accounting.ps1` compares actual native payload bytes with

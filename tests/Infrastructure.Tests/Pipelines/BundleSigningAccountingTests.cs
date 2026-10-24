@@ -10,6 +10,33 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
 {
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task WindowsBuildEntryPointStopsOnPowerShellError()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "The cmd entry point requires Windows.");
+        using var workspace = TemporaryWorkspace.Create(output);
+        var root = workspace.CreateDirectory("repository with spaces").FullName;
+        var engineering = Directory.CreateDirectory(Path.Combine(root, "eng")).FullName;
+        File.Copy(Path.Combine(RepoRoot.Path, "build.cmd"), Path.Combine(root, "build.cmd"));
+        await File.WriteAllTextAsync(Path.Combine(engineering, "build.ps1"), """
+            $global:LASTEXITCODE = 0
+            Write-Error 'SIGNING_WRAPPER_FAILURE_PROBE'
+            [IO.File]::WriteAllText("$PSScriptRoot/continued.txt", 'continued after failure')
+            """);
+        var launcher = Path.Combine(root, "launch.ps1");
+        await File.WriteAllTextAsync(launcher, """
+            & "$PSScriptRoot/build.cmd"
+            exit $LASTEXITCODE
+            """);
+        using var command = new PowerShellCommand(launcher, output)
+            .WithTimeout(TimeSpan.FromMinutes(1));
+        var result = await command.ExecuteAsync();
+        result.EnsureExitCode(1);
+        Assert.Contains("SIGNING_WRAPPER_FAILURE_PROBE", result.Output);
+        Assert.False(File.Exists(Path.Combine(engineering, "continued.txt")));
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task ComponentSigningLoggerSurvivesBuildEntryPoint()
     {
         using var workspace = TemporaryWorkspace.Create(output);
