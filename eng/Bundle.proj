@@ -470,7 +470,13 @@
                       Lines="&quot;/flp:LogFile=$(_ComponentSigningLog)%3BVerbosity=diagnostic&quot;"
                       Overwrite="true"
                       Condition="'$(Sign)' == 'true'" />
-    <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; &quot;@$(_ComponentSigningResponseFile)&quot;"
+    <PropertyGroup>
+      <_ComponentSigningResponseArgument>&quot;@$(_ComponentSigningResponseFile)&quot;</_ComponentSigningResponseArgument>
+      <!-- Preserve grouping through cmd's outer -Command quotes and the
+           subsequent PowerShell parse, including response-file paths with spaces. -->
+      <_ComponentSigningResponseArgument Condition="$([MSBuild]::IsOSPlatform('Windows'))">&quot;'@$(_ComponentSigningResponseFile.Replace(&quot;'&quot;, &quot;''&quot;))'&quot;</_ComponentSigningResponseArgument>
+    </PropertyGroup>
+    <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; $(_ComponentSigningResponseArgument)"
           EnvironmentVariables="$(_NuGetCacheEnvironmentVariables)"
           Condition="'$(Sign)' == 'true'" />
 
