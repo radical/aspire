@@ -459,7 +459,7 @@
 
     <!-- Sign the prepared component binaries before assembling the bundle archive. -->
     <ItemGroup Condition="'$(Sign)' == 'true'">
-      <_OldComponentSigningRequest Include="$(_ComponentSigningTempDir)Round*-Sign.proj" />
+      <_OldComponentSigningRequest Include="$(_ComponentSigningTempDir)**/Round*-Sign.proj" />
     </ItemGroup>
     <Delete Files="@(_OldComponentSigningRequest)" />
     <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; &quot;/flp:LogFile=$(_ComponentSigningLog);Verbosity=diagnostic&quot;"

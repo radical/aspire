@@ -39,7 +39,7 @@ function Add-ReceiptFile([string] $Path, [string] $Disposition) {
 # Mach-O signing transports helper as helper.zip, then extracts it back in place.
 # These files are read only after the containing real signing pass succeeds.
 # https://github.com/dotnet/arcade/blob/614293a9b3aa17dda9dc7e69c4dfcd576f59741a/src/Microsoft.DotNet.SignTool/src/SignTool.cs
-foreach ($request in Get-ChildItem -LiteralPath $SigningRequestsDirectory -Filter 'Round*-Sign.proj' -File) {
+foreach ($request in Get-ChildItem -LiteralPath $SigningRequestsDirectory -Filter 'Round*-Sign.proj' -File -Recurse) {
     [xml] $document = Get-Content -LiteralPath $request.FullName -Raw
     foreach ($item in $document.SelectNodes("//*[local-name()='FilesToSign']")) {
         $certificate = [string] $item.Authenticode

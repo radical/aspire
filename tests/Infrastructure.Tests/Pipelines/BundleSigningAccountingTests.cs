@@ -75,7 +75,8 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
         {
             // Arcade transports Mach-O files in a ZIP and can sign them in place,
             // without emitting an "Updating" or PE verification record.
-            await File.WriteAllTextAsync(Path.Combine(requests, "Round0-Sign.proj"), $"""
+            var signing = Directory.CreateDirectory(Path.Combine(requests, "Signing")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(signing, "Round0-Sign.proj"), $"""
                 <Project><ItemGroup><FilesToSign Include="{Uri.EscapeDataString(source + ".zip")}"><Authenticode>MacDeveloperHarden</Authenticode></FilesToSign></ItemGroup></Project>
                 """);
             await File.WriteAllTextAsync(log, """
