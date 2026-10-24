@@ -464,10 +464,18 @@
     </ItemGroup>
     <Delete Files="@(_OldComponentSigningRequest)" />
     <MakeDir Directories="$(_ComponentSigningTempDir)" Condition="'$(Sign)' == 'true'" />
-    <!-- build.cmd forwards through powershell -Command. Keep the logger's
-         semicolon out of that shell command so it cannot become a statement. -->
+    <!-- Keep all MSBuild arguments together, outside build.cmd's extra PowerShell
+         parse. Only build-script options remain on the command line. -->
+    <ItemGroup Condition="'$(Sign)' == 'true'">
+      <!-- dotnet expands response files before MSBuild and treats each line as
+           one argument. Preserve quoted path arguments while writing one per line. -->
+      <_ComponentSigningArgument Include="$([System.Text.RegularExpressions.Regex]::Replace('$(_BundleChildArgs) $(_BundleSigningArgs)', '(&quot;[^&quot;]*&quot;|\S+)\s*', '$1&#xA;'))" />
+      <_ComponentSigningArgument Include="&quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot;" />
+      <_ComponentSigningArgument Include="&quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot;" />
+      <_ComponentSigningArgument Include="&quot;/flp:LogFile=$(_ComponentSigningLog)%3BVerbosity=diagnostic&quot;" />
+    </ItemGroup>
     <WriteLinesToFile File="$(_ComponentSigningResponseFile)"
-                      Lines="&quot;/flp:LogFile=$(_ComponentSigningLog)%3BVerbosity=diagnostic&quot;"
+                      Lines="@(_ComponentSigningArgument)"
                       Overwrite="true"
                       Condition="'$(Sign)' == 'true'" />
     <PropertyGroup>
@@ -476,7 +484,7 @@
            subsequent PowerShell parse, including response-file paths with spaces. -->
       <_ComponentSigningResponseArgument Condition="$([MSBuild]::IsOSPlatform('Windows'))">&quot;'@$(_ComponentSigningResponseFile.Replace(&quot;'&quot;, &quot;''&quot;))'&quot;</_ComponentSigningResponseArgument>
     </PropertyGroup>
-    <Exec Command="$(_SignOnlyCommand) &quot;/p:ArtifactsTmpDir=$(_ComponentSigningTempDir.TrimEnd('\').TrimEnd('/'))/&quot; &quot;/bl:$(_ArtifactsLogDir)SignBundleComponents.binlog&quot; $(_ComponentSigningResponseArgument)"
+    <Exec Command="&quot;$(_BuildScriptPath)&quot; -sign -configuration $(Configuration) $(_ComponentSigningResponseArgument)"
           EnvironmentVariables="$(_NuGetCacheEnvironmentVariables)"
           Condition="'$(Sign)' == 'true'" />
 

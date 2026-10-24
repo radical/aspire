@@ -455,9 +455,10 @@ packages without repeating project restore.
 Real signed builds also reconcile the assembled layout against the successful
 component signing pass. `write-bundle-signing-receipt.ps1` reads the resolved
 MicroBuild `FilesToSign` requests and successful-pass diagnostic records.
-Component signing passes diagnostic logger options through an MSBuild response
-file, avoiding semicolon reinterpretation by the Windows `build.cmd` PowerShell
-command wrapper.
+Component signing passes all MSBuild properties and logger options through one
+response file, avoiding reinterpretation by the Windows `build.cmd` PowerShell
+command wrapper. Only the build script's `-sign` and `-configuration` options
+remain on its command line; those are parsed by the script, not MSBuild.
 The Windows build entry point treats PowerShell errors as terminating so a
 wrapper failure cannot reuse a successful native command's exit code.
 It records processed/already-signed output files and their SHA-256 digests, plus the

@@ -47,6 +47,9 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
         File.Copy(Path.Combine(RepoRoot.Path, "build.cmd"), Path.Combine(root, "build.cmd"));
         await File.WriteAllTextAsync(Path.Combine(common, "build.ps1"), """
             $ErrorActionPreference = 'Stop'
+            if (@($args | Where-Object { $_ -match '^[-/](p|property|bl|flp):' }).Count) {
+                throw 'Component signing MSBuild arguments must be supplied through the response file.'
+            }
             $loggerArguments = @($args | Where-Object { $_ -like '/flp:*' -or $_ -like '@*' })
             & $env:TEST_DOTNET msbuild "$env:TEST_ROOT/logger.proj" -nologo @loggerArguments
             exit $LASTEXITCODE
@@ -54,6 +57,11 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
         await File.WriteAllTextAsync(Path.Combine(root, "logger.proj"), """
             <Project DefaultTargets="Build">
               <Target Name="Build">
+                <Error Condition="'$(Configuration)' != 'Release'" Text="Configuration did not reach MSBuild." />
+                <Error Condition="'$(TargetRid)' != 'win-x64'" Text="TargetRid did not reach MSBuild." />
+                <Error Condition="'$(DotNetSignType)' != 'test'" Text="Signing type did not reach MSBuild." />
+                <Error Condition="'$(TeamName)' != 'signing team'" Text="Quoted signing property did not reach MSBuild." />
+                <Error Condition="'$(ArtifactsDir)' == '' or '$(ArtifactsTmpDir)' == ''" Text="Signing paths did not reach MSBuild." />
                 <Message Importance="low" Text="SIGNING_ACCOUNTING_DIAGNOSTIC_PROBE" />
               </Target>
             </Project>
@@ -74,6 +82,7 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
               /t:_InitializeBundleBuild,_SignBundleComponents `
               /p:TargetRid=win-x64 /p:Configuration=Release `
               /p:BuildDistributionPackages=true /p:Sign=true /p:DotNetSignType=test `
+              "/p:TeamName=signing team" `
               "/p:_ArtifactsDir=$env:TEST_ROOT/artifacts/" `
               "/p:_BuildScriptPath=$env:TEST_BUILD_SCRIPT"
             exit $LASTEXITCODE
