@@ -453,8 +453,9 @@ Subsequent sign-only invocations use fresh evaluations to discover newly built
 packages without repeating project restore.
 
 Real signed builds also reconcile the assembled layout against the successful
-component signing pass. `write-bundle-signing-receipt.ps1` records resolved
-processed/already-signed output files and their SHA-256 digests, plus the
+component signing pass. `write-bundle-signing-receipt.ps1` reads the resolved
+MicroBuild `FilesToSign` requests and successful-pass diagnostic records.
+It records processed/already-signed output files and their SHA-256 digests, plus the
 separately signed macOS app after its signing/notarization targets succeed.
 `verify-bundle-signing-accounting.ps1` compares actual native payload bytes with
 that receipt. Renamed and duplicated files match by digest rather than basename.

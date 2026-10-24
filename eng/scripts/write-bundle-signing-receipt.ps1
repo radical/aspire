@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory)][string] $SigningLog,
     [Parameter(Mandatory)][string] $OutputPath,
+    [Parameter(Mandatory)][string] $SigningRequestsDirectory,
     [string] $SignedAppPath
 )
 
@@ -28,6 +29,29 @@ function Add-ReceiptFile([string] $Path, [string] $Disposition) {
         # This hash binds accounting to the signed output bytes, not a similarly
         # named file in a later NuGet signing pass.
         sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
+    }
+}
+
+# Arcade's resolved MicroBuild requests use URI-escaped absolute paths:
+#   <FilesToSign Include="%2Fpublish%2Fhelper.zip">
+#     <Authenticode>MacDeveloperHarden</Authenticode>
+#   </FilesToSign>
+# Mach-O signing transports helper as helper.zip, then extracts it back in place.
+# These files are read only after the containing real signing pass succeeds.
+# https://github.com/dotnet/arcade/blob/614293a9b3aa17dda9dc7e69c4dfcd576f59741a/src/Microsoft.DotNet.SignTool/src/SignTool.cs
+foreach ($request in Get-ChildItem -LiteralPath $SigningRequestsDirectory -Filter 'Round*-Sign.proj' -File) {
+    [xml] $document = Get-Content -LiteralPath $request.FullName -Raw
+    foreach ($item in $document.SelectNodes("//*[local-name()='FilesToSign']")) {
+        $certificate = [string] $item.Authenticode
+        if ([string]::IsNullOrWhiteSpace($certificate) -or $certificate -eq 'None') {
+            throw "Signing request has no signing operation: $($request.FullName)"
+        }
+        $path = [Uri]::UnescapeDataString([string] $item.Include)
+        if ($path.EndsWith('.zip', [StringComparison]::OrdinalIgnoreCase) -and
+            (Test-Path -LiteralPath $path.Substring(0, $path.Length - 4) -PathType Leaf)) {
+            $path = $path.Substring(0, $path.Length - 4)
+        }
+        Add-ReceiptFile $path 'processed'
     }
 }
 

@@ -20,6 +20,7 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
     [InlineData("empty-layout", "No native files")]
     [InlineData("updating", null)]
     [InlineData("already-signed", null)]
+    [InlineData("mac-transport", null)]
     [RequiresTools(["pwsh"])]
     public async Task AccountsForActualPayloadBytes(string scenario, string? error)
     {
@@ -69,9 +70,26 @@ public sealed class BundleSigningAccountingTests(ITestOutputHelper output)
             SignToolTask execution finished.
             """);
         var receipt = Path.Combine(workspace.Path, "receipt.json");
+        var requests = workspace.CreateDirectory("requests").FullName;
+        if (scenario == "mac-transport")
+        {
+            // Arcade transports Mach-O files in a ZIP and can sign them in place,
+            // without emitting an "Updating" or PE verification record.
+            await File.WriteAllTextAsync(Path.Combine(requests, "Round0-Sign.proj"), $"""
+                <Project><ItemGroup><FilesToSign Include="{Uri.EscapeDataString(source + ".zip")}"><Authenticode>MacDeveloperHarden</Authenticode></FilesToSign></ItemGroup></Project>
+                """);
+            await File.WriteAllTextAsync(log, """
+                SignToolTask starting.
+                DryRun: False
+                Signing mode: Real
+                Build artifacts signed and validated.
+                SignToolTask execution finished.
+                """);
+        }
         using var exporter = new PowerShellCommand(Path.Combine(RepoRoot.Path, "eng/scripts/write-bundle-signing-receipt.ps1"), output)
             .WithTimeout(TimeSpan.FromMinutes(1));
-        var exportResult = await exporter.ExecuteAsync("-SigningLog", $"\"{log}\"", "-OutputPath", $"\"{receipt}\"");
+        var exportResult = await exporter.ExecuteAsync("-SigningLog", $"\"{log}\"", "-OutputPath", $"\"{receipt}\"",
+            "-SigningRequestsDirectory", $"\"{requests}\"");
         if (scenario is "failed-pass" or "dry-run")
         {
             exportResult.EnsureExitCode(1);
