@@ -877,6 +877,18 @@ public sealed class SelectTestsCliTests
         "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
     [InlineData("needs.setup.outputs.run_group_job-",
         "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs.setup.outputs.run_missingJob",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs['setup']['outputs']['run_missingJob']",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs.setup.outputs.run_-extra",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs['setup']['outputs']['run_-extra']",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs.setup.outputs.run_",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
+    [InlineData("needs.setup.outputs.run_group_job || needs['setup']['outputs']['run_']",
+        "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
     [InlineData("needs.setup.outputs[inputs.gate]",
         "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains a dynamic needs reference")]
     [InlineData("needs.setup.outputs.run_group_job || needs.setup.outputs[inputs.gate]",
@@ -940,7 +952,9 @@ public sealed class SelectTestsCliTests
             var normalized = NormalizeWorkflowExpression(condition.ToString());
             Assert.False(Regex.IsMatch(normalized, @"\bneeds(?:\.(?:[a-zA-Z0-9_-]+|\*))*\["),
                 $"{jobId} contains a dynamic needs reference that gate discovery cannot resolve: {condition}");
-            var gateNames = Regex.Matches(normalized, @"\brun_[a-z0-9_]+\b");
+            // Count unsupported names too (run_missingJob, run_-extra, run_) so they
+            // cannot disappear from discovery alongside a valid selector gate.
+            var gateNames = Regex.Matches(normalized, @"\brun_[a-zA-Z0-9_-]*");
             var references = Regex.Matches(normalized, @"\bneeds\.([a-zA-Z0-9_-]+)\.outputs\.(run_[a-z0-9_]+)(?![a-zA-Z0-9_-])");
             Assert.True(gateNames.Count == references.Count,
                 $"{jobId} contains an unrecognized run_* gate expression: {condition}");
