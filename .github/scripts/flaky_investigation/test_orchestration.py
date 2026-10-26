@@ -415,6 +415,81 @@ class OrchestrationTests(unittest.TestCase):
             self.assertFalse(context["historical_evidence"]["logs_collected"])
             self.assertIn("not current", context["historical_evidence"]["limitation"])
 
+    def test_substantive_local_work_survives_external_waits_into_fresh_agent_context(self):
+        local = {
+            "status": "completed", "reason": "Matching environment; local results are preliminary.",
+            "os": "Linux", "commands": ["./dotnet.sh test --project " + PROJECT],
+            "observed_output": "Total: 3, Passed: 3. No matching local failure.",
+        }
+        selection_reason = (
+            "Observed: shared readiness fixture; historical report dated May 13. "
+            "Hypothesis: startup exhausts the shared timeout. "
+            "Outstanding: hosted matching failure and original logs before proposing a fix.")
+        inspected = [f"{BASE}:{SOURCE}: await widget.WaitAsync();", "Historical logs unavailable; dated report only."]
+        def complete_agent(action, explanation, **fields):
+            state, _ = self.live()
+            run_id = state["agent"]["id"]
+            self.github.runs[run_id].update(status="completed", conclusion="success")
+            self.github.artifacts[(run_id, "repo-memory-default")] = {
+                "proposal.json": json.dumps(proposal(
+                    state, state["agent"]["revision"], action, explanation=explanation,
+                    evidence_read=inspected, **fields)).encode()}
+            self.invoke_controller()
+        def context():
+            state, _ = self.live()
+            with tempfile.TemporaryDirectory() as temporary, patch("controller.ROOT", Path(temporary)), \
+                    patch("controller.stage_source", return_value=Path(temporary) / "source"), \
+                    patch.dict(os.environ, {"GITHUB_RUN_ID": str(state["agent"]["id"])}):
+                prepare(self.github, URL, state["agent"]["revision"])
+                return json.loads((Path(temporary) / "context.json").read_text())
+        self.controller.advance(self.state, self.revision)
+        complete_agent("select", selection_reason, selection=SELECT, local_precheck=local)
+        self.complete_worker(True)
+        self.invoke_controller()
+        first = context()
+        self.assertEqual(BASE, first["source"]["sha"])
+        self.assertEqual(selection_reason, first["checkpoint"]["notes"][-1]["explanation"])
+        self.assertEqual(inspected, first["checkpoint"]["notes"][-1]["evidence_read"])
+        self.assertEqual(local, first["checkpoint"]["local_precheck"])
+        repaired = CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")
+        verification = {**local, "observed_output": "Total: 3, Passed: 3 after the local candidate change."}
+        repair_reason = (
+            "Observed: hosted target passes and matching failure; readiness wait uses shared startup budget. "
+            "Hypothesis: separate readiness wait removes that race. "
+            "Outstanding: exact candidate hosted verification, then final full source review.")
+        complete_agent("repair", repair_reason, diagnosis="Readiness race; wait for readiness separately.",
+                       files={SOURCE: repaired}, local_precheck=verification)
+        self.complete_worker(False)
+        self.invoke_controller()
+        final = context()
+        self.assertEqual(BASE, final["source"]["sha"])
+        self.assertEqual(self.github.state["candidate"]["sha"], final["checkpoint"]["candidate"]["sha"])
+        self.assertEqual({SOURCE: repaired}, final["candidate_files"])
+        self.assertEqual(repair_reason, final["checkpoint"]["notes"][-1]["explanation"])
+        self.assertEqual(inspected, final["checkpoint"]["notes"][-1]["evidence_read"])
+        self.assertEqual(verification, final["checkpoint"]["notes"][-1]["local_precheck"])
+        self.assertEqual(local, final["checkpoint"]["notes"][0]["local_precheck"])
+        self.assertEqual(local, final["checkpoint"]["local_precheck"])
+        self.assertEqual(3, self.github.state["used"]["models"])
+        self.assertEqual([], self.github.comments)
+        self.assertEqual([], self.github.pulls)
+
+    def test_invalid_repair_local_work_is_rejected_before_candidate_publication(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        self.complete_worker(True)
+        state, revision = self.live()
+        request = proposal(
+            state, revision, "repair", diagnosis="Readiness race.",
+            files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+            local_precheck={"status": "completed", "reason": "Claimed local verification without commands."})
+        before = copy.deepcopy((self.github.state, self.github.revision, self.github.refs, self.github.commits))
+        with self.assertRaisesRegex(ValueError, "commands"):
+            self.controller.handle(state, revision, request)
+        self.assertEqual(before, (self.github.state, self.github.revision, self.github.refs, self.github.commits))
+        self.assertEqual([], self.github.comments)
+        self.assertEqual([], self.github.pulls)
+
     def test_rejected_worker_posts_short_analysis_with_exact_evidence_and_resumes_without_duplicates(self):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")

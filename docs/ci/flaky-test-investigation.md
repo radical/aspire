@@ -21,8 +21,14 @@ Use `operation=resume` to reconcile an existing investigation, or
 require maintainer permission; the issue author need not be a maintainer.
 Repeated enrollment does not reset state or budgets.
 
+The agent continues substantive source/history analysis and feasible local work
+until it needs external evidence or verification. It does not yield just to
+select a test or ask another model to continue reading. The executable prompt
+separates this flaky-task guidance from execution and handoff mechanics; it
+does not introduce another task implementation or a generic plugin system.
+
 The controller advances actionable transitions and exits; no model waits for CI.
-Selection starts the first baseline immediately. Clean rounds continue through
+A completed selection handoff starts the first baseline immediately. Clean rounds continue through
 single, single, then project contention (or single for non-quarantined targets)
 without a fresh model just to request another run. Diagnosis/repair, final
 no-reproduction analysis, and exact-candidate review still use fresh phases.
@@ -33,9 +39,9 @@ completion events from token-dispatched workflows. Scheduled recovery can also
 resume a completed worker after an interrupted controller.
 
 ```text
-issue URL → discover → reproduce → diagnose → candidate → verify → source review
-                             ↑                    │                 │
-                             └── fresh phase ─────┘           draft PR/findings
+issue URL → local investigation → hosted baseline
+hosted evidence → local diagnosis/candidate → hosted verification
+accepted verification → final source review → draft PR/findings
 ```
 
 ### Operator walkthrough
@@ -45,6 +51,9 @@ issue URL → discover → reproduce → diagnose → candidate → verify → s
    `/tmp/gh-aw/flaky-investigation/source`. It must actually read the staged
    `fix-flaky-test` guidance and cite a relevant excerpt. The wrapper checkout
    is not a substitute for that source; the archive itself has no `.git`.
+   A header excerpt or assumed missing tool is not enough: the prompt requires
+   test/fixture analysis, available linked historical evidence, actual
+   prerequisite probes and bounded local execution when feasible.
 2. Open the controller's console and step summary. `flaky-investigation` JSON
    lines identify the issue, phase, checkpoint, base/control SHA, selected
    test/project/OSes, and current versus checkpointed child URLs. Worker
@@ -65,6 +74,20 @@ issue URL → discover → reproduce → diagnose → candidate → verify → s
    `repo-memory-default` proposal artifact, and original worker artifacts
    together; do not substitute a newer branch head or merged TRX. Resume
    reconciles existing work and cancel targets only the owned active run.
+
+Each handoff distinguishes observations, the current hypothesis and outstanding
+work in `explanation`, with source/report identities and excerpts in
+`evidence_read`. Selection requires `local_precheck`; later proposals can reuse
+that bounded field for their actual local work. Checkpoint notes preserve it
+for fresh agents. Their prepared context also includes immutable base/candidate
+identities and the published candidate files. No extra action or
+proposal-version change is needed.
+
+These local records are model-authored evidence, not independently validated
+test results. A prerequisite/build failure is not a test pass. Older proposals
+remain readable without local-work metadata. Hosted accepted-baseline,
+candidate verification and final source-review gates remain required; local
+work alone cannot authorize a fix PR.
 
 The original issue receives the confirmed terminal finding URL. A terminal
 resume is a no-op, and repeated start does not reset budgets. There is no
@@ -127,9 +150,11 @@ job requirements, not the permissions of the model job.
 
 ## Evidence and finite limits
 
-Local repetition is attempted when the agent environment supports the relevant
-OS and prerequisites. Otherwise it records the actual environment and explicit
-skip reason. Local results never replace the hosted gate.
+The prompt requires checking actual OS, toolchain and test-specific prerequisites,
+then bounded local work when feasible. A skip cites actual probes/results and
+the concrete blocker, not unchecked assumptions about a cold agent environment.
+Source/history analysis continues where possible even when local execution is
+unavailable. Local results never replace the hosted gate.
 
 Baseline rounds use three runners × three iterations per selected OS. At most
 three rounds are permitted; the third can escalate to all quarantined tests in

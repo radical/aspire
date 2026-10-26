@@ -206,6 +206,8 @@ class Controller:
             "explanation": proposal["explanation"], "evidence_read": proposal["evidence_read"],
         })
         action = proposal["action"]
+        if action == "select" or "local_precheck" in proposal:
+            state["notes"][-1]["local_precheck"] = local_precheck(proposal.get("local_precheck"))
         if action == "finish":
             outcome = proposal.get("outcome")
             require(isinstance(outcome, str) and outcome in TERMINAL - {"cancelled"}, "Unknown terminal finding")
@@ -266,7 +268,7 @@ class Controller:
                         pending.append(resolved)
             state["repair_scope"] = repair_scope(state["target"]["project"], projects)
             # No arbitrary agent shell command is forwarded to a trusted runner.
-            state["local_precheck"] = local_precheck(proposal.get("local_precheck"))
+            state["local_precheck"] = state["notes"][-1]["local_precheck"]
             state["phase"] = "ready"
             revision = self.save(state, revision, "Validated test selection and local precheck; start baseline directly.")
             return self.baseline(state, revision, "validated selection; no extra model needed to request reproduction.")
