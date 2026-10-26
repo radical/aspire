@@ -817,6 +817,10 @@ public sealed class SelectTestsCliTests
         });
     }
 
+    // Discover run_* references in tests.yml's job-level conditions so new gates
+    // are checked without a copied inventory. Verify their dependency/output wiring
+    // and force-all selector booleans to catch gates that would silently skip work.
+    // This checks consistency, not step-level conditions or workflow execution.
     [Fact]
     public void RealWorkflowJobGatesReachProductionSelectorBooleans()
     {
@@ -834,6 +838,10 @@ public sealed class SelectTestsCliTests
         });
     }
 
+    // Equivalent YAML/expression spellings must resolve to the same selector gate.
+    // These fixtures vary whitespace, multiline values, quoting, bracket access,
+    // and dependency syntax; reference-like text inside strings must be ignored.
+    // They test the checker, not GitHub Actions expression execution.
     [Theory]
     [InlineData("needs.setup.outputs.run_group_job", "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "setup")]
     [InlineData(">-\n${{\n  !cancelled() &&\n  needs . setup . outputs . run_group_job\n}}",
@@ -851,6 +859,11 @@ public sealed class SelectTestsCliTests
         AssertFixtureWorkflowJobGates(condition, mapping, needs);
     }
 
+    // Exercise the checker with small YAML fixtures, not an actual Actions run.
+    // Unsupported or dynamic references must report incomplete discovery, even
+    // alongside a recognized gate. Quoted reference-like text must not satisfy
+    // the requirement to discover a real gate. Check the specific diagnostic so
+    // an unrelated fixture failure cannot make these negative cases pass.
     [Theory]
     [InlineData("fromJSON(needs.setup.outputs.selection).run_group_job",
         "${{ fromJSON(steps.select.outputs.selection).run_group_job }}", "consumer contains an unrecognized run_* gate expression")]
