@@ -126,12 +126,48 @@ suppression also requires the actual `github-actions[bot]` author. PRs preserve
 the repository template and contain only the source candidate, not investigation
 workflow changes. Human code walkthrough and security review remain required.
 
+### Findings when no verified fix is reached
+
+Every confirmed non-verified terminal outcome uses the same trusted publisher
+to comment on the original issue. The comment leads with a short reason no
+verified fix was reached, attempted work, accepted observations, rejected-run
+links, and one next action. Detailed run tables, source identities, local
+precheck output, model evidence references, and rejected diagnostics are under
+a collapsible **Evidence** section. Long detail is truncated for display;
+the original checkpoint and artifacts remain the audit source.
+
+The prompt asks a finishing model for bounded `analysis`: `why_no_fix`
+(600 characters), one to three `attempted` steps (240 characters each), and
+`next_action` (300 characters). Fields must be single-line text.
+Model-authored analysis is labelled as not independently established; counts
+and run identities come from the controller, not that prose.
+
+If an agent fails, omits or corrupts its proposal, or cannot finish within its
+budget, the controller supplies an explicit trusted fallback. Infrastructure,
+missing TRX, unrelated failures, invalid candidates, exhausted repair attempts,
+cancellation, and interrupted intents likewise retain an actionable reason.
+No extra model runs just to summarize failure. Old proposals without `analysis`
+remain readable and their explanations are labelled as legacy model text,
+not silently promoted into a trusted summary or the new structured analysis.
+
+Rejected attempts are stored separately in `rejected_attempts`, with phase,
+bounded diagnostic, available checkpointed run/source identity, and rejected
+action where known. They never enter accepted test counts. A model or worker
+run link is not proof that its output passed validation. The controller can
+publish a fallback even when no valid model analysis exists, provided GitHub
+remains writable and checkpoint recovery can run.
+Checkpointed run identities are not test results. Interrupted intents without
+a run receipt say so rather than linking to a guessed run.
+
 If publication was interrupted, recovery checks for the owned bot marker. If
 the remote outcome cannot be established, it records a terminal
 `publication_uncertain` blocker and emits an error rather than retrying a
 possibly completed comment/PR write. Inspect the checkpoint and remote objects
-before any manual remediation. Investigation refs and artifacts are retained
-for audit; artifact expiry can make an old investigation unrecoverable.
+before any manual remediation: an unconfirmed response does not mean no PR
+or comment exists. A GitHub outage, missing write permission, or uncertain
+publication cannot guarantee delivery of a comment. Investigation refs and
+artifacts are retained for audit; artifact expiry can make an old
+investigation unrecoverable.
 
 ## Validation and deployment
 

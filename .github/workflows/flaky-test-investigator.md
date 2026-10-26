@@ -192,3 +192,41 @@ counts, and actionable blockers. The controller enforces eight model phases,
 five worker rounds, 180 runner-iterations and twelve hours. It alone creates a
 template-preserving **draft** PR or an automation-attributed issue finding.
 It never closes the issue, unquarantines, or merges.
+
+## Explain why no verified fix was reached
+
+For every non-verified `finish`, include `analysis` alongside the common
+proposal fields. The controller posts this short analysis on the **original
+issue**, with accepted evidence and rejected attempts in a collapsible Evidence
+section. Never post the comment yourself or call another model just to write it.
+
+```json
+{
+  "action": "finish",
+  "outcome": "not-reproduced",
+  "analysis": {
+    "why_no_fix": "The target passed in the available environment; its reported failure was not reproduced.",
+    "attempted": ["Read the test and original reports.", "Repeated the exact target on the issue's OS."],
+    "next_action": "Have a maintainer compare the original failing environment before authorizing further reproduction."
+  }
+}
+```
+
+Use one single-line `why_no_fix` (at most 600 characters), one to three
+single-line `attempted` steps (at most 240 characters each), and one single-line
+`next_action` (at most 300 characters). Report only work actually performed;
+the example is not evidence. Keep `explanation` concise and record the exact
+source/report paths and inspected error excerpts in `evidence_read`.
+
+Distinguish observed facts from hypotheses. Explain what prevented a verified
+fix: ambiguous target, no matching reproduction, infrastructure, rejected
+candidate, failed verification, or exhausted budget. Do not imply a passing
+baseline proves the test fixed, or count a rejected worker batch as accepted
+evidence. If no root cause was established, say so. Your analysis is labelled
+as model-authored, not independently established.
+
+If a model crashes, fails to persist a valid proposal, or cannot finish, the
+trusted controller supplies a bounded fallback from checkpointed facts and
+rejected-attempt diagnostics. It does not invent a model analysis. An uncertain
+remote publication is reported as unconfirmed, never as proof no PR exists;
+the controller does not blindly retry it.

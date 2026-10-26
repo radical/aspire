@@ -18,6 +18,10 @@ SHA = re.compile(r"[0-9a-f]{40}")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 
 
+class BudgetExceeded(ValueError):
+    pass
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -163,7 +167,8 @@ def repair_scope(project, projects):
 def reserve(state, kind, amount=1):
     require(kind in LIMITS, "Unknown budget")
     used = state["used"][kind] + integer(amount, LIMITS[kind])
-    require(used <= LIMITS[kind], f"{kind} budget exhausted")
+    if used > LIMITS[kind]:
+        raise BudgetExceeded(f"{kind} budget exhausted")
     state["used"][kind] = used
 
 
@@ -200,3 +205,23 @@ def validate_proposal(state, revision, proposal):
     require(isinstance(evidence, list) and 1 <= len(evidence) <= 30, "Evidence inspected must be recorded")
     for item in evidence:
         text(item, 1000)
+    if "analysis" in proposal:
+        require(proposal["action"] == "finish" and proposal.get("outcome") != "verified",
+                "Analysis is only for terminal findings without a verified fix")
+        terminal_analysis(proposal["analysis"])
+
+
+def terminal_analysis(value):
+    require(isinstance(value, dict) and set(value) == {"why_no_fix", "attempted", "next_action"},
+            "Terminal analysis requires why_no_fix, attempted and next_action")
+    def short_line(value, maximum):
+        text(value, maximum)
+        require(not any(character in value for character in "\r\n"), "Analysis must use short single-line fields")
+        return value.strip()
+    attempted = value["attempted"]
+    require(isinstance(attempted, list) and 1 <= len(attempted) <= 3, "Analysis requires 1-3 attempted steps")
+    return {
+        "why_no_fix": short_line(value["why_no_fix"], 600),
+        "attempted": [short_line(step, 240) for step in attempted],
+        "next_action": short_line(value["next_action"], 300),
+    }

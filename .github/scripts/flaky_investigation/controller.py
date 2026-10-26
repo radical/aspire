@@ -9,11 +9,12 @@ import subprocess
 import sys
 
 from contracts import (
-    AGENT, LIMITS, REPOSITORY, TERMINAL, WORKER, expired, integer, issue_number, local_precheck,
-    repair_scope, require, reserve, selection, sha, text, validate_candidate, validate_proposal,
+    AGENT, LIMITS, REPOSITORY, TERMINAL, WORKER, BudgetExceeded, expired, integer, issue_number, local_precheck,
+    repair_scope, require, reserve, selection, sha, terminal_analysis, text, validate_candidate, validate_proposal,
 )
 from evidence import summarize
 from github import GitHub, owned_run, state_branch
+from reporting import detail, diagnostic, findings
 
 
 ROOT = Path("/tmp/gh-aw/flaky-investigation")
@@ -150,7 +151,8 @@ class Controller:
                         and verified[-1]["passed"] >= 9
                         and verified[-1]["mode"] == next(item["mode"] for item in reversed(baseline) if item["failed"]),
                         "Final candidate needs nine target passes in the reproduced mode")
-            return self.finish(state, revision, outcome, proposal["explanation"])
+            analysis = terminal_analysis(proposal["analysis"]) if "analysis" in proposal else None
+            return self.finish(state, revision, outcome, proposal["explanation"], analysis)
         if action == "select":
             require(state["target"] is None, "Selection is immutable after enrollment")
             tree = self.github.tree(state["base_sha"])
@@ -188,7 +190,8 @@ class Controller:
         if action == "reproduce":
             require(state["candidate"] is None, "Cannot restart baseline after publishing a candidate")
             rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-            require(len(rounds) < 3, "Baseline round budget exhausted")
+            if len(rounds) >= 3:
+                raise BudgetExceeded("Baseline round budget exhausted")
             mode = "project" if len(rounds) == 2 and state["target"]["quarantined"] else "single"
             return self.dispatch_worker(state, revision, "reproduce", 3, 3, mode)
         require(action == "repair", "Unsupported action")
@@ -218,8 +221,8 @@ class Controller:
         revision = self.save(state, revision)
         return self.advance(state, revision)
 
-    def finish(self, state, revision, outcome, explanation):
-        state.update(phase="publication-intent", outcome=outcome, explanation=text(explanation))
+    def finish(self, state, revision, outcome, explanation, analysis=None):
+        state.update(phase="publication-intent", outcome=outcome, explanation=text(explanation), analysis=analysis)
         revision = self.save(state, revision)
         return self.publish(state, revision, first=True)
 
@@ -271,11 +274,9 @@ class Controller:
                         "title": f"[automated] Fix flakiness in {state['target']['method']}",
                         "body": body, "head": branch, "base": "main", "draft": True,
                     })
-                pr_url = "\n\nDraft fix: " + pr["html_url"]
+                pr_url = pr["html_url"]
             self.github.api(f"issues/{issue}/comments", {
-                "body": f"[automated] **Flaky-test investigation: {state['outcome']}**\n\n"
-                        f"{state['explanation']}\n\n{evidence_table(state)}{pr_url}\n\n"
-                        "No merge, issue closure, or unquarantine was performed.\n\n" + marker,
+                "body": findings(state, evidence_table(state), pr_url),
             })
         state["phase"] = "terminal"
         return self.save(state, revision)
@@ -283,6 +284,9 @@ class Controller:
     def advance(self, state, revision, cancel=False):
         if state["phase"] == "terminal":
             return revision
+        # Cancellation cannot establish whether an earlier publication succeeded.
+        if state["phase"] == "publication-intent":
+            return self.publish(state, revision)
         if cancel:
             if state["phase"] in {"agent", "worker"}:
                 owned = state[state["phase"]]
@@ -293,12 +297,12 @@ class Controller:
                     revision = self.save(state, revision)
                     self.github.api(f"actions/runs/{owned['id']}/cancel", {}, "POST")
             return self.finish(state, revision, "cancelled", "Maintainer cancelled this investigation.")
-        if state["phase"] == "publication-intent":
-            return self.publish(state, revision)
         if state["phase"].endswith("-intent"):
+            reason = ("Interrupted remote write has an uncertain outcome. Inspect the checkpoint intent; "
+                      "no dispatch, candidate, cancellation, or publication was blindly retried.")
+            record_rejection(state, reason)
             return self.finish(state, revision, "blocked",
-                               "Interrupted remote write has an uncertain outcome. Inspect the checkpoint intent; "
-                               "no dispatch, candidate, cancellation, or publication was blindly retried.")
+                               reason)
         if expired(state, self.now()):
             return self.finish(state, revision, "budget-exhausted", "The twelve-hour investigation budget expired.")
         if state["phase"] == "candidate-ready":
@@ -332,8 +336,21 @@ def evidence_table(state):
                      f"| {requested} | {item['passed']} | {item['failed']} | {item['actual_tests']} |")
     lines.append("\nProject-mode actual test counts are not capped by the runner-iteration budget.")
     if state["local_precheck"]:
-        lines.append("\nLocal precheck: " + json.dumps(state["local_precheck"]))
+        lines.append("\nLocal precheck:\n" + detail(json.dumps(state["local_precheck"], indent=2)))
     return "\n".join(lines)
+
+
+def record_rejection(state, reason, action=None):
+    rejection = {"phase": state["phase"], "reason": diagnostic(reason)}
+    if action:
+        rejection["action"] = action
+    phase = state["phase"].removesuffix("-intent")
+    owned = state.get(phase) if phase in {"agent", "worker"} else None
+    if owned:
+        rejection.update({key: owned[key] for key in ("source_sha", "sha", "mode", "branch") if key in owned})
+        if "id" in owned:
+            rejection["run_id"] = owned["id"]
+    state.setdefault("rejected_attempts", []).append(rejection)
 
 
 def prepare(github, url, revision):
@@ -414,12 +431,15 @@ def main():
             controller.advance(state, revision, cancel=operation == "cancel")
         except (ValueError, KeyError, subprocess.CalledProcessError) as error:
             live, current = github.load(issue)
-            if current != revision:
+            if current != revision or live["phase"] == "publication-intent":
                 # A write may already have succeeded. Its persisted intent is the
                 # recovery authority, not an in-memory copy or an automatic retry.
                 print(f"::error::Investigation {issue} interrupted after checkpoint; resume required: {error}", file=sys.stderr)
                 raise
-            controller.finish(live, current, "blocked", f"Validation/remote operation blocked: {error}")
+            action = state["notes"][-1]["action"] if len(state["notes"]) > len(live["notes"]) else None
+            record_rejection(live, error, action)
+            outcome = "budget-exhausted" if isinstance(error, BudgetExceeded) else "blocked"
+            controller.finish(live, current, outcome, "Validation/remote operation blocked: " + diagnostic(error))
 
 
 if __name__ == "__main__":

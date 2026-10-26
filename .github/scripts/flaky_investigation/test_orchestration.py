@@ -18,8 +18,9 @@ from contracts import (
 )
 from controller import Controller, authorize, main
 from evidence import summarize
-from github import GitHub, owned_run, state_branch
+from github import GitHub, GitHubAPIError, owned_run, state_branch
 from runner import execute
+from reporting import findings
 from worker import configuration, setup_outputs, validate_checkout
 
 
@@ -189,6 +190,366 @@ class OrchestrationTests(unittest.TestCase):
 
     def live(self):
         return self.github.load(123)
+
+    def invoke_controller(self):
+        with patch.dict(os.environ, {
+            "GITHUB_REPOSITORY": REPOSITORY, "ISSUE_URL": URL,
+            "OPERATION": "resume", "GITHUB_EVENT_NAME": "schedule",
+        }), patch("sys.argv", ["controller.py", "advance"]), \
+                patch("controller.GitHub", return_value=self.github), \
+                patch("controller.Controller", return_value=self.controller):
+            main()
+
+    def test_rejected_worker_posts_short_analysis_with_exact_evidence_and_resumes_without_duplicates(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
+        self.complete_worker(False)
+        state, revision = self.live()
+        self.controller.dispatch_worker(state, revision, "reproduce", 1, 1, "single")
+        state, _ = self.live()
+        worker = state["worker"]
+        self.github.runs[worker["id"]].update(status="completed", conclusion="failure")
+        files = evidence(worker, state["target"])[("ubuntu-latest", 1)]
+        files["iteration-1/unrelated.trx"] = trx("Failed", execution="unrelated", method="Other")
+        self.github.artifacts[(worker["id"], "flaky-evidence-ubuntu-latest-1")] = files
+        self.invoke_controller()
+        state, revision = self.live()
+        self.assertEqual("terminal", state["phase"])
+        self.assertEqual("blocked", state["outcome"])
+        self.assertEqual(1, len(state["history"]))
+        self.assertEqual(1, state["history"][0]["passed"])
+        self.assertEqual(worker["id"], state["rejected_attempts"][0]["run_id"])
+        self.assertEqual(1, len(self.github.comments))
+        body = self.github.comments[0]["body"]
+        summary, details = body.split("<details>", 1)
+        self.assertIn("Why no verified fix", summary)
+        self.assertIn("Unrelated project test failed", summary)
+        self.assertIn("**Tried:**", summary)
+        self.assertIn("**Next:**", summary)
+        self.assertIn("1 target passes, 0 target failures", summary)
+        self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{worker['id']}", details)
+        self.assertIn("Rejected attempts (not accepted test counts)", details)
+        self.assertLess(len(summary), 1600)
+        golden = Path(__file__).with_name("fixtures") / "rejected-worker-comment.txt"
+        self.assertEqual(golden.read_text(encoding="utf-8"), body + "\n")
+        self.assertEqual([], self.github.pulls)
+        before = copy.deepcopy((self.github.state, self.github.comments, self.github.refs))
+        self.invoke_controller()
+        self.assertEqual(revision, self.github.revision)
+        self.assertEqual(before, (self.github.state, self.github.comments, self.github.refs))
+
+    def test_failed_or_malformed_agent_uses_trusted_fallback_not_prior_model_analysis(self):
+        for defect in ("failure", "missing", "malformed"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                stale_analysis = {
+                    "why_no_fix": "A stale model diagnosis must not be reused.",
+                    "attempted": ["A stale attempt."], "next_action": "A stale recommendation.",
+                }
+                self.state["analysis"] = stale_analysis
+                self.controller.advance(self.state, self.revision)
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(
+                    status="completed", conclusion="failure" if defect == "failure" else "success")
+                if defect == "malformed":
+                    self.github.artifacts[(run_id, "repo-memory-default")] = {"proposal.json": b"{"}
+                self.invoke_controller()
+                self.assertEqual("blocked", self.github.state["outcome"])
+                body = self.github.comments[0]["body"]
+                self.assertIn("Trusted controller fallback", body)
+                self.assertIn("No valid terminal model analysis was received", body)
+                self.assertIsNone(self.github.state["analysis"])
+                self.assertNotIn(stale_analysis["why_no_fix"], body)
+                self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{run_id}", body)
+                self.assertEqual([], self.github.pulls)
+
+    def test_terminal_model_analysis_is_bounded_and_distinguished_from_observed_counts(self):
+        analysis = {
+            "why_no_fix": "The target passed; a readiness race remains only a hypothesis.",
+            "attempted": ["Read the test and original reports.", "Repeated the exact target."],
+            "next_action": "Reproduce on the issue's Windows environment.",
+        }
+        request = proposal(self.state, self.revision, "finish", outcome="not-reproduced", analysis=analysis)
+        validate_proposal(self.state, self.revision, request)
+        self.controller.handle(self.state, self.revision, request)
+        body = self.github.comments[0]["body"]
+        self.assertIn("Model analysis (not independently established)", body)
+        self.assertIn(analysis["why_no_fix"], body)
+        self.assertIn(analysis["next_action"], body)
+        self.assertEqual(analysis, self.github.state["analysis"])
+        self.assertIn("**Observed:** No accepted test executions.", body)
+        self.assertEqual([], self.github.pulls)
+
+    def test_signed_artifact_error_posts_one_safe_terminal_finding_and_resume_is_noop(self):
+        for parameter in ("sig", "token", "access_token"):
+            with self.subTest(parameter=parameter):
+                self.setUp()
+                self.controller.advance(self.state, self.revision)
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(status="completed", conclusion="success")
+                error = GitHubAPIError(1, ["gh", "api"], stderr=(
+                    f'Get "https://artifacts.example/b?{parameter}=abc123&se=2026": '
+                    "TLS handshake timeout").encode())
+                with patch.object(self.github, "artifact", side_effect=error):
+                    self.invoke_controller()
+                self.assertEqual("terminal", self.github.state["phase"])
+                self.assertEqual("blocked", self.github.state["outcome"])
+                self.assertEqual(1, len(self.github.comments))
+                body = self.github.comments[0]["body"]
+                self.assertIn("TLS handshake timeout", body)
+                self.assertNotIn("abc123", body)
+                self.assertNotIn(f"?{parameter}=", body)
+                self.assertEqual([], self.github.pulls)
+                before = copy.deepcopy((self.github.state, self.github.comments, self.github.refs))
+                revision = self.github.revision
+                self.invoke_controller()
+                self.assertEqual(revision, self.github.revision)
+                self.assertEqual(before, (self.github.state, self.github.comments, self.github.refs))
+
+    def test_terminal_analysis_rejects_wall_of_text_and_invalid_shapes(self):
+        valid = {"why_no_fix": "Not reproduced.", "attempted": ["Read reports."], "next_action": "Try the issue OS."}
+        for field, value in (
+            ("why_no_fix", "x" * 601), ("why_no_fix", "first\nsecond"),
+            ("attempted", []), ("attempted", ["step"] * 4),
+            ("attempted", ["x" * 241]), ("next_action", "x" * 301),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_proposal(self.state, self.revision, proposal(
+                    self.state, self.revision, "finish", outcome="blocked", analysis={**valid, field: value}))
+
+    def test_legacy_terminal_proposal_and_checkpoint_render_without_inventing_analysis(self):
+        for outcome in ("ambiguous", "blocked", "budget-exhausted"):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                model_claim = "An unverified model hypothesis about the cause."
+                self.controller.handle(self.state, self.revision, proposal(
+                    self.state, self.revision, "finish", outcome=outcome, explanation=model_claim))
+                body = self.github.comments[0]["body"]
+                summary, details = body.split("<details>", 1)
+                self.assertIn("Trusted controller fallback", summary)
+                self.assertNotIn(model_claim, summary)
+                self.assertIn("Legacy model explanation (not independently established)", details)
+                self.assertIn(model_claim, details)
+                self.assertIn("No accepted test executions", summary)
+                self.assertNotIn("Model analysis (not independently established)", body)
+
+    def test_budget_cancellation_and_uncertain_intent_have_actionable_fallbacks(self):
+        for reason in ("time", "models", "cancel", "intent"):
+            with self.subTest(reason=reason):
+                self.setUp()
+                if reason == "time":
+                    self.state["created_at"] = (NOW - timedelta(hours=12)).isoformat()
+                elif reason == "models":
+                    self.state["used"]["models"] = 8
+                elif reason == "intent":
+                    self.state["phase"] = "worker-intent"
+                self.controller.advance(self.state, self.revision, cancel=reason == "cancel")
+                body = self.github.comments[0]["body"]
+                self.assertIn("**Why no verified fix:**", body)
+                self.assertIn("**Next:**", body)
+                self.assertIn("Trusted controller fallback", body)
+                self.assertIn("<summary>Evidence</summary>", body)
+                self.assertEqual([], self.github.pulls)
+
+    def test_invalid_candidate_and_exhausted_repairs_retain_rejection_without_publishing_fix(self):
+        for defect in ("candidate", "budget"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                self.selected()
+                self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+                self.complete_worker(True)
+                state, revision = self.live()
+                if defect == "budget":
+                    state["used"]["fixes"] = 2
+                self.controller.advance(state, revision)
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(status="completed", conclusion="success")
+                path = SOURCE if defect == "budget" else "eng/unsafe.cs"
+                self.github.artifacts[(run_id, "repo-memory-default")] = {
+                    "proposal.json": json.dumps(proposal(
+                        state, state["agent"]["revision"], "repair", files={
+                            path: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                        diagnosis="Readiness race.")).encode()}
+                self.invoke_controller()
+                self.assertEqual([], self.github.pulls)
+                self.assertEqual({}, self.github.commits)
+                self.assertEqual("repair", self.github.state["rejected_attempts"][0]["action"])
+                self.assertIn("Rejected attempts", self.github.comments[0]["body"])
+                self.assertIn("**Next:**", self.github.comments[0]["body"])
+
+    def test_missing_reports_and_worker_errors_keep_rejected_run_out_of_accepted_counts(self):
+        for defect in ("missing-trx", "build", "cancelled"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                self.selected()
+                self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
+                state, _ = self.live()
+                worker = state["worker"]
+                self.github.runs[worker["id"]].update(
+                    status="completed", conclusion="cancelled" if defect == "cancelled" else "failure")
+                files = evidence(worker, state["target"])[("ubuntu-latest", 1)]
+                if defect == "missing-trx":
+                    del files["iteration-1/original.trx"]
+                elif defect == "build":
+                    files["iteration-1/result.json"] = b'{"exit_code":1}'
+                self.github.artifacts[(worker["id"], "flaky-evidence-ubuntu-latest-1")] = files
+                self.invoke_controller()
+                self.assertEqual([], self.github.state["history"])
+                self.assertEqual(worker["id"], self.github.state["rejected_attempts"][0]["run_id"])
+                self.assertIn("**Observed:** No accepted test executions.", self.github.comments[0]["body"])
+                self.assertEqual([], self.github.pulls)
+
+    def test_intent_recovery_retains_exact_failed_phase_and_source_without_dispatch(self):
+        self.selected()
+        self.github.fail_dispatch = True
+        with self.assertRaises(ValueError):
+            self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
+        state, revision = self.live()
+        self.controller.advance(state, revision)
+        rejected = self.github.state["rejected_attempts"][0]
+        self.assertEqual("worker-intent", rejected["phase"])
+        self.assertEqual(CONTROL, rejected["sha"])
+        self.assertEqual(BASE, rejected["source_sha"])
+        self.assertNotIn("run_id", rejected)
+        self.assertIn("No run receipt was persisted", self.github.comments[0]["body"])
+        summary = self.github.comments[0]["body"].split("<details>", 1)[0]
+        self.assertIn("**Rejected evidence:** No run receipt was persisted.", summary)
+        self.assertEqual(1, len([call for call in self.github.calls if call[0] == "dispatch"]))
+
+    def test_checkpointed_run_identities_include_accepted_worker_and_separate_rejected_agent(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
+        self.complete_worker(False)
+        state, revision = self.live()
+        accepted_id = state["history"][0]["id"]
+        self.controller.advance(state, revision)
+        state, _ = self.live()
+        rejected_id = state["agent"]["id"]
+        self.github.runs[rejected_id].update(status="completed", conclusion="failure")
+        self.invoke_controller()
+        self.assertEqual(1, len(self.github.comments))
+        body = self.github.comments[0]["body"]
+        summary, details = body.split("<details>", 1)
+        self.assertIn("1 target passes, 0 target failures; 1 actual tests in accepted evidence", summary)
+        checkpointed = details.split("### Latest checkpointed run identities (not test results)", 1)[1]
+        checkpointed, rejected = checkpointed.split("### Rejected attempts (not accepted test counts)", 1)
+        self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{accepted_id}", checkpointed)
+        self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{rejected_id}", rejected)
+        self.assertNotIn(f"https://github.com/{REPOSITORY}/actions/runs/{accepted_id}", rejected)
+        self.assertEqual([rejected_id], [item["run_id"] for item in self.github.state["rejected_attempts"]])
+
+    def test_all_reservation_budgets_produce_budget_findings_not_invented_model_analysis(self):
+        for budget in ("workers", "runner_iterations", "fixes"):
+            with self.subTest(budget=budget):
+                self.setUp()
+                self.selected()
+                if budget == "fixes":
+                    self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+                    self.complete_worker(True)
+                state, revision = self.live()
+                state["used"][budget] = {"workers": 5, "runner_iterations": 180, "fixes": 2}[budget]
+                self.controller.advance(state, revision)
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(status="completed", conclusion="success")
+                action = "repair" if budget == "fixes" else "reproduce"
+                fields = {"files": {SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                          "diagnosis": "Readiness race."} if budget == "fixes" else {}
+                self.github.artifacts[(run_id, "repo-memory-default")] = {
+                    "proposal.json": json.dumps(proposal(state, state["agent"]["revision"], action, **fields)).encode()}
+                self.invoke_controller()
+                self.assertEqual("budget-exhausted", self.github.state["outcome"])
+                self.assertIn("Trusted controller fallback", self.github.comments[0]["body"])
+                self.assertEqual([], self.github.pulls)
+
+    def test_timeout_budget_links_uncollected_checkpoint_run_without_claiming_results(self):
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        run_id = state["agent"]["id"]
+        state["created_at"] = (NOW - timedelta(hours=12)).isoformat()
+        self.controller.advance(state, revision)
+        body = self.github.comments[0]["body"]
+        self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{run_id}", body)
+        self.assertIn("Latest checkpointed run identities (not test results)", body)
+        self.assertIn("**Observed:** No accepted test executions.", body)
+
+    def test_lost_pr_response_never_posts_definite_no_pr_or_retries_publication(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        self.complete_worker(True)
+        state, revision = self.live()
+        self.controller.handle(state, revision, proposal(state, revision, "repair", files={
+            SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")}, diagnosis="Readiness race."))
+        self.complete_worker(False)
+        state, revision = self.live()
+        self.controller.advance(state, revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(state, state["agent"]["revision"], "finish",
+                                                outcome="verified",
+                                                reviewed_candidate_sha=state["candidate"]["sha"])).encode()}
+        api = self.github.api
+        def lose_response(endpoint, body=None, method=None):
+            result = api(endpoint, body, method)
+            if endpoint == "pulls":
+                raise subprocess.CalledProcessError(1, ["gh", "api"], stderr=b"Connection lost")
+            return result
+        with patch.object(self.github, "api", side_effect=lose_response), patch("sys.stderr", io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.invoke_controller()
+            self.assertEqual("publication-intent", self.github.state["phase"])
+            self.invoke_controller()
+        self.assertTrue(self.github.state["publication_uncertain"])
+        self.assertEqual(1, len(self.github.pulls))
+        self.assertEqual([], self.github.comments)
+        body = findings(self.github.state, "No publication receipt.")
+        self.assertIn("publication unconfirmed", body)
+        self.assertNotIn("no verified fix PR", body)
+        self.assertIn("a remote PR or comment may already exist", body)
+
+    def test_untrusted_detail_cannot_escape_evidence_and_report_stays_bounded(self):
+        self.state.update(
+            outcome="blocked", phase="publication-intent", explanation="Malformed model proposal",
+            local_precheck={"observed_output": "</pre></details>" * 1000})
+        self.state["notes"].append({
+            "action": "finish", "run_id": 100, "explanation": "<" * 8000,
+            "evidence_read": ["</pre></details>" * 50] * 30,
+        })
+        self.state["rejected_attempts"] = [
+            {"phase": "worker", "reason": "<" * 4000, "run_id": index} for index in range(1, 6)]
+        self.controller.finish(self.state, self.revision, "blocked", "No valid proposal.")
+        body = self.github.comments[0]["body"]
+        self.assertEqual(1, body.count("</details>"))
+        self.assertLess(len(body), 60000)
+        self.assertIn("Showing the latest 3 of 5 rejected attempts", body)
+        self.assertIn("[truncated]", body)
+
+    def test_failed_publication_reconciliation_does_not_retry_a_possible_write(self):
+        self.state.update(phase="publication-intent", outcome="verified", explanation="Reviewed candidate.")
+        revision = self.controller.save(self.state, self.revision)
+        error = subprocess.CalledProcessError(1, ["gh", "api"], stderr=b"Read API unavailable")
+        with patch.object(self.github, "pages", side_effect=error), patch("sys.stderr", io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.invoke_controller()
+        self.assertEqual("publication-intent", self.github.state["phase"])
+        self.assertEqual("verified", self.github.state["outcome"])
+        self.assertEqual(revision, self.github.revision)
+        self.assertEqual([], self.github.comments)
+        self.assertEqual([], self.github.pulls)
+
+    def test_cancel_during_uncertain_publication_reconciles_without_claiming_no_pr(self):
+        self.state.update(phase="publication-intent", outcome="verified", explanation="Reviewed candidate.")
+        self.revision = self.controller.save(self.state, self.revision)
+        with patch("sys.stderr", io.StringIO()):
+            self.controller.advance(self.state, self.revision, cancel=True)
+        self.assertTrue(self.github.state.get("publication_uncertain"))
+        self.assertEqual([], self.github.comments)
+        self.assertEqual([], self.github.pulls)
 
     def selected(self):
         self.state["target"] = selection(SELECT, ISSUE, self.github.files)
@@ -429,6 +790,9 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual({SOURCE}, set(self.github.commits[candidate["sha"]]))
         self.assertIn("## Checklist", pr["body"])
         self.assertIn("[automated]", self.github.comments[0]["body"])
+        self.assertIn("Model explanation and evidence references (not independently established)",
+                      self.github.comments[0]["body"])
+        self.assertNotIn("Legacy model explanation", self.github.comments[0]["body"])
         state, revision = self.live()
         self.controller.advance(state, revision)
         self.assertEqual(1, len(self.github.comments))
