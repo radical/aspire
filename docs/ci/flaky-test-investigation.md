@@ -21,7 +21,12 @@ Use `operation=resume` to reconcile an existing investigation, or
 require maintainer permission; the issue author need not be a maintainer.
 Repeated enrollment does not reset state or budgets.
 
-The controller advances one phase and exits; no model waits for CI. A scheduled
+The controller advances actionable transitions and exits; no model waits for CI.
+Selection starts the first baseline immediately. Clean rounds continue through
+single, single, then project contention (or single for non-quarantined targets)
+without a fresh model just to request another run. Diagnosis/repair, final
+no-reproduction analysis, and exact-candidate review still use fresh phases.
+A scheduled
 controller reconciles checkpoints every 15 minutes. Manual resume can advance
 completed work before the next scheduled check. Progress does not depend on
 completion events from token-dispatched workflows. Scheduled recovery can also
@@ -32,6 +37,40 @@ issue URL → discover → reproduce → diagnose → candidate → verify → s
                              ↑                    │                 │
                              └── fresh phase ─────┘           draft PR/findings
 ```
+
+### Operator walkthrough
+
+1. Start with the original issue URL. The first agent receives the issue and
+   dated comments, plus an archive of the frozen base source and fixtures at
+   `/tmp/gh-aw/flaky-investigation/source`. It must actually read the staged
+   `fix-flaky-test` guidance and cite a relevant excerpt. The wrapper checkout
+   is not a substitute for that source; the archive itself has no `.git`.
+2. Open the controller's console and step summary. `flaky-investigation` JSON
+   lines identify the issue, phase, checkpoint, base/control SHA, selected
+   test/project/OSes, and current versus checkpointed child URLs. Worker
+   identity includes source SHA, mode and runner/iteration scale. Short
+   transition reasons, accepted/rejected counts and terminal publication
+   uncertainty remain visible without downloading artifacts.
+   Model reasoning is labelled separately from controller observations.
+   `waiting` means no checkpoint changed; `terminal-noop` means no work restarted.
+3. Follow the exact child URL. Worker console lines show each iteration and
+   sanitized test output while it runs, including failure details. JSON
+   framing and lossless legacy-command escaping keep test/model text from
+   becoming Actions commands. Console
+   output is bounded; full original bytes remain in each `output.log` beside
+   the original TRX, `result.json`, and source receipt. Console text is not
+   independently validated test evidence.
+4. To involve another maintainer, share the issue, controller/child URLs,
+   checkpoint SHA, and candidate/source SHA. Read `state.json`, the immutable
+   `repo-memory-default` proposal artifact, and original worker artifacts
+   together; do not substitute a newer branch head or merged TRX. Resume
+   reconciles existing work and cancel targets only the owned active run.
+
+The original issue receives the confirmed terminal finding URL. A terminal
+resume is a no-op, and repeated start does not reset budgets. There is no
+supported restart-after-terminal or source-identity migration operation yet;
+inspect the retained state and coordinate manual remediation rather than
+deleting refs or assuming another start begins a new investigation.
 
 ## Authority and isolation
 
@@ -94,7 +133,8 @@ skip reason. Local results never replace the hosted gate.
 
 Baseline rounds use three runners × three iterations per selected OS. At most
 three rounds are permitted; the third can escalate to all quarantined tests in
-the project. A flaky baseline requires both target passes and target failures
+the project. The controller permits `not-reproduced` only after three complete,
+clean policy rounds at the frozen base. A flaky baseline requires both target passes and target failures
 matching the issue's error. Unrelated failures, build/runner errors, missing or
 skipped tests, and missing TRX cannot authorize a candidate.
 
@@ -104,6 +144,9 @@ run/attempt/source/filter identity and counts original result records, not
 summary counters or merged reports. Findings report **requested
 runner-iterations** separately from **actual tests**: project-mode iterations
 can execute many tests and are not an aggregate test-count cap.
+The console tee preserves raw artifact bytes and the existing process timeout
+semantics. Descendant-process cleanup after wrapper timeout remains a separate
+unresolved review concern; console visibility is not a fix for that boundary.
 
 Each issue has eight model phases, five worker rounds, two repair attempts,
 180 runner-iterations, and twelve hours. Each model has 15 minutes; the existing
@@ -113,7 +156,7 @@ target passes, no failures, and the mode that reproduced the failure. The final
 fresh agent phase must review the exact verified candidate SHA and its files.
 Nine passes are finite evidence, not proof that a low-frequency flake is gone.
 
-CLI E2E investigations currently stop with an actionable blocker because their
+CLI E2E selections stop before dispatch with an actionable blocker because their
 prebuilt runtime images are not candidate-aware. Existing manual CLI E2E
 reproduction is unchanged. Other tests that need unsupported runtime artifacts
 or unavailable infrastructure can likewise finish blocked rather than claim
@@ -170,6 +213,18 @@ artifacts are retained for audit; artifact expiry can make an old
 investigation unrecoverable.
 
 ## Validation and deployment
+
+Issue/comment creation and update dates are retained separately from preparation
+time. Old “last 30 days” counts are not current observations. Preparation does
+not collect historical quarantine logs; the agent must report what it actually
+read and what evidence is unavailable.
+
+Proposals use the required repo-memory artifact pipeline. The unused optional
+safe-output upload capability remains configured because the pinned compiler
+otherwise auto-adds issue creation when only built-in outputs remain. Its
+missing-optional-artifact warning is unresolved, as are observed framework
+`chown` and `awf-reflect` read-only-temp warnings. Sandbox permissions and pinned
+framework versions are not relaxed to suppress them.
 
 Behavioral tests invoke the production state machine, transport boundaries,
 evidence reader and runner. `FlakyInvestigationTests` runs them from

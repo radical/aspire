@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 
 from contracts import (
     AGENT, LIMITS, REPOSITORY, TERMINAL, WORKER, BudgetExceeded, expired, integer, issue_number, local_precheck,
@@ -14,10 +15,55 @@ from contracts import (
 )
 from evidence import summarize
 from github import GitHub, owned_run, state_branch
-from reporting import detail, diagnostic, findings
+from reporting import console_json, detail, diagnostic, findings
 
 
 ROOT = Path("/tmp/gh-aw/flaky-investigation")
+
+
+def observe(state, revision, event, reason=""):
+    history = state["history"]
+    item = {
+        "event": event, "issue": state["issue_url"], "phase": state["phase"], "checkpoint": revision,
+        "base_sha": state["base_sha"], "control_sha": state["control_sha"],
+        "reason": diagnostic(reason)[:600] if reason else "",
+        "children": [],
+        "accepted": {"batches": len(history), "passed": sum(value["passed"] for value in history),
+                     "failed": sum(value["failed"] for value in history),
+                     "actual_tests": sum(value["actual_tests"] for value in history)},
+        "rejected_attempts": len(state.get("rejected_attempts", [])),
+        "finding_url": state.get("finding_url"), "outcome": state.get("outcome"),
+        "publication_uncertain": state.get("publication_uncertain", False),
+    }
+    if target := state.get("target"):
+        item["selection"] = {
+            "method": target["class_name"] + "." + target["method"],
+            "project": target["project"], "oses": target["oses"],
+        }
+    for kind in ("agent", "worker"):
+        if child := state.get(kind, {}).get("id"):
+            identity = {
+                "kind": kind, "status": "current" if state["phase"].removesuffix("-intent") == kind else "checkpointed",
+                "run_id": child, "url": f"https://github.com/{REPOSITORY}/actions/runs/{child}",
+            }
+            if kind == "worker":
+                identity.update({key: state[kind][key]
+                                 for key in ("source_sha", "phase", "mode", "runners", "iterations")})
+            item["children"].append(identity)
+    if state["notes"]:
+        note = state["notes"][-1]
+        item["decision"] = note["action"]
+        item["model_reason_not_independently_established"] = diagnostic(note["explanation"])[:240]
+    print("flaky-investigation " + console_json(item), flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with Path(summary).open("a", encoding="utf-8") as output:
+            output.write(f"\n### Flaky investigation #{state['issue']}: {event}\n\n" +
+                         detail(json.dumps(item, indent=2), 6000) + "\n")
+
+
+def validate_worker_target(target):
+    require(target["project"] != "tests/Aspire.Cli.EndToEnd.Tests/Aspire.Cli.EndToEnd.Tests.csproj",
+            "CLI E2E investigations require candidate-aware prebuilt images; use manual reproduction")
 
 
 class Controller:
@@ -25,9 +71,28 @@ class Controller:
         self.github = github
         self.now = now or (lambda: datetime.now(timezone.utc))
 
-    def save(self, state, revision):
+    def save(self, state, revision, reason=None):
         state["updated_at"] = self.now().isoformat()
-        return self.github.checkpoint(state, revision)
+        reasons = {
+            "ready": "Validated inputs/evidence ready for the next decision.",
+            "agent-intent": "Reserved fresh model phase; dispatch receipt not yet persisted.",
+            "agent": "Fresh model dispatched; wait for the complete run and immutable proposal.",
+            "worker-intent": "Reserved worker execution; dispatch receipt not yet persisted.",
+            "worker": "Owned worker dispatched; original reports must pass independent validation.",
+            "candidate-ready": "Validated candidate published; exact-source verification required.",
+            "publication-intent": f"Terminal {state.get('outcome')} decision; publication not yet confirmed.",
+            "terminal": "Publication unconfirmed; inspect manually." if state.get("publication_uncertain")
+                        else "Original-issue finding confirmed; terminal resume is a no-op.",
+            "cancellation-intent": "Cancellation of the exact owned run requested; response not yet confirmed.",
+        }
+        reason = reason or reasons.get(state["phase"], "Checkpoint persisted.")
+        state.setdefault("transitions", []).append({
+            "phase": state["phase"], "reason": reason, "at": state["updated_at"],
+        })
+        state["transitions"] = state["transitions"][-30:]
+        saved = self.github.checkpoint(state, revision)
+        observe(state, saved, "checkpoint", reason)
+        return saved
 
     def start(self, url, control_sha, agent_workflow=AGENT, agent_sha=None, worker_sha=None):
         issue = issue_number(url)
@@ -70,10 +135,9 @@ class Controller:
         state["phase"] = "agent"
         return self.save(state, intent)
 
-    def dispatch_worker(self, state, revision, phase, runners, iterations, mode):
+    def dispatch_worker(self, state, revision, phase, runners, iterations, mode, reason=None):
         target = state["target"]
-        require(target["project"] != "tests/Aspire.Cli.EndToEnd.Tests/Aspire.Cli.EndToEnd.Tests.csproj",
-                "CLI E2E investigations require candidate-aware prebuilt images; use manual reproduction")
+        validate_worker_target(target)
         integer(runners, 3)
         integer(iterations, 10)
         require(mode in {"single", "project"} and (mode != "project" or target["quarantined"]),
@@ -87,7 +151,7 @@ class Controller:
             "phase": phase, "runners": runners, "iterations": iterations, "mode": mode, "branch": branch,
         }
         state["phase"] = "worker-intent"
-        intent = self.save(state, revision)
+        intent = self.save(state, revision, reason)
         # Only point a ref at already published trusted code. The job token cannot
         # create workflow-containing trees; candidate commits remain source-only.
         self.github.create_ref(branch, state["worker_sha"])
@@ -97,6 +161,14 @@ class Controller:
         state["worker"]["id"] = run_id
         state["phase"] = "worker"
         return self.save(state, intent)
+
+    def baseline(self, state, revision, reason):
+        rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
+        if len(rounds) >= 3:
+            raise BudgetExceeded("Baseline round budget exhausted")
+        mode = "project" if len(rounds) == 2 and state["target"]["quarantined"] else "single"
+        return self.dispatch_worker(
+            state, revision, "reproduce", 3, 3, mode, f"Baseline {len(rounds) + 1}/3 ({mode}): {reason}")
 
     def proposal(self, state):
         run = owned_run(self.github.api(f"actions/runs/{state['agent']['id']}"), state["agent"])
@@ -137,6 +209,14 @@ class Controller:
         if action == "finish":
             outcome = proposal.get("outcome")
             require(isinstance(outcome, str) and outcome in TERMINAL - {"cancelled"}, "Unknown terminal finding")
+            if outcome == "not-reproduced":
+                rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
+                require(state["target"] and state["candidate"] is None and len(rounds) == 3 and all(
+                    item["source_sha"] == state["base_sha"] and item["failed"] == 0
+                    and item["passed"] >= 9 * len(state["target"]["oses"])
+                    and item["runners"] == 3 and item["iterations"] == 3
+                    and item["mode"] == ("project" if index == 2 and state["target"]["quarantined"] else "single")
+                    for index, item in enumerate(rounds)), "not-reproduced requires three clean baseline policy rounds")
             if outcome == "verified":
                 candidate = state["candidate"]
                 require(candidate and proposal.get("reviewed_candidate_sha") == candidate["sha"],
@@ -164,6 +244,9 @@ class Controller:
                 files[path] = self.github.file(path, state["base_sha"])
             issue = self.github.api(f"issues/{state['issue']}")
             state["target"] = selection(selected, issue, files)
+            # Reject known incompatibilities before ready is durable, otherwise
+            # recovery would mistake a deterministic blocker for interrupted work.
+            validate_worker_target(state["target"])
             projects = {}
             pending = [state["target"]["project"]]
             # Fetch a bounded graph of explicit references from immutable source;
@@ -185,15 +268,12 @@ class Controller:
             # No arbitrary agent shell command is forwarded to a trusted runner.
             state["local_precheck"] = local_precheck(proposal.get("local_precheck"))
             state["phase"] = "ready"
-            return self.save(state, revision)
+            revision = self.save(state, revision, "Validated test selection and local precheck; start baseline directly.")
+            return self.baseline(state, revision, "validated selection; no extra model needed to request reproduction.")
         require(state["target"] is not None, "A validated test must be selected first")
         if action == "reproduce":
             require(state["candidate"] is None, "Cannot restart baseline after publishing a candidate")
-            rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-            if len(rounds) >= 3:
-                raise BudgetExceeded("Baseline round budget exhausted")
-            mode = "project" if len(rounds) == 2 and state["target"]["quarantined"] else "single"
-            return self.dispatch_worker(state, revision, "reproduce", 3, 3, mode)
+            return self.baseline(state, revision, "validated model request for further reproduction.")
         require(action == "repair", "Unsupported action")
         baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
         require(sum(item["failed"] for item in baseline) > 0 and sum(item["passed"] for item in baseline) > 0,
@@ -275,9 +355,13 @@ class Controller:
                         "body": body, "head": branch, "base": "main", "draft": True,
                     })
                 pr_url = pr["html_url"]
-            self.github.api(f"issues/{issue}/comments", {
+            receipt = self.github.api(f"issues/{issue}/comments", {
                 "body": findings(state, evidence_table(state), pr_url),
             })
+            state["finding_url"] = receipt.get("html_url") or (
+                f"{state['issue_url']}#issuecomment-{receipt['id']}")
+        elif existing[0].get("html_url"):
+            state["finding_url"] = existing[0]["html_url"]
         state["phase"] = "terminal"
         return self.save(state, revision)
 
@@ -310,6 +394,10 @@ class Controller:
             mode = next(item["mode"] for item in reversed(baseline) if item["failed"])
             return self.dispatch_worker(state, revision, "verify", 3, 3, mode)
         if state["phase"] == "ready":
+            rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
+            if state["target"] and state["candidate"] is None and len(rounds) < 3 \
+                    and all(item["failed"] == 0 for item in rounds):
+                return self.baseline(state, revision, "validated selection/clean baseline; continue without a model.")
             if state["used"]["models"] >= LIMITS["models"]:
                 return self.finish(state, revision, "budget-exhausted", "Fresh model phase budget exhausted.")
             return self.dispatch_agent(state, revision)
@@ -324,7 +412,13 @@ class Controller:
             return revision
         state["history"].append(result)
         state["phase"] = "ready"
-        return self.save(state, revision)
+        revision = self.save(state, revision, f"Accepted {result['phase']}/{result['mode']} evidence: "
+                             f"{result['passed']} target passes, {result['failed']} target failures; "
+                             f"{result['actual_tests']} actual tests.")
+        rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
+        if result["phase"] == "reproduce" and all(item["failed"] == 0 for item in rounds) and len(rounds) < 3:
+            return self.baseline(state, revision, "previous clean baseline; continue the fixed policy without a model.")
+        return revision
 
 
 def evidence_table(state):
@@ -353,6 +447,30 @@ def record_rejection(state, reason, action=None):
     state.setdefault("rejected_attempts", []).append(rejection)
 
 
+def stage_source(state, checkout):
+    base = sha(state["base_sha"])
+    ROOT.mkdir(parents=True, exist_ok=True)
+    present = subprocess.run(["git", "--no-pager", "cat-file", "-e", base + "^{commit}"],
+                             cwd=checkout, capture_output=True, check=False, timeout=30)
+    if present.returncode:
+        subprocess.run(["git", "--no-pager", "fetch", "--no-tags", "--depth=1", "origin", base],
+                       cwd=checkout, check=True, timeout=120)
+    source = ROOT / "source"
+    source.mkdir()
+    archive = ROOT / "source.tar"
+    try:
+        with archive.open("wb") as output:
+            subprocess.run(["git", "--no-pager", "archive", "--format=tar", base],
+                           cwd=checkout, stdout=output, check=True, timeout=120)
+        with tarfile.open(archive) as contents:
+            contents.extractall(source, filter="data")
+    finally:
+        archive.unlink(missing_ok=True)
+    require((source / ".agents/skills/fix-flaky-test/SKILL.md").is_file(),
+            "Frozen source is missing fix-flaky-test guidance; do not substitute wrapper HEAD")
+    return source
+
+
 def prepare(github, url, revision):
     issue = issue_number(url)
     state, _ = github.load(issue, sha(revision))
@@ -362,8 +480,14 @@ def prepare(github, url, revision):
     if live["phase"] == "agent":
         require(live["agent"]["revision"] == revision
                 and str(live["agent"]["id"]) == os.environ["GITHUB_RUN_ID"], "Agent does not own this checkpoint")
-    ROOT.mkdir(parents=True, exist_ok=True)
+    source = stage_source(state, Path.cwd())
     context = {"checkpoint": state, "state_revision": revision,
+               "source": {"sha": state["base_sha"], "path": str(source)},
+               "historical_evidence": {
+                   "fetched_at": datetime.now(timezone.utc).isoformat(), "logs_collected": False,
+                   "limitation": "Issue/comment report counts are not current unless their own dates establish that. "
+                                 "Historical quarantine logs have not been collected by preparation.",
+               },
                "issue": github.api(f"issues/{issue}"),
                "comments": github.pages(f"issues/{issue}/comments")}
     if state["target"]:
@@ -373,6 +497,7 @@ def prepare(github, url, revision):
             path: github.file(path, state["candidate"]["sha"]) for path in state["candidate"]["paths"]
         }
     (ROOT / "context.json").write_text(json.dumps(context, indent=2), encoding="utf-8")
+    observe(state, revision, "prepared", f"Frozen base source staged at {source}; wrapper HEAD is not the test source.")
     # Original reports and output remain available to fresh diagnosis/review phases.
     for worker in state["history"]:
         for os_name in state["target"]["oses"]:
@@ -427,19 +552,31 @@ def main():
                 os.environ.get("FLAKY_AGENT_SHA") or None, os.environ.get("FLAKY_WORKER_SHA") or None)
         # Serialize all controllers through workflow concurrency; Git CAS is the
         # final guard against stale or independently resumed controllers.
+        observe(state, revision, operation)
         try:
-            controller.advance(state, revision, cancel=operation == "cancel")
+            current = controller.advance(state, revision, cancel=operation == "cancel")
+            if current != revision and state["phase"] == "ready":
+                current = controller.advance(state, current)
         except (ValueError, KeyError, subprocess.CalledProcessError) as error:
             live, current = github.load(issue)
             if current != revision or live["phase"] == "publication-intent":
                 # A write may already have succeeded. Its persisted intent is the
                 # recovery authority, not an in-memory copy or an automatic retry.
-                print(f"::error::Investigation {issue} interrupted after checkpoint; resume required: {error}", file=sys.stderr)
+                print(f"::error::Investigation {issue} interrupted after checkpoint; resume required: "
+                      f"{console_json(diagnostic(error))}", file=sys.stderr)
                 raise
             action = state["notes"][-1]["action"] if len(state["notes"]) > len(live["notes"]) else None
             record_rejection(live, error, action)
             outcome = "budget-exhausted" if isinstance(error, BudgetExceeded) else "blocked"
-            controller.finish(live, current, outcome, "Validation/remote operation blocked: " + diagnostic(error))
+            current = controller.finish(live, current, outcome, "Validation/remote operation blocked: " + diagnostic(error))
+            state = live
+        event = "changed" if current != revision else "terminal-noop" if state["phase"] == "terminal" else "waiting"
+        reason = state.get("explanation") or state.get("transitions", [{}])[-1].get("reason", "")
+        if state.get("publication_uncertain"):
+            reason = "Publication unconfirmed; inspect remote objects and checkpoint before retrying."
+        elif state["notes"] and state["notes"][-1]["action"] == "finish":
+            reason = "Model finish accepted; its explanation is labelled as not independently established."
+        observe(state, current, event, reason)
 
 
 if __name__ == "__main__":

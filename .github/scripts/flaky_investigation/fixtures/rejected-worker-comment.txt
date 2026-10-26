@@ -32,8 +32,8 @@ https://github.com/microsoft/aspire/actions/runs/101
   "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "workflow": "reproduce-flaky-tests.yml",
   "phase": "reproduce",
-  "runners": 1,
-  "iterations": 1,
+  "runners": 3,
+  "iterations": 3,
   "mode": "single",
   "branch": "ankj/flaky-test-123-run-2",
   "id": 101

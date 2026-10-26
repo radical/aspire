@@ -7,6 +7,14 @@ import re
 from contracts import REPOSITORY, text
 
 
+def console_json(value):
+    # Runner v2.338.0 recognizes legacy "##[error]..." anywhere in a line,
+    # even inside prefixed JSON. Escape it losslessly; fixed frame prefixes
+    # and JSON control escapes already prevent modern "::error::" commands.
+    # https://github.com/actions/runner/blob/v2.338.0/src/Runner.Common/ActionCommand.cs
+    return json.dumps(value).replace("##[", r"\u0023\u0023[")
+
+
 def diagnostic(error):
     value = str(error)
     value = re.sub(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]*", "[REDACTED]", value)

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,10 +17,10 @@ from contracts import (
     REPOSITORY, WORKER, issue_number, local_precheck, repair_scope, reserve,
     selection, validate_candidate, validate_proposal,
 )
-from controller import Controller, authorize, main
+from controller import Controller, authorize, main, prepare, stage_source
 from evidence import summarize
 from github import GitHub, GitHubAPIError, owned_run, state_branch
-from runner import execute
+from runner import execute, run_streamed
 from reporting import findings
 from worker import configuration, setup_outputs, validate_checkout
 
@@ -200,18 +201,231 @@ class OrchestrationTests(unittest.TestCase):
                 patch("controller.Controller", return_value=self.controller):
             main()
 
+    def test_main_console_and_step_summary_distinguish_changes_waiting_and_terminal_noop(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+                os.environ, {"GITHUB_STEP_SUMMARY": str(Path(directory) / "summary.md")}):
+            with patch("sys.stdout", io.StringIO()) as output:
+                self.invoke_controller()
+                self.invoke_controller()
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(status="completed", conclusion="failure")
+                self.invoke_controller()
+                revision = self.github.revision
+                self.invoke_controller()
+            events = [json.loads(line.removeprefix("flaky-investigation "))
+                      for line in output.getvalue().splitlines()]
+            self.assertTrue(events)
+            self.assertTrue({"changed", "waiting", "terminal-noop"} <= {item["event"] for item in events})
+            self.assertTrue(all(item["issue"] == URL and item["base_sha"] == BASE for item in events))
+            self.assertTrue(all(item["checkpoint"] for item in events))
+            self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{run_id}", output.getvalue())
+            self.assertEqual(revision, self.github.revision)
+            self.assertEqual(1, len(self.github.comments))
+            self.assertIn("accepted", events[-1])
+            self.assertEqual(1, events[-1]["rejected_attempts"])
+            self.assertIn("issuecomment-1", events[-1]["finding_url"])
+            summary = (Path(directory) / "summary.md").read_text()
+            self.assertIn("waiting", summary)
+            self.assertIn("terminal-noop", summary)
+            self.assertIn("Agent failed/cancelled", summary)
+
+    def test_selection_and_clean_baselines_need_only_selection_and_final_analysis_models(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "select", selection=SELECT,
+                local_precheck={"status": "skipped", "reason": "Issue OS differs from agent runner."})).encode()}
+        with patch("sys.stdout", io.StringIO()) as output:
+            self.invoke_controller()
+            self.invoke_controller()
+        self.assertEqual("worker", self.github.state["phase"])
+        events = [json.loads(frame.removeprefix("flaky-investigation "))
+                  for frame in output.getvalue().splitlines()]
+        self.assertEqual("waiting", events[-1]["event"])
+        worker_events = [item for item in events if item["phase"] == "worker"]
+        self.assertTrue(worker_events)
+        for item in worker_events:
+            self.assertEqual({
+                "method": "Sample.Tests.WidgetTests.WaitsForWidget",
+                "project": PROJECT, "oses": ["ubuntu-latest"],
+            }, item["selection"])
+            self.assertEqual([
+                {"kind": "agent", "status": "checkpointed", "run_id": run_id,
+                 "url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"},
+                {"kind": "worker", "status": "current", "run_id": self.github.state["worker"]["id"],
+                 "url": f"https://github.com/{REPOSITORY}/actions/runs/{self.github.state['worker']['id']}",
+                 "source_sha": BASE, "phase": "reproduce", "mode": "single", "runners": 3, "iterations": 3},
+            ], item["children"])
+        for index, mode in enumerate(("single", "single", "project"), 1):
+            state, _ = self.live()
+            self.assertEqual(mode, state["worker"]["mode"])
+            self.assertEqual(index, state["used"]["workers"])
+            self.assertEqual(1, state["used"]["models"])
+            self.complete_worker(False)
+        self.invoke_controller()
+        state, _ = self.live()
+        self.assertEqual("agent", state["phase"])
+        self.assertEqual(2, state["used"]["models"])
+        self.assertEqual(3, state["used"]["workers"])
+        self.assertEqual(27, state["used"]["runner_iterations"])
+        self.assertEqual(27, sum(item["passed"] for item in state["history"]))
+        self.assertTrue(any("clean baseline" in item["reason"] for item in state["transitions"]))
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(state, state["agent"]["revision"], "finish",
+                                                outcome="not-reproduced")).encode()}
+        self.invoke_controller()
+        self.assertEqual("not-reproduced", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+
+    def test_main_console_keeps_model_and_remote_error_commands_as_decodable_data(self):
+        payload = "##[error]legacy ##[add-mask]value\r\n::error::modern\r::add-mask::value"
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        self.github.runs[state["agent"]["id"]].update(status="completed", conclusion="success")
+        self.github.state["notes"].append({"action": "reproduce", "explanation": payload})
+        with patch.object(self.github, "artifact", side_effect=ValueError(payload)), \
+                patch("sys.stdout", io.StringIO()) as output:
+            self.invoke_controller()
+        frames = output.getvalue().splitlines()
+        self.assertTrue(frames)
+        for frame in frames:
+            self.assertNotRegex(frame, r"##\[|^\s*::")
+        events = [json.loads(frame.removeprefix("flaky-investigation ")) for frame in frames]
+        self.assertEqual(payload, events[0]["model_reason_not_independently_established"])
+        self.assertEqual("Validation/remote operation blocked: " + payload, events[-1]["reason"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual("terminal", self.github.state["phase"])
+
+    def test_ready_checkpoint_recovery_does_not_spend_a_model_requesting_clean_baseline(self):
+        self.selected()
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        worker = state["worker"]
+        self.github.runs[worker["id"]].update(status="completed", conclusion="success")
+        for (os_name, index), files in evidence(worker, state["target"]).items():
+            self.github.artifacts[(worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
+        with patch.object(self.controller, "baseline", side_effect=RuntimeError("controller interrupted")):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                self.controller.advance(state, revision)
+        self.assertEqual("ready", self.github.state["phase"])
+        self.invoke_controller()
+        self.assertEqual("worker", self.github.state["phase"])
+        self.assertEqual(0, self.github.state["used"]["models"])
+        self.assertEqual(2, self.github.state["used"]["workers"])
+        self.assertEqual(1, len(self.github.state["history"]))
+
+    def test_not_reproduced_is_rejected_before_three_complete_clean_policy_rounds(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        self.complete_worker(False)
+        state, revision = self.live()
+        with self.assertRaisesRegex(ValueError, "three clean baseline"):
+            self.controller.handle(state, revision, proposal(
+                state, revision, "finish", outcome="not-reproduced"))
+        self.assertEqual([], self.github.comments)
+
+    def test_main_unsupported_cli_selection_posts_one_blocked_finding_without_interrupted_resume(self):
+        project = "tests/Aspire.Cli.EndToEnd.Tests/Aspire.Cli.EndToEnd.Tests.csproj"
+        source = "tests/Aspire.Cli.EndToEnd.Tests/WidgetTests.cs"
+        self.github.files.update({project: "<Project/>", source: CODE})
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "select",
+                selection={**SELECT, "source": source, "project": project},
+                local_precheck={"status": "skipped", "reason": "Prebuilt CLI images unavailable."})).encode()}
+        with patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
+            self.invoke_controller()
+            self.assertEqual("terminal", self.github.state["phase"])
+            self.assertEqual("blocked", self.github.state["outcome"])
+            self.assertEqual(1, len(self.github.comments))
+            self.assertIn("candidate-aware prebuilt images", self.github.comments[0]["body"])
+            self.assertEqual("select", self.github.state["rejected_attempts"][0]["action"])
+            before = copy.deepcopy((self.github.state, self.github.revision, self.github.comments, self.github.refs))
+            self.invoke_controller()
+            self.assertEqual(before, (self.github.state, self.github.revision, self.github.comments, self.github.refs))
+        self.assertEqual("", errors.getvalue())
+        self.assertEqual(0, self.github.state["used"]["workers"])
+        self.assertEqual([], [call for call in self.github.calls if call[0] == "dispatch" and call[1] == WORKER])
+        events = [json.loads(frame.removeprefix("flaky-investigation "))
+                  for frame in output.getvalue().splitlines()]
+        self.assertEqual("terminal-noop", events[-1]["event"])
+
+    def test_not_reproduced_requires_each_clean_round_condition_at_each_os_threshold(self):
+        for os_count in (1, 2, 3):
+            oses = ["ubuntu-latest", "windows-latest", "macos-latest"][:os_count]
+            for quarantined in (True, False):
+                cases = [
+                    ("valid", None), ("failed", 1), ("source_sha", CONTROL),
+                    ("passed", 9 * os_count - 1), ("runners", 2), ("iterations", 2),
+                    ("mode", "single" if quarantined else "project"),
+                    ("candidate", {"sha": CONTROL}), ("target", None),
+                ]
+                for field, value in cases:
+                    with self.subTest(oses=oses, quarantined=quarantined, field=field):
+                        self.setUp()
+                        self.selected()
+                        self.state["target"].update(oses=oses, quarantined=quarantined)
+                        self.state["history"] = [
+                            {"id": 100 + index, "phase": "reproduce", "source_sha": BASE,
+                             "failed": 0, "passed": 9 * os_count, "actual_tests": 9 * os_count,
+                             "runners": 3, "iterations": 3,
+                             "mode": "project" if index == 2 and quarantined else "single"}
+                            for index in range(3)]
+                        if field in {"target", "candidate"}:
+                            self.state[field] = value
+                        elif field != "valid":
+                            self.state["history"][-1][field] = value
+                        request = proposal(self.state, self.revision, "finish", outcome="not-reproduced")
+                        if field == "valid":
+                            self.controller.handle(self.state, self.revision, request)
+                            self.assertEqual("not-reproduced", self.github.state["outcome"])
+                            self.assertEqual(1, len(self.github.comments))
+                        else:
+                            with self.assertRaisesRegex(ValueError, "three clean baseline"):
+                                self.controller.handle(self.state, self.revision, request)
+                            self.assertEqual(self.revision, self.github.revision)
+                            self.assertEqual([], self.github.comments)
+                        self.assertEqual([], self.github.pulls)
+
+    def test_preparation_retains_report_dates_without_claiming_historical_logs_collected(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        self.github.comments.append({
+            "body": "0/215 failures in the last 30 days.",
+            "created_at": "2026-05-13T00:00:00Z", "updated_at": "2026-05-13T00:00:00Z",
+            "html_url": URL + "#issuecomment-1",
+        })
+        with tempfile.TemporaryDirectory() as temporary, patch("controller.ROOT", Path(temporary)), \
+                patch("controller.stage_source", return_value=Path(temporary) / "source"), \
+                patch.dict(os.environ, {"GITHUB_RUN_ID": str(state["agent"]["id"])}):
+            prepare(self.github, URL, state["agent"]["revision"])
+            context = json.loads((Path(temporary) / "context.json").read_text())
+            self.assertEqual(BASE, context["source"]["sha"])
+            self.assertEqual("2026-05-13T00:00:00Z", context["comments"][0]["updated_at"])
+            self.assertFalse(context["historical_evidence"]["logs_collected"])
+            self.assertIn("not current", context["historical_evidence"]["limitation"])
+
     def test_rejected_worker_posts_short_analysis_with_exact_evidence_and_resumes_without_duplicates(self):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
         self.complete_worker(False)
-        state, revision = self.live()
-        self.controller.dispatch_worker(state, revision, "reproduce", 1, 1, "single")
         state, _ = self.live()
         worker = state["worker"]
         self.github.runs[worker["id"]].update(status="completed", conclusion="failure")
-        files = evidence(worker, state["target"])[("ubuntu-latest", 1)]
-        files["iteration-1/unrelated.trx"] = trx("Failed", execution="unrelated", method="Other")
-        self.github.artifacts[(worker["id"], "flaky-evidence-ubuntu-latest-1")] = files
+        for (os_name, index), files in evidence(worker, state["target"]).items():
+            if index == 1:
+                files["iteration-1/unrelated.trx"] = trx("Failed", execution="unrelated", method="Other")
+            self.github.artifacts[(worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
         self.invoke_controller()
         state, revision = self.live()
         self.assertEqual("terminal", state["phase"])
@@ -270,7 +484,7 @@ class OrchestrationTests(unittest.TestCase):
             "attempted": ["Read the test and original reports.", "Repeated the exact target."],
             "next_action": "Reproduce on the issue's Windows environment.",
         }
-        request = proposal(self.state, self.revision, "finish", outcome="not-reproduced", analysis=analysis)
+        request = proposal(self.state, self.revision, "finish", outcome="blocked", analysis=analysis)
         validate_proposal(self.state, self.revision, request)
         self.controller.handle(self.state, self.revision, request)
         body = self.github.comments[0]["body"]
@@ -421,8 +635,8 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_checkpointed_run_identities_include_accepted_worker_and_separate_rejected_agent(self):
         self.selected()
-        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
-        self.complete_worker(False)
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        self.complete_worker(True)
         state, revision = self.live()
         accepted_id = state["history"][0]["id"]
         self.controller.advance(state, revision)
@@ -433,7 +647,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(1, len(self.github.comments))
         body = self.github.comments[0]["body"]
         summary, details = body.split("<details>", 1)
-        self.assertIn("1 target passes, 0 target failures; 1 actual tests in accepted evidence", summary)
+        self.assertIn("8 target passes, 1 target failures; 9 actual tests in accepted evidence", summary)
         checkpointed = details.split("### Latest checkpointed run identities (not test results)", 1)[1]
         checkpointed, rejected = checkpointed.split("### Rejected attempts (not accepted test counts)", 1)
         self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{accepted_id}", checkpointed)
@@ -451,7 +665,7 @@ class OrchestrationTests(unittest.TestCase):
                     self.complete_worker(True)
                 state, revision = self.live()
                 state["used"][budget] = {"workers": 5, "runner_iterations": 180, "fixes": 2}[budget]
-                self.controller.advance(state, revision)
+                self.controller.dispatch_agent(state, revision)
                 state, _ = self.live()
                 run_id = state["agent"]["id"]
                 self.github.runs[run_id].update(status="completed", conclusion="success")
@@ -503,7 +717,19 @@ class OrchestrationTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 self.invoke_controller()
             self.assertEqual("publication-intent", self.github.state["phase"])
-            self.invoke_controller()
+            with patch("sys.stdout", io.StringIO()) as output:
+                self.invoke_controller()
+                self.invoke_controller()
+            events = [json.loads(frame.removeprefix("flaky-investigation "))
+                      for frame in output.getvalue().splitlines()]
+            self.assertEqual("terminal-noop", events[-1]["event"])
+            final_events = [item for item in events if item["event"] in {"changed", "terminal-noop"}]
+            self.assertEqual(2, len(final_events))
+            for item in final_events:
+                self.assertEqual("blocked", item["outcome"])
+                self.assertTrue(item["publication_uncertain"])
+                self.assertEqual(
+                    "Publication unconfirmed; inspect remote objects and checkpoint before retrying.", item["reason"])
         self.assertTrue(self.github.state["publication_uncertain"])
         self.assertEqual(1, len(self.github.pulls))
         self.assertEqual([], self.github.comments)
@@ -571,7 +797,7 @@ class OrchestrationTests(unittest.TestCase):
         state, _ = self.live()
         self.assertEqual("WaitsForWidget", state["target"]["method"])
         self.assertEqual(["tests/Sample.Tests/"], state["repair_scope"])
-        self.assertEqual("ready", state["phase"])
+        self.assertEqual("worker", state["phase"])
 
     def test_duplicate_enrollment_preserves_existing_revision(self):
         self.assertEqual(self.revision, self.controller.start(URL, CONTROL)[1])
@@ -629,7 +855,8 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(1, state["history"][0]["passed"])
         self.controller.advance(state, revision)
         self.assertEqual(1, len(self.github.state["history"]))
-        self.assertEqual("agent", self.github.state["phase"])
+        self.assertEqual("worker", self.github.state["phase"])
+        self.assertEqual(2, len(self.github.runs))
 
     def test_fixed_worker_dispatch_never_writes_workflow_or_candidate_trees(self):
         self.selected()
@@ -686,7 +913,7 @@ class OrchestrationTests(unittest.TestCase):
                 state, state["agent"]["revision"], "select", selection=SELECT,
                 local_precheck={"status": "skipped", "reason": "Runner environment unavailable."})).encode()}
         self.controller.advance(state, revision)
-        self.assertEqual("ready", self.github.state["phase"])
+        self.assertEqual("worker", self.github.state["phase"])
         self.assertEqual("select", self.github.state["notes"][-1]["action"])
         self.assertEqual("WaitsForWidget", self.github.state["target"]["method"])
 
@@ -827,6 +1054,33 @@ class OrchestrationTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_first_phase_source_and_fixture_are_materialized_from_base_not_wrapper_head(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "checkout"
+            root.mkdir()
+            def git(*args):
+                return subprocess.check_output(["git", "--no-pager", *args], cwd=root, text=True).strip()
+            git("init", "--quiet")
+            guidance = root / ".agents/skills/fix-flaky-test/SKILL.md"
+            guidance.parent.mkdir(parents=True)
+            guidance.write_text("Read original failure data before reproducing or repairing.\n")
+            fixture = root / "tests/Fixture.cs"
+            fixture.parent.mkdir()
+            fixture.write_text("frozen fixture\n")
+            git("add", "--", ".agents/skills/fix-flaky-test/SKILL.md", "tests/Fixture.cs")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "Fixture")
+            base = git("rev-parse", "HEAD")
+            fixture.write_text("different wrapper fixture\n")
+            git("add", "--", "tests/Fixture.cs")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "Wrapper")
+            wrapper = git("rev-parse", "HEAD")
+            with patch("controller.ROOT", Path(temporary) / "inputs"):
+                source = stage_source({"base_sha": base}, root)
+            self.assertEqual("frozen fixture\n", (source / "tests/Fixture.cs").read_text())
+            self.assertEqual(guidance.read_text(), (source / ".agents/skills/fix-flaky-test/SKILL.md").read_text())
+            self.assertEqual(wrapper, git("rev-parse", "HEAD"))
+            self.assertEqual("", git("status", "--porcelain"))
+
     def test_api_error_retains_http_diagnostic_and_never_retries(self):
         command = ["gh", "api", f"repos/{REPOSITORY}/git/refs", "--input", "-"]
         diagnostic = b"gh: Resource not accessible by integration (HTTP 403)\n"
@@ -1081,6 +1335,86 @@ class EvidenceTests(unittest.TestCase):
             result = summarize({("ubuntu-latest", 1): files}, self.worker, self.target)
             self.assertEqual(2, result["passed"])
             self.assertEqual(2, len(calls))
+
+    def test_real_process_console_streams_before_exit_without_commands_or_credentials_and_keeps_raw_bytes(self):
+        raw = (b"phase-one: target assertion failed \xff\n"
+               b"::error::untrusted-command\n"
+               b"https://example.invalid/?sig=secret-value&token=other-secret\n"
+               b"ghp_fake_credential_for_test_only\n")
+        noise = (b"ordinary test progress " * 5 + b"\n") * 1000
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            acknowledgement = root / "seen"
+            class Console(io.StringIO):
+                def write(self, value):
+                    if "phase-one" in value:
+                        acknowledgement.write_text("observed before child exits")
+                    return super().write(value)
+            code = ("import os,time,pathlib; "
+                    f"os.write(1,{raw!r}); "
+                    f"ack=pathlib.Path({str(acknowledgement)!r}); "
+                    "deadline=time.monotonic()+5\n"
+                    "while not ack.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+                    "assert ack.exists(), 'output was not streamed while running'\n"
+                    "os.write(2,b'final stderr failure\\n'); os.write(1,b'x'*100000+b'\\n'); "
+                    "os.write(1,(b'ordinary test progress '*5+b'\\n')*1000); "
+                    "raise SystemExit(2)")
+            with (root / "output.log").open("wb") as log, patch("sys.stdout", Console()) as console:
+                result = run_streamed([sys.executable, "-c", code], cwd=root, stdout=log,
+                                      stderr=subprocess.STDOUT, timeout=10, check=False)
+            self.assertEqual(2, result.returncode)
+            self.assertEqual(raw + b"final stderr failure\n" + b"x" * 100000 + b"\n" + noise,
+                             (root / "output.log").read_bytes())
+            self.assertIn("target assertion failed", console.getvalue())
+            self.assertIn("final stderr failure", console.getvalue())
+            self.assertNotIn("secret-value", console.getvalue())
+            self.assertNotIn("other-secret", console.getvalue())
+            self.assertNotIn("ghp_fake", console.getvalue())
+            self.assertLess(len(console.getvalue()), 66000)
+            self.assertIn("Console limit reached", console.getvalue())
+            self.assertTrue(all(line.startswith("flaky-test-output ") for line in console.getvalue().splitlines()))
+
+    def test_real_process_console_escapes_legacy_commands_across_read_boundaries_losslessly(self):
+        command = b"##[error]legacy ##[add-mask]mask\r::error::modern\r\n"
+        raw = b"x" * 8189 + b"\n" + command + b"::add-mask::modern\nsuffix##[warning]last"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            acknowledgement = root / "seen"
+            class Console(io.StringIO):
+                def write(self, value):
+                    if value.startswith("flaky-test-output "):
+                        acknowledgement.write_text("first chunk consumed")
+                    return super().write(value)
+            # The first 8192-byte read ends in "##"; wait for it to be consumed
+            # before writing "[error]..." so command detection spans two reads.
+            code = ("import os,time,pathlib; "
+                    f"os.write(1,{raw[:8192]!r}); "
+                    f"ack=pathlib.Path({str(acknowledgement)!r}); "
+                    "deadline=time.monotonic()+5\n"
+                    "while not ack.exists() and time.monotonic()<deadline: time.sleep(.01)\n"
+                    "assert ack.exists(), 'first chunk was not streamed'\n"
+                    f"os.write(1,{raw[8192:]!r})")
+            with (root / "output.log").open("wb") as log, patch("sys.stdout", Console()) as console:
+                result = run_streamed([sys.executable, "-c", code], cwd=root, stdout=log,
+                                      stderr=subprocess.STDOUT, timeout=10, check=False)
+            self.assertEqual(0, result.returncode)
+            self.assertEqual(raw, (root / "output.log").read_bytes())
+            frames = console.getvalue().splitlines()
+            self.assertEqual(4, len(frames))
+            for frame in frames:
+                self.assertNotRegex(frame, r"##\[|^\s*::")
+            self.assertEqual(
+                ["x" * 4000, command[:-1].decode(), "::add-mask::modern", "suffix##[warning]last"],
+                [json.loads(frame.removeprefix("flaky-test-output "))["text"] for frame in frames])
+
+    def test_real_streamed_process_timeout_returns_without_reader_hang(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (root / "output.log").open("wb") as log, patch("sys.stdout", io.StringIO()):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    run_streamed([sys.executable, "-c", "import os,time; os.write(1,b'started\\n'); time.sleep(30)"],
+                                 cwd=root, stdout=log, stderr=subprocess.STDOUT, timeout=2, check=False)
+            self.assertEqual(b"started\n", (root / "output.log").read_bytes())
 
     def test_runner_surfaces_signals_and_timeouts(self):
         for code, expected in ((-9, 137), (124, 124)):
