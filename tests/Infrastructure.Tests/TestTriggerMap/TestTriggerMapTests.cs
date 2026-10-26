@@ -629,6 +629,19 @@ public sealed class TestTriggerMapTests
         Assert.Contains("Aspire.Cli.EndToEnd.Tests", result.TestProjects);
     }
 
+    [Theory]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-starter/.template.config/aspirecli.host.json")]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-apphost/.template.config/dotnetcli.host.json")]
+    [InlineData("src/Aspire.ProjectTemplates/templates/future-template/.template.config/template.json")]
+    [InlineData("src/Aspire.ProjectTemplates/templates/aspire-starter/Aspire-StarterApplication.1.AppHost/Properties/launchSettings.json")]
+    public void LocalTemplateSourcesRunCliUnitCoverage(string path)
+    {
+        var result = SelectWithRealMap(path);
+
+        Assert.False(result.SelectsAll);
+        Assert.Contains("Aspire.Cli.Tests", result.TestProjects);
+    }
+
     [Fact]
     public void CliBundleConsumersRunWhenCreateLayoutIsAffected()
     {
@@ -742,7 +755,7 @@ public sealed class TestTriggerMapTests
 
         Assert.False(result.SelectsAll);
         Assert.Equal(
-            ["Aspire.Cli.EndToEnd.Tests", "Aspire.Templates.Tests"],
+            ["Aspire.Cli.EndToEnd.Tests", "Aspire.Cli.Tests", "Aspire.Templates.Tests"],
             result.TestProjects.Order(StringComparer.Ordinal));
         Assert.Equal(
             ["job:deployment-e2e", "job:homebrew-installer", "job:winget-installer"],

@@ -2175,11 +2175,6 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         var nugetConfigPath = Path.Combine(workspace.WorkspaceRoot.FullName, "nuget.config");
-        var content = File.ReadAllText(nugetConfigPath);
-
-        Assert.Contains(SourceForChannel("daily"), content);
-        Assert.DoesNotContain(SourceForChannel("stable"), content);
-        Assert.DoesNotContain(SourceForChannel("staging"), content);
         AssertNuGetConfigHasChannelShape(nugetConfigPath, "daily");
     }
 

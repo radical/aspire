@@ -486,10 +486,9 @@ path_rules:
     targets: [test:Infrastructure.Tests]
     reason: Infrastructure.Tests/Pipelines/NpmCliPackageTests renders this template and verifies the packaged README
   - paths:
-      - src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package.json
-      - src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package-lock.json
+      - src/Aspire.ProjectTemplates/templates/**
     targets: [test:Aspire.Cli.Tests]
-    reason: TemplatePackageLockTests reads the shipped frontend manifest and lockfile to guard dependency versions and registry hosts.
+    reason: CLI tests instantiate template sources and verify frontend package inputs.
   - paths:
       - .github/workflows/update-nix-cli-flake.yml
       - flake.nix

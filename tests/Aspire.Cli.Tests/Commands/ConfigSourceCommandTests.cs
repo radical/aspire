@@ -798,16 +798,29 @@ public class ConfigSourceCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task New_PersistsSourceOnlyInCreatedProjectWhenAccepted(bool accepted)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task New_PersistsSourceOnlyInCreatedProjectWhenAccepted(bool accepted, bool localTemplate)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var output = Path.Combine(workspace.Path, "created-project");
+        if (localTemplate)
+        {
+            var config = workspace.CreateDirectory("template/.template.config");
+            await File.WriteAllTextAsync(Path.Combine(config.FullName, "template.json"), """
+                { "identity": "ConfigSource.Local", "name": "Local template", "shortName": "local" }
+                """);
+            await File.WriteAllTextAsync(Path.Combine(workspace.Path, "template", AspireConfigFile.FileName), "{}");
+        }
+        var templateOptions = localTemplate
+            ? "--template-path template"
+            : "aspire-empty --language csharp --version 17.0.0";
         var services = CreateCreationServices(workspace);
         using var provider = services.BuildServiceProvider();
         var result = provider.GetRequiredService<RootCommand>().Parse(
-            $"new aspire-empty --language csharp --name CreatedProject --output \"{output}\" --version 17.0.0 --suppress-agent-init --use-config-source {accepted.ToString().ToLowerInvariant()} --non-interactive");
+            $"new {templateOptions} --name CreatedProject --output \"{output}\" --suppress-agent-init --use-config-source {accepted.ToString().ToLowerInvariant()} --non-interactive");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
@@ -1020,8 +1033,10 @@ public class ConfigSourceCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, refreshGit.CheckCalls);
     }
 
-    [Fact]
-    public async Task New_AcquisitionFailureDoesNotCreateProjectOrFallBack()
+    [Theory]
+    [InlineData("aspire-empty --language csharp")]
+    [InlineData("--template-path template")]
+    public async Task New_AcquisitionFailureDoesNotCreateProjectOrFallBack(string templateOptions)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var output = Path.Combine(workspace.Path, "created-project");
@@ -1029,7 +1044,7 @@ public class ConfigSourceCommandTests(ITestOutputHelper outputHelper)
         var git = Assert.IsType<TestConfigSourceGitClient>(provider.GetRequiredService<IConfigSourceGitClient>());
         git.Acquire = (_, _) => throw new ConfigSourceException(ConfigSourceStrings.AuthenticationFailed);
         var result = provider.GetRequiredService<RootCommand>().Parse(
-            $"new aspire-empty --language csharp --output \"{output}\" --use-config-source true --non-interactive");
+            $"new {templateOptions} --output \"{output}\" --use-config-source true --non-interactive");
 
         Assert.Equal(CliExitCodes.InvalidCommand, await result.InvokeAsync().DefaultTimeout());
         Assert.False(Directory.Exists(output));
