@@ -1,128 +1,22 @@
-name: Issue Reproduction Worker
-run-name: "Issue worker #${{ inputs.issue_number }} ${{ inputs.phase }} [${{ inputs.parent_run_id }}] ${{ inputs.candidate_sha }}"
+name: Enrolled-source SDK prerequisite proof (fork only)
 on:
   workflow_dispatch:
-    inputs:
-      issue_number:
-        type: string
-        required: true
-      phase:
-        type: choice
-        options: [reproduce, verify, cancel-probe]
-        required: true
-      parent_run_id:
-        type: string
-        required: true
-      candidate_sha:
-        type: string
-        required: true
-      iterations:
-        type: string
-        required: true
-      runners:
-        type: string
-        required: true
 permissions:
   contents: read
-  actions: read
-  issues: read
 jobs:
-  setup:
+  sdk-prerequisite:
     if: github.repository == 'radical/aspire'
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.config.outputs.matrix }}
-      project: ${{ steps.config.outputs.project }}
+    timeout-minutes: 12
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - id: config
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
-        run: python3 .github/scripts/flaky-issue-proof.py matrix
-  reproduce:
-    needs: setup
-    if: inputs.phase != 'cancel-probe'
-    name: "ubuntu-latest #${{ matrix.index }}"
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      ISSUE_NUMBER: ${{ inputs.issue_number }}
-      RUNNER_INDEX: ${{ matrix.index }}
-      DOTNET_ROOT: ${{ github.workspace }}/candidate/.dotnet
-      NUGET_PACKAGES: ${{ github.workspace }}/candidate/.packages
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: netaspireci.azurecr.io
-      SkipDefaultTestFilters: true
-      WSL_INTEROP: ""
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: trusted
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: candidate
-          ref: ${{ inputs.candidate_sha }}
-          persist-credentials: false
-      - name: Record actual checkout before running candidate code
-        run: python3 trusted/.github/scripts/flaky-issue-proof.py receipt
-      - name: Use the candidate repository SDK for child processes
-        run: echo "$GITHUB_WORKSPACE/candidate/.dotnet" >> "$GITHUB_PATH"
-      - name: Build selected real Aspire test project
-        working-directory: candidate
-        run: >-
-          ./build.sh -restore -ci -build
-          -projects ${{ needs.setup.outputs.project }}
-          /p:InstallBrowsersForPlaywright=false
-          /p:RunQuarantinedTests=true
-      - name: Execute exact test and retain every original result
-        run: python3 trusted/.github/scripts/flaky-issue-proof.py execute
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Verify the exact enrolled-source SDK without enabling candidate execution
+        run: python3 .github/scripts/sdk_prerequisite_probe.py --output "$RUNNER_TEMP/sdk-prerequisite"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: real-test-evidence-ubuntu-latest-${{ matrix.index }}
-          path: worker-evidence/
+          name: sdk-prerequisite-proof
+          path: ${{ runner.temp }}/sdk-prerequisite
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: repair-worker-receipt-${{ matrix.index }}
-          path: candidate-receipt.json
-          if-no-files-found: error
-  cancel_probe:
-    needs: setup
-    if: inputs.phase == 'cancel-probe'
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
-    permissions: {}
-    steps:
-      - name: Disposable owned cancellation target; no candidate execution
-        run: |
-          echo "This is a cancellation probe, not a test execution."
-          sleep 300
-  notify:
-    needs: [setup, reproduce]
-    if: >-
-      always() && github.repository == 'radical/aspire' &&
-      inputs.phase != 'cancel-probe'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      actions: write
-    steps:
-      - name: Explicitly notify without checking out candidate code
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ inputs.issue_number }}
-          WORKER_RUN_ID: ${{ github.run_id }}
-        run: >-
-          gh workflow run flaky-issue-controller.yml
-          --repo radical/aspire --ref main
-          -f event=worker -f "issue_number=$ISSUE_NUMBER"
-          -f "worker_run_id=$WORKER_RUN_ID"
