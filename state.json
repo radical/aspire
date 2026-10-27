@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 154,
   "issue_url": "https://github.com/radical/aspire/issues/154",
-  "phase": "ready",
+  "phase": "agent-intent",
   "created_at": "2026-10-27T02:07:08.467698+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "32e9f6a4156bf1eb40d43cd015edd4309b92f8d7",
@@ -10,7 +10,7 @@
   "worker_sha": "026b4e416f79bc1f5b329158e2d9807312783682",
   "agent_workflow": "reproduce-flaky-tests.yml",
   "used": {
-    "models": 0,
+    "models": 1,
     "workers": 0,
     "fixes": 0,
     "runner_iterations": 0
@@ -21,12 +21,23 @@
   "target": null,
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T02:07:08.467728+00:00",
+  "updated_at": "2026-10-27T02:07:10.379599+00:00",
   "transitions": [
     {
       "phase": "ready",
       "reason": "Validated inputs/evidence ready for the next decision.",
       "at": "2026-10-27T02:07:08.467728+00:00"
+    },
+    {
+      "phase": "agent-intent",
+      "reason": "Reserved fresh model phase; dispatch receipt not yet persisted.",
+      "at": "2026-10-27T02:07:10.379599+00:00"
     }
-  ]
+  ],
+  "agent": {
+    "sha": "026b4e416f79bc1f5b329158e2d9807312783682",
+    "workflow": "reproduce-flaky-tests.yml",
+    "branch": "ankj/flaky-test-154-agent-1",
+    "deadline_at": "2026-10-27T02:37:10.379580+00:00"
+  }
 }
