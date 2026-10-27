@@ -19,17 +19,7 @@ jobs:
     steps:
     - name: Reject existing snapshot before frozen setup can clean its runtime tree
       shell: bash
-      run: |
-        python3 - <<'PY'
-        from pathlib import Path
-        import os
-        path = Path('/tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs')
-        for component in (*reversed(path.parents), path):
-            if component.is_symlink():
-                raise SystemExit('snapshot-unsafe')
-        if os.path.lexists(path / 'models.json') or (path.exists() and any(path.iterdir())):
-            raise SystemExit('snapshot-preexisting')
-        PY
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport os\npath = Path('/tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs')\nfor component in (*reversed(path.parents), path):\n    if component.is_symlink():\n        raise SystemExit('snapshot-unsafe')\nif os.path.lexists(path / 'models.json') or (path.exists() and any(path.iterdir())):\n    raise SystemExit('snapshot-preexisting')\nPY\n"
     - name: Setup Scripts
       id: setup
       uses: github/gh-aw-actions/setup@f3b81cdb3070066a47faa9bdf440f4f1dc78b1f0
@@ -48,108 +38,54 @@ jobs:
         persist-credentials: false
     - name: Initialize owned private host state
       shell: bash
-      run: |
-        set -euo pipefail
+      run: 'set -euo pipefail
+
         install -d -m 700 "${RUNNER_TEMP}/provider-diagnostic-v2"
+
         install -d -m 700 "${RUNNER_TEMP}/gh-aw/safeoutputs/upload-artifacts"
+
         mkdir -p /tmp/gh-aw
+
         test -n "${RUNNER_TOOL_CACHE}"
+
+        '
     - name: Install GitHub Copilot CLI
-      run: |
-        set -euo pipefail
+      run: 'set -euo pipefail
+
         { bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.85; } >> "${RUNNER_TEMP}/provider-diagnostic-v2/private-setup.log" 2>&1
+
+        '
       env:
         GH_HOST: github.com
         GH_AW_COMPILED_VERSION: v0.89.17
     - name: Install AWF binary
-      run: |
-        set -euo pipefail
+      run: 'set -euo pipefail
+
         { bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.28.20 --rootless; } >> "${RUNNER_TEMP}/provider-diagnostic-v2/private-setup.log" 2>&1
+
+        '
     - name: Download container images
-      run: |
-        set -euo pipefail
+      run: 'set -euo pipefail
+
         { bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.28.20@sha256:1bacef0f405d77999d01d8c00cb731222531b3f43ef9dc8312c513d6d9038bb1 ghcr.io/github/gh-aw-firewall/api-proxy:0.28.20@sha256:30ab6d3261dd95364281fa0b52ab78450e1c01aa074eccc3a8d4f04b12a6560b ghcr.io/github/gh-aw-firewall/squid:0.28.20@sha256:cba5f56857e4869c4a00c1cce29c3056516cf1a746e18ce380753ecfbe40f112 ghcr.io/github/gh-aw-mcpg:v0.4.25@sha256:9be0a86220e807a0ecc89e53d7453468f7a53fbc6b3d1efd2299025ffe01d086 ghcr.io/github/gh-aw-node@sha256:0daa8971fa4732b647150cb6524a6b0804b68d5d24f6f58b5dd1af23bd63fb23 ghcr.io/github/github-mcp-server:v1.12.1@sha256:0ba840c46a237879c8300e7fddb0b6347f20e029ccb9cbe2ce4a943daa1ff560; } >> "${RUNNER_TEMP}/provider-diagnostic-v2/private-setup.log" 2>&1
-    - name: Start frozen topology peer without tool servers
+
+        '
+    - name: Resolve original guard and generate original safeoutputs privately
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+      with:
+        github-token: ${{ github.token }}
+        debug: false
+        script: "let status = 0;\ntry {\n  await require('./.github/scripts/provider_diagnostic_v2/private_native_setup.cjs').run(core);\n} catch (_) {\n  status = 1;\n}\n// Do not return into the parent's automatic result/outer-error reporting.\nawait new Promise(resolve => process.stdout.write(`real_setup_status=${status}\\n`, resolve));\nprocess.exit(status);\n"
+    - name: Start original GitHub read-only and safeoutputs configuration
       id: start-mcp-gateway
-      run: |
-        set -euo pipefail
-        source .github/scripts/provider_diagnostic_v2/gateway_startup_observation.sh "${RUNNER_TEMP}/provider-diagnostic-v2/private-gateway.log" .github/scripts/provider_diagnostic_v2/gateway_startup_observer.py
-        {
-        set -eo pipefail
-        mkdir -p "${RUNNER_TEMP}/gh-aw/mcp-config"
-        if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
-          GH_AW_SAFEOUTPUTS_EVENT_PATH="${RUNNER_TEMP}/gh-aw/safeoutputs/github_event.json"
-          cp "${GITHUB_EVENT_PATH}" "${GH_AW_SAFEOUTPUTS_EVENT_PATH}"
-          export GITHUB_EVENT_PATH="${GH_AW_SAFEOUTPUTS_EVENT_PATH}"
-        fi
-
-        # Export gateway environment variables for MCP config and gateway script
-        export MCP_GATEWAY_PORT="8080"
-        export MCP_GATEWAY_DOMAIN="awmg-mcpg"
-        export MCP_GATEWAY_HOST_DOMAIN="localhost"
-        MCP_GATEWAY_AGENT_ID=$(openssl rand -base64 45 | tr -d '/+=')
-        echo "::add-mask::${MCP_GATEWAY_AGENT_ID}"
-        export MCP_GATEWAY_AGENT_ID
-        export MCP_GATEWAY_PAYLOAD_DIR="/tmp/gh-aw/mcp-payloads"
-        mkdir -p "${MCP_GATEWAY_PAYLOAD_DIR}"
-        export MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD="524288"
-        export MCP_GATEWAY_ALLOWED_MOUNT_ROOTS="${GITHUB_WORKSPACE}:rw,${RUNNER_TEMP}/gh-aw:ro,${RUNNER_TEMP}/gh-aw/safeoutputs:rw,/opt:ro,/tmp:rw,/usr/bin/gh:ro"
-        export GH_AW_PR_HEAD_BASE_BRANCH="${GH_AW_PR_HEAD_BASE_BRANCH:-}"
-        export GH_AW_PR_HEAD_BASE_SHA="${GH_AW_PR_HEAD_BASE_SHA:-}"
-        export GH_AW_PR_HEAD_BASE_REPO="${GH_AW_PR_HEAD_BASE_REPO:-}"
-        export GH_AW_PR_HEAD_BASE_PR_NUMBER="${GH_AW_PR_HEAD_BASE_PR_NUMBER:-}"
-        export GH_AW_PR_HEAD_BASE_REF="${GH_AW_PR_HEAD_BASE_REF:-}"
-        export GH_AW_PR_HEAD_REPO="${GH_AW_PR_HEAD_REPO:-}"
-        export DEBUG="*"
-
-        export GH_AW_ENGINE="copilot"
-        MCP_GATEWAY_UID=$(id -u 2>/dev/null || echo '0')
-        MCP_GATEWAY_GID=$(id -g 2>/dev/null || echo '0')
-        provider_gateway_stage=socket_resolution
-        source "${RUNNER_TEMP}/gh-aw/actions/resolve_docker_socket_gid.sh"
-        provider_gateway_stage=launcher_preparation
-        export MCP_GATEWAY_DOCKER_COMMAND='docker run -i --rm --network bridge -p 127.0.0.1:'"${MCP_GATEWAY_PORT}"':'"${MCP_GATEWAY_PORT}"' --name awmg-mcpg --add-host host.docker.internal:host-gateway --user '"${MCP_GATEWAY_UID}"':'"${MCP_GATEWAY_GID}"' --group-add '"${DOCKER_SOCK_GID}"' -v '"${DOCKER_SOCK_PATH}"':/var/run/docker.sock -e MCP_GATEWAY_PORT -e MCP_GATEWAY_DOMAIN -e MCP_GATEWAY_AGENT_ID -e MCP_GATEWAY_PAYLOAD_DIR -e MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD -e DOCKER_HOST=unix:///var/run/docker.sock -e DEBUG -e MCP_GATEWAY_LOG_DIR -e GH_AW_MCP_LOG_DIR -e GH_AW_SAFE_OUTPUTS -e GH_AW_SAFE_OUTPUTS_CONFIG_PATH -e GH_AW_SAFE_OUTPUTS_TOOLS_PATH -e GH_AW_PR_HEAD_BASE_BRANCH -e GH_AW_PR_HEAD_BASE_SHA -e GH_AW_PR_HEAD_BASE_REPO -e GH_AW_PR_HEAD_BASE_PR_NUMBER -e GH_AW_PR_HEAD_BASE_REF -e GH_AW_PR_HEAD_REPO -e GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST -e GH_AW_ASSETS_BRANCH -e GH_AW_ASSETS_MAX_SIZE_KB -e GH_AW_ASSETS_ALLOWED_EXTS -e DEFAULT_BRANCH -e GITHUB_MCP_SERVER_TOKEN -e GITHUB_MCP_GUARD_MIN_INTEGRITY -e GITHUB_MCP_GUARD_REPOS -e GH_AW_SINK_VISIBILITY -e GITHUB_REPOSITORY -e GITHUB_SERVER_URL -e GITHUB_SHA -e GITHUB_WORKSPACE -e GITHUB_TOKEN -e GITHUB_RUN_ID -e GITHUB_RUN_NUMBER -e GITHUB_RUN_ATTEMPT -e GITHUB_JOB -e GITHUB_ACTION -e GITHUB_EVENT_NAME -e GITHUB_EVENT_PATH -e GITHUB_ACTOR -e GITHUB_ACTOR_ID -e GITHUB_TRIGGERING_ACTOR -e GITHUB_WORKFLOW -e GITHUB_WORKFLOW_REF -e GITHUB_WORKFLOW_SHA -e GITHUB_REF -e GITHUB_REF_NAME -e GITHUB_REF_TYPE -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e RUNNER_TEMP -e RUNNER_TOOL_CACHE -e MCP_GATEWAY_ALLOWED_MOUNT_ROOTS -e GITHUB_AW_OTEL_TRACE_ID -e GITHUB_AW_OTEL_PARENT_SPAN_ID -e OTEL_EXPORTER_OTLP_HEADERS -v /tmp/gh-aw/mcp-payloads:/tmp/gh-aw/mcp-payloads:rw -v /opt:/opt:ro -v /tmp:/tmp:rw -v '"${GITHUB_WORKSPACE}"':'"${GITHUB_WORKSPACE}"':rw -v '"${RUNNER_TEMP}"'/gh-aw/safeoutputs:'"${RUNNER_TEMP}"'/gh-aw/safeoutputs:rw ghcr.io/github/gh-aw-mcpg:v0.4.25'
-
-        mkdir -p "$HOME/.copilot"
-        GH_AW_NODE=$(which node 2>/dev/null || command -v node 2>/dev/null || echo node)
-        provider_gateway_stage=launcher_pipeline
-        cat << GH_AW_MCP_CONFIG_8f01f8686b157b34_EOF | "$GH_AW_NODE" "${RUNNER_TEMP}/gh-aw/actions/start_mcp_gateway.cjs"
-        {
-          "mcpServers": {},
-          "gateway": {
-            "port": $MCP_GATEWAY_PORT,
-            "domain": "${MCP_GATEWAY_DOMAIN}",
-            "agentId": "${MCP_GATEWAY_AGENT_ID}",
-            "payloadDir": "${MCP_GATEWAY_PAYLOAD_DIR}",
-            "startupTimeout": 120,
-            "opentelemetry": {
-              "endpoint": "${OTEL_EXPORTER_OTLP_ENDPOINT}",
-              "traceId": "${GITHUB_AW_OTEL_TRACE_ID}",
-              "spanId": "${GITHUB_AW_OTEL_PARENT_SPAN_ID}"
-            }
-          }
-        }
-        GH_AW_MCP_CONFIG_8f01f8686b157b34_EOF
-
-        } > "${RUNNER_TEMP}/provider-diagnostic-v2/private-gateway.log" 2>&1
-        # Consumed by the sourced EXIT handler after the frozen command returns.
-        # shellcheck disable=SC2034
-        provider_gateway_stage=complete
+      run: "set -euo pipefail\nsource .github/scripts/provider_diagnostic_v2/gateway_startup_observation.sh \"${RUNNER_TEMP}/provider-diagnostic-v2/private-gateway.log\" .github/scripts/provider_diagnostic_v2/gateway_startup_observer.py\n{\nset -eo pipefail\nexport GH_AW_SAFE_OUTPUTS=\"${RUNNER_TEMP}/gh-aw/safeoutputs/outputs.jsonl\"\nexport GH_AW_SAFE_OUTPUTS_CONFIG_PATH=\"${RUNNER_TEMP}/gh-aw/safeoutputs/config.json\"\nexport GH_AW_SAFE_OUTPUTS_TOOLS_PATH=\"${RUNNER_TEMP}/gh-aw/safeoutputs/tools.json\"\nmkdir -p /tmp/gh-aw/safeoutputs /tmp/gh-aw/mcp-logs/safeoutputs\n# Read private native outputs internally; no rendered Actions env values.\nprovider_guard_values=()\nwhile IFS= read -r provider_guard_value; do\n  provider_guard_values+=(\"${provider_guard_value}\")\ndone < <(python3 - <<'PY_GUARD'\nimport json\nimport os\nfrom pathlib import Path\ndata = json.loads((Path(os.environ[\"RUNNER_TEMP\"]) / \"provider-diagnostic-v2/guard.json\").read_text())\nassert set(data) == {\"visibility\", \"min_integrity\", \"repos\"}\nfor key in [\"visibility\", \"min_integrity\", \"repos\"]:\n    value = data[key]\n    assert isinstance(value, str) and value and not any(c in value for c in \"\\r\\n\\0\")\n    print(value)\nPY_GUARD\n)\ntest \"${#provider_guard_values[@]}\" -eq 3\nexport GH_AW_SINK_VISIBILITY=\"${provider_guard_values[0]}\"\nexport GITHUB_MCP_GUARD_MIN_INTEGRITY=\"${provider_guard_values[1]}\"\nexport GITHUB_MCP_GUARD_REPOS=\"${provider_guard_values[2]}\"\nexport GH_AW_MCP_LOG_DIR=\"/tmp/gh-aw/mcp-logs/safeoutputs\"\n# The existing frozen startup copies this event into the mounted safeoutputs\n# directory below. Fail closed rather than forwarding a dangling host path.\ntest -n \"${GITHUB_EVENT_PATH:-}\" && test -r \"${GITHUB_EVENT_PATH}\"\nDEFAULT_BRANCH=$(python3 - <<'PY_BRANCH'\nimport json\nimport os\nfrom pathlib import Path\nvalue = json.loads(Path(os.environ[\"GITHUB_EVENT_PATH\"]).read_text())[\"repository\"][\"default_branch\"]\nassert isinstance(value, str) and value and not any(c in value for c in \"\\r\\n\\0\")\nprint(value, end=\"\")\nPY_BRANCH\n)\nexport DEFAULT_BRANCH\nmkdir -p \"${RUNNER_TEMP}/gh-aw/mcp-config\"\nif [ -n \"${GITHUB_EVENT_PATH:-}\" ] && [ -r \"${GITHUB_EVENT_PATH}\" ]; then\n  GH_AW_SAFEOUTPUTS_EVENT_PATH=\"${RUNNER_TEMP}/gh-aw/safeoutputs/github_event.json\"\n  cp \"${GITHUB_EVENT_PATH}\" \"${GH_AW_SAFEOUTPUTS_EVENT_PATH}\"\n  export GITHUB_EVENT_PATH=\"${GH_AW_SAFEOUTPUTS_EVENT_PATH}\"\nfi\n\n# Export gateway environment variables for MCP config and gateway script\nexport MCP_GATEWAY_PORT=\"8080\"\nexport MCP_GATEWAY_DOMAIN=\"awmg-mcpg\"\nexport MCP_GATEWAY_HOST_DOMAIN=\"localhost\"\nMCP_GATEWAY_AGENT_ID=$(openssl rand -base64 45 | tr -d '/+=')\necho \"::add-mask::${MCP_GATEWAY_AGENT_ID}\"\nexport MCP_GATEWAY_AGENT_ID\nexport MCP_GATEWAY_PAYLOAD_DIR=\"/tmp/gh-aw/mcp-payloads\"\nmkdir -p \"${MCP_GATEWAY_PAYLOAD_DIR}\"\nexport MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD=\"524288\"\nexport MCP_GATEWAY_ALLOWED_MOUNT_ROOTS=\"${GITHUB_WORKSPACE}:rw,${RUNNER_TEMP}/gh-aw:ro,${RUNNER_TEMP}/gh-aw/safeoutputs:rw,/opt:ro,/tmp:rw,/usr/bin/gh:ro\"\nexport GH_AW_PR_HEAD_BASE_BRANCH=\"${GH_AW_PR_HEAD_BASE_BRANCH:-}\"\nexport GH_AW_PR_HEAD_BASE_SHA=\"${GH_AW_PR_HEAD_BASE_SHA:-}\"\nexport GH_AW_PR_HEAD_BASE_REPO=\"${GH_AW_PR_HEAD_BASE_REPO:-}\"\nexport GH_AW_PR_HEAD_BASE_PR_NUMBER=\"${GH_AW_PR_HEAD_BASE_PR_NUMBER:-}\"\nexport GH_AW_PR_HEAD_BASE_REF=\"${GH_AW_PR_HEAD_BASE_REF:-}\"\nexport GH_AW_PR_HEAD_REPO=\"${GH_AW_PR_HEAD_REPO:-}\"\nexport DEBUG=\"*\"\n\nexport GH_AW_ENGINE=\"copilot\"\nMCP_GATEWAY_UID=$(id -u 2>/dev/null || echo '0')\nMCP_GATEWAY_GID=$(id -g 2>/dev/null || echo '0')\nprovider_gateway_stage=socket_resolution\nsource \"${RUNNER_TEMP}/gh-aw/actions/resolve_docker_socket_gid.sh\"\nprovider_gateway_stage=launcher_preparation\nexport MCP_GATEWAY_DOCKER_COMMAND='docker run -i --rm --network bridge -p 127.0.0.1:'\"${MCP_GATEWAY_PORT}\"':'\"${MCP_GATEWAY_PORT}\"' --name awmg-mcpg --add-host host.docker.internal:host-gateway --user '\"${MCP_GATEWAY_UID}\"':'\"${MCP_GATEWAY_GID}\"' --group-add '\"${DOCKER_SOCK_GID}\"' -v '\"${DOCKER_SOCK_PATH}\"':/var/run/docker.sock -e MCP_GATEWAY_PORT -e MCP_GATEWAY_DOMAIN -e MCP_GATEWAY_AGENT_ID -e MCP_GATEWAY_PAYLOAD_DIR -e MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD -e DOCKER_HOST=unix:///var/run/docker.sock -e DEBUG -e MCP_GATEWAY_LOG_DIR -e GH_AW_MCP_LOG_DIR -e GH_AW_SAFE_OUTPUTS -e GH_AW_SAFE_OUTPUTS_CONFIG_PATH -e GH_AW_SAFE_OUTPUTS_TOOLS_PATH -e GH_AW_PR_HEAD_BASE_BRANCH -e GH_AW_PR_HEAD_BASE_SHA -e GH_AW_PR_HEAD_BASE_REPO -e GH_AW_PR_HEAD_BASE_PR_NUMBER -e GH_AW_PR_HEAD_BASE_REF -e GH_AW_PR_HEAD_REPO -e GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST -e GH_AW_ASSETS_BRANCH -e GH_AW_ASSETS_MAX_SIZE_KB -e GH_AW_ASSETS_ALLOWED_EXTS -e DEFAULT_BRANCH -e GITHUB_MCP_SERVER_TOKEN -e GITHUB_MCP_GUARD_MIN_INTEGRITY -e GITHUB_MCP_GUARD_REPOS -e GH_AW_SINK_VISIBILITY -e GITHUB_REPOSITORY -e GITHUB_SERVER_URL -e GITHUB_SHA -e GITHUB_WORKSPACE -e GITHUB_TOKEN -e GITHUB_RUN_ID -e GITHUB_RUN_NUMBER -e GITHUB_RUN_ATTEMPT -e GITHUB_JOB -e GITHUB_ACTION -e GITHUB_EVENT_NAME -e GITHUB_EVENT_PATH -e GITHUB_ACTOR -e GITHUB_ACTOR_ID -e GITHUB_TRIGGERING_ACTOR -e GITHUB_WORKFLOW -e GITHUB_WORKFLOW_REF -e GITHUB_WORKFLOW_SHA -e GITHUB_REF -e GITHUB_REF_NAME -e GITHUB_REF_TYPE -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e RUNNER_TEMP -e RUNNER_TOOL_CACHE -e MCP_GATEWAY_ALLOWED_MOUNT_ROOTS -e GITHUB_AW_OTEL_TRACE_ID -e GITHUB_AW_OTEL_PARENT_SPAN_ID -e OTEL_EXPORTER_OTLP_HEADERS -v /tmp/gh-aw/mcp-payloads:/tmp/gh-aw/mcp-payloads:rw -v /opt:/opt:ro -v /tmp:/tmp:rw -v '\"${GITHUB_WORKSPACE}\"':'\"${GITHUB_WORKSPACE}\"':rw -v '\"${RUNNER_TEMP}\"'/gh-aw/safeoutputs:'\"${RUNNER_TEMP}\"'/gh-aw/safeoutputs:rw ghcr.io/github/gh-aw-mcpg:v0.4.25'\n\nmkdir -p \"$HOME/.copilot\"\nGH_AW_NODE=$(which node 2>/dev/null || command -v node 2>/dev/null || echo node)\nprovider_gateway_stage=launcher_pipeline\ncat << GH_AW_MCP_CONFIG_8f01f8686b157b34_EOF | \"$GH_AW_NODE\" \"${RUNNER_TEMP}/gh-aw/actions/start_mcp_gateway.cjs\"\n{\n  \"mcpServers\": {\n    \"github\": {\n      \"type\": \"stdio\",\n      \"container\": \"ghcr.io/github/github-mcp-server:v1.12.1\",\n      \"env\": {\n        \"GITHUB_FEATURES\": \"fields_param\",\n        \"GITHUB_HOST\": \"${GITHUB_SERVER_URL}\",\n        \"GITHUB_PERSONAL_ACCESS_TOKEN\": \"${GITHUB_MCP_SERVER_TOKEN}\",\n        \"GITHUB_READ_ONLY\": \"1\",\n        \"GITHUB_TOOLSETS\": \"context,repos,issues,pull_requests\"\n      },\n      \"guard-policies\": {\n        \"allow-only\": {\n          \"min-integrity\": \"$GITHUB_MCP_GUARD_MIN_INTEGRITY\",\n          \"repos\": \"$GITHUB_MCP_GUARD_REPOS\"\n        }\n      }\n    },\n    \"safeoutputs\": {\n      \"type\": \"stdio\",\n      \"container\": \"ghcr.io/github/gh-aw-node\",\n      \"mounts\": [\"\\${GITHUB_WORKSPACE}:\\${GITHUB_WORKSPACE}:rw\", \"${RUNNER_TEMP}/gh-aw/safeoutputs:${RUNNER_TEMP}/gh-aw/safeoutputs:rw\", \"/tmp/gh-aw:/tmp/gh-aw:rw\"],\n      \"args\": [\"-w\", \"\\${GITHUB_WORKSPACE}\"],\n      \"entrypoint\": \"sh\",\n      \"entrypointArgs\": [\"-c\", \"sh ${RUNNER_TEMP}/gh-aw/safeoutputs/start_safe_outputs_mcp.sh\"],\n      \"env\": {\n        \"DEBUG\": \"*\",\n        \"DEFAULT_BRANCH\": \"\\${DEFAULT_BRANCH}\",\n        \"GH_AW_ASSETS_ALLOWED_EXTS\": \"\\${GH_AW_ASSETS_ALLOWED_EXTS}\",\n        \"GH_AW_ASSETS_BRANCH\": \"\\${GH_AW_ASSETS_BRANCH}\",\n        \"GH_AW_ASSETS_MAX_SIZE_KB\": \"\\${GH_AW_ASSETS_MAX_SIZE_KB}\",\n        \"GH_AW_MCP_LOG_DIR\": \"\\${GH_AW_MCP_LOG_DIR}\",\n        \"GH_AW_SAFE_OUTPUTS\": \"\\${GH_AW_SAFE_OUTPUTS}\",\n        \"GH_AW_SAFE_OUTPUTS_CONFIG_PATH\": \"\\${GH_AW_SAFE_OUTPUTS_CONFIG_PATH}\",\n        \"GH_AW_SAFE_OUTPUTS_TOOLS_PATH\": \"\\${GH_AW_SAFE_OUTPUTS_TOOLS_PATH}\",\n        \"GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST\": \"\\${GH_AW_POLICY_ALLOW_CREATE_PULL_REQUEST}\",\n        \"GH_AW_PR_HEAD_BASE_BRANCH\": \"\\${GH_AW_PR_HEAD_BASE_BRANCH}\",\n        \"GH_AW_PR_HEAD_BASE_SHA\": \"\\${GH_AW_PR_HEAD_BASE_SHA}\",\n        \"GH_AW_PR_HEAD_BASE_REPO\": \"\\${GH_AW_PR_HEAD_BASE_REPO}\",\n        \"GH_AW_PR_HEAD_BASE_PR_NUMBER\": \"\\${GH_AW_PR_HEAD_BASE_PR_NUMBER}\",\n        \"GH_AW_PR_HEAD_BASE_REF\": \"\\${GH_AW_PR_HEAD_BASE_REF}\",\n        \"GH_AW_PR_HEAD_REPO\": \"\\${GH_AW_PR_HEAD_REPO}\",\n        \"GITHUB_EVENT_NAME\": \"\\${GITHUB_EVENT_NAME}\",\n        \"GITHUB_EVENT_PATH\": \"\\${GITHUB_EVENT_PATH}\",\n        \"GITHUB_REPOSITORY\": \"\\${GITHUB_REPOSITORY}\",\n        \"GITHUB_SHA\": \"\\${GITHUB_SHA}\",\n        \"GITHUB_TOKEN\": \"\\${GITHUB_TOKEN}\",\n        \"GITHUB_WORKSPACE\": \"\\${GITHUB_WORKSPACE}\",\n        \"RUNNER_TEMP\": \"\\${RUNNER_TEMP}\"\n      },\n      \"guard-policies\": {\n        \"write-sink\": {\n          \"accept\": [\n            \"*\"\n          ],\n          \"sink-visibility\": \"${GH_AW_SINK_VISIBILITY}\"\n        }\n      }\n    }\n  },\n  \"gateway\": {\n    \"port\": $MCP_GATEWAY_PORT,\n    \"domain\": \"${MCP_GATEWAY_DOMAIN}\",\n    \"agentId\": \"${MCP_GATEWAY_AGENT_ID}\",\n    \"payloadDir\": \"${MCP_GATEWAY_PAYLOAD_DIR}\",\n    \"startupTimeout\": 120,\n    \"opentelemetry\": {\n      \"endpoint\": \"${OTEL_EXPORTER_OTLP_ENDPOINT}\",\n      \"traceId\": \"${GITHUB_AW_OTEL_TRACE_ID}\",\n      \"spanId\": \"${GITHUB_AW_OTEL_PARENT_SPAN_ID}\"\n    }\n  }\n}\nGH_AW_MCP_CONFIG_8f01f8686b157b34_EOF\n\n} > \"${RUNNER_TEMP}/provider-diagnostic-v2/private-gateway.log\" 2>&1\n# Consumed by the sourced EXIT handler after the frozen command returns.\n# shellcheck disable=SC2034\nprovider_gateway_stage=complete\n"
+      env:
+        GITHUB_MCP_SERVER_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
     - name: Reject stale inputs and start credential-free host observer
       id: owned_start
       shell: bash
-      run: |
-        set -euo pipefail
-        python3 .github/scripts/provider_diagnostic_v2/provider_diagnostic.py prepare --logs /tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs --state "${RUNNER_TEMP}/provider-diagnostic-v2/intent.json" --receipt "${GITHUB_WORKSPACE}/provider-diagnostic-receipt.json"
-        python3 .github/scripts/provider_diagnostic_v2/provider_diagnostic.py watch --logs /tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs --state "${RUNNER_TEMP}/provider-diagnostic-v2/intent.json" --receipt "${GITHUB_WORKSPACE}/provider-diagnostic-receipt.json" > "${RUNNER_TEMP}/provider-diagnostic-v2/private-observer.log" 2>&1 &
-        observer_pid=$!
-        kill -0 "$observer_pid"
-        for ((attempt=0; attempt<50; attempt++)); do
-          test -f "${RUNNER_TEMP}/provider-diagnostic-v2/intent.ready" && exit 0
-          kill -0 "$observer_pid"
-          sleep 0.1
-        done
-        exit 1
+      run: "set -euo pipefail\npython3 .github/scripts/provider_diagnostic_v2/provider_diagnostic.py prepare --logs /tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs --state \"${RUNNER_TEMP}/provider-diagnostic-v2/intent.json\" --receipt \"${GITHUB_WORKSPACE}/provider-diagnostic-receipt.json\"\npython3 .github/scripts/provider_diagnostic_v2/provider_diagnostic.py watch --logs /tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs --state \"${RUNNER_TEMP}/provider-diagnostic-v2/intent.json\" --receipt \"${GITHUB_WORKSPACE}/provider-diagnostic-receipt.json\" > \"${RUNNER_TEMP}/provider-diagnostic-v2/private-observer.log\" 2>&1 &\nobserver_pid=$!\nkill -0 \"$observer_pid\"\nfor ((attempt=0; attempt<50; attempt++)); do\n  test -f \"${RUNNER_TEMP}/provider-diagnostic-v2/intent.ready\" && exit 0\n  kill -0 \"$observer_pid\"\n  sleep 0.1\ndone\nexit 1\n"
     - name: Frozen AWF invocation with version-only finite payload
       id: owned_awf
       timeout-minutes: 15
@@ -177,17 +113,20 @@ jobs:
       id: extract
       if: ${{ always() && steps.owned_start.outcome == 'success' }}
       shell: bash
-      run: |
-        set -euo pipefail
+      run: 'set -euo pipefail
+
         python3 .github/scripts/provider_diagnostic_v2/provider_diagnostic.py finish --logs /tmp/gh-aw/sandbox/firewall/logs/api-proxy-logs --state "${RUNNER_TEMP}/provider-diagnostic-v2/intent.json" --receipt "${GITHUB_WORKSPACE}/provider-diagnostic-receipt.json" --version-file /tmp/gh-aw/provider-diagnostic-version.txt
+
+        '
     - name: Stop MCP Gateway
       if: ${{ always() }}
       env:
         MCP_GATEWAY_PORT: ${{ steps.start-mcp-gateway.outputs.gateway-port }}
         MCP_GATEWAY_AGENT_ID: ${{ steps.start-mcp-gateway.outputs.gateway-agent-id }}
         GATEWAY_PID: ${{ steps.start-mcp-gateway.outputs.gateway-pid }}
-      run: |
-        { bash "${RUNNER_TEMP}/gh-aw/actions/stop_mcp_gateway.sh" "$GATEWAY_PID"; } > "${RUNNER_TEMP}/provider-diagnostic-v2/private-stop.log" 2>&1
+      run: '{ bash "${RUNNER_TEMP}/gh-aw/actions/stop_mcp_gateway.sh" "$GATEWAY_PID"; } > "${RUNNER_TEMP}/provider-diagnostic-v2/private-stop.log" 2>&1
+
+        '
     - name: Upload only sanitized selected-Sol receipt
       if: ${{ always() && (steps.extract.outputs.receipt_written == 'true' || steps.owned_start.outputs.receipt_written == 'true') }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
