@@ -30,7 +30,8 @@ from worker import configuration, setup_outputs, validate_checkout
 
 BASE = "a" * 40
 CONTROL = "b" * 40
-URL = "https://github.com/microsoft/aspire/issues/123"
+URL = f"https://github.com/{REPOSITORY}/issues/123"
+FOREIGN_URL = f"https://github.com/{REPOSITORY}-foreign/issues/123"
 SOURCE = "tests/Sample.Tests/WidgetTests.cs"
 PROJECT = "tests/Sample.Tests/Sample.Tests.csproj"
 CODE = f"""namespace Sample.Tests;
@@ -128,7 +129,7 @@ class FakeGitHub:
             self.comments.append({"body": body["body"], "user": {"login": "github-actions[bot]", "type": "Bot"}})
             return {"id": len(self.comments)}
         if endpoint == "pulls":
-            value = {**body, "html_url": "https://github.com/microsoft/aspire/pull/999",
+            value = {**body, "html_url": f"https://github.com/{REPOSITORY}/pull/999",
                      "head": {"sha": self.refs[body["head"]]}, "user": {"login": "github-actions[bot]"},
                      "state": "open"}
             self.pulls.append(value)
@@ -549,7 +550,9 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Rejected attempts (not accepted test counts)", details)
         self.assertLess(len(summary), 1600)
         golden = Path(__file__).with_name("fixtures") / "rejected-worker-comment.txt"
-        self.assertEqual(golden.read_text(encoding="utf-8"), body + "\n")
+        expected = golden.read_text(encoding="utf-8").replace(
+            "https://github.com/microsoft/aspire/", f"https://github.com/{REPOSITORY}/")
+        self.assertEqual(expected, body + "\n")
         self.assertEqual([], self.github.pulls)
         before = copy.deepcopy((self.github.state, self.github.comments, self.github.refs))
         self.invoke_controller()
@@ -1896,7 +1899,7 @@ class BoundaryTests(unittest.TestCase):
     def test_tainted_checkpoint_identity_budgets_and_clock_fail_before_remote_writes(self):
         state, revision = Controller(FakeGitHub(), lambda: NOW).start(URL, CONTROL)
         for key, value in (
-            ("issue_url", URL.replace("microsoft", "elsewhere")),
+            ("issue_url", FOREIGN_URL),
             ("base_sha", "main"), ("phase", "shell"), ("created_at", "2026-10-21"),
             ("used", {**state["used"], "workers": -1}), ("history", None),
         ):
@@ -2048,7 +2051,7 @@ print("fork identity and exact authority verified")
 
     def test_reject_foreign_urls_pull_requests_query_strings_and_shell(self):
         for url in (URL + "?x=1", URL + "#comment", URL.replace("/issues/", "/pull/"),
-                    URL.replace("microsoft", "elsewhere"), URL + ";echo hacked", "123"):
+                    FOREIGN_URL, URL + ";echo hacked", "123"):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 issue_number(url)
 
@@ -2429,6 +2432,7 @@ class EvidenceTests(unittest.TestCase):
                                  cwd=root, stdout=log, stderr=subprocess.STDOUT, timeout=2, check=False)
             self.assertEqual(b"started\n", (root / "output.log").read_bytes())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group probe requires Unix signal cleanup")
     def test_timeout_stops_exact_owned_descendants_not_an_unrelated_process(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -279,7 +279,9 @@ preparer, added capabilities or namespace overrides.
 
 1. **Preparation:** bridge networking, a copy of the image's SDK installation
    into the source's `.dotnet`, an exact SDK check, then
-   `./build.sh -restore -build -projects tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj /p:InstallBrowsersForPlaywright=false /p:RunQuarantinedTests=true`.
+   `./build.sh -restore -build -projects "$PWD/tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj" /p:InstallBrowsersForPlaywright=false /p:RunQuarantinedTests=true`.
+   The quoted absolute operand is resolved in the source working directory;
+   Arcade consumes project items relative to its SDK's `tools/Build.proj`.
    This is the repository's local build path, not CI partition/archive generation.
 2. **Execution:** networking disabled, another exact SDK check, then
    `./dotnet.sh test --project tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj --no-launch-profile --no-restore --no-build -- --timeout 8m --results-directory /work/results --report-trx --report-trx-filename original.trx --filter-method Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly --filter-not-trait outerloop=true`.

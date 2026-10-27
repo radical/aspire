@@ -396,7 +396,8 @@ def run(root, archive):
         OWNERSHIP_CHECK + "mkdir -p /work/home /work/packages /work/results /work/dcp-logs .dotnet\n"
         "cp -a /usr/share/dotnet/. .dotnet/\n"
         f'test "$(./dotnet.sh --version)" = "{SDK}"\n'
-        f"./build.sh -restore -build -projects {PROJECT} "
+        # Arcade consumes this path from its SDK tools/Build.proj, not this cwd.
+        f'./build.sh -restore -build -projects "$PWD/{PROJECT}" '
         "/p:InstallBrowsersForPlaywright=false /p:RunQuarantinedTests=true\n"
         "./dotnet.sh --list-runtimes\n",
     ]

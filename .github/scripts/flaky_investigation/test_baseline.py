@@ -327,6 +327,49 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(observed["untrusted_outcomes"], ["Passed"])
         self.assertIsNone(observed["accepted_test_counts"])
 
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parents[3] / ".dotnet" / "dotnet").is_file(),
+        "Project operand regression requires an already provisioned repository .NET SDK")
+    def test_preparation_project_resolves_from_the_source_not_the_msbuild_consumer(self):
+        source = self.root / "source tree"
+        project = source / baseline.PROJECT
+        project.parent.mkdir(parents=True)
+        project.write_text(
+            '<Project><Target Name="Probe"><WriteLinesToFile '
+            'File="$(MSBuildProjectDirectory)/resolved.txt" Lines="$(MSBuildProjectFullPath)" '
+            'Overwrite="true"/></Target></Project>')
+        consumer = self.root / "arcade" / "Build.proj"
+        consumer.parent.mkdir()
+        # Arcade materializes -projects as ProjectToBuild, then invokes MSBuild
+        # from its own tools/Build.proj, not the shell's working directory.
+        consumer.write_text(
+            '<Project><ItemGroup><ProjectToBuild Include="$(Projects)"/></ItemGroup>'
+            '<Target Name="Build"><MSBuild Projects="@(ProjectToBuild)" '
+            'Targets="Probe"/></Target></Project>')
+        build = source / "build.sh"
+        build.write_text(
+            '#!/bin/bash\nset -eu\n'
+            'while [[ "$1" != -projects ]]; do shift; done\n'
+            'exec "$OPERAND_DOTNET" msbuild "$OPERAND_CONSUMER" -nologo "-p:Projects=$2"\n')
+        build.chmod(0o700)
+        with patch.object(baseline, "authorize"), \
+                patch.object(baseline, "source", return_value=self.work), \
+                patch.object(baseline, "image", return_value="sha256:" + "b" * 64), \
+                patch.object(baseline, "Stage") as stage:
+            stage.return_value.execute.return_value = {"exit_code": 1}
+            with self.assertRaisesRegex(ValueError, "restore/build"):
+                baseline.run(self.root / "operand-run", self.root / "sdk.tar.gz")
+        script = stage.call_args.args[4][2]
+        command = next(line for line in script.splitlines() if line.startswith("./build.sh "))
+        result = subprocess.run(
+            ["bash", "-euc", command], cwd=source, capture_output=True, text=True, timeout=30,
+            env={**os.environ,
+                 "OPERAND_DOTNET": str(Path(__file__).resolve().parents[3] / ".dotnet" / "dotnet"),
+                 "OPERAND_CONSUMER": str(consumer)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        resolved = Path((project.parent / "resolved.txt").read_text().strip())
+        self.assertEqual(resolved.resolve(), project.resolve())
+
     def test_sdk_type_size_and_checksum_reject_before_image_build(self):
         archive = self.root / "sdk.tar.gz"
         archive.write_bytes(b"not the vendor SDK archive")
