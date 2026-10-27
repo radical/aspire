@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 156,
   "issue_url": "https://github.com/radical/aspire/issues/156",
-  "phase": "agent-intent",
+  "phase": "agent",
   "created_at": "2026-10-27T19:37:02.859642+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "ec8110dac6075157f3c3df22fd5fe7c3392c4e52",
@@ -21,7 +21,7 @@
   "target": null,
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T19:43:21.491397+00:00",
+  "updated_at": "2026-10-27T19:43:24.746907+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -42,13 +42,20 @@
       "phase": "agent-intent",
       "reason": "Reserved fresh model phase; dispatch receipt not yet persisted.",
       "at": "2026-10-27T19:43:21.491397+00:00"
+    },
+    {
+      "phase": "agent",
+      "reason": "Recovered exact full-intent dispatch; no dispatch was repeated.",
+      "at": "2026-10-27T19:43:24.746907+00:00"
     }
   ],
   "agent": {
     "sha": "ec8110dac6075157f3c3df22fd5fe7c3392c4e52",
     "workflow": "flaky-issue-agent.lock.yml",
     "branch": "ankj/flaky-test-156-agent-1",
-    "deadline_at": "2026-10-27T20:07:06.851102+00:00"
+    "deadline_at": "2026-10-27T20:07:06.851102+00:00",
+    "id": 40571362042,
+    "revision": "b88d167ddcaa38b4b8b451969bc1ed94dfff5ea4"
   },
   "dispatch_recovery": {
     "kind": "agent",
@@ -57,7 +64,7 @@
     "observed_ids": [
       40571362042
     ],
-    "confirmed": false,
+    "confirmed": true,
     "outcome": null,
     "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed."
   }
