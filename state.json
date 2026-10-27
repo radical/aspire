@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 153,
   "issue_url": "https://github.com/radical/aspire/issues/153",
-  "phase": "worker",
+  "phase": "publication-intent",
   "created_at": "2026-10-27T02:07:37.408704+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "32e9f6a4156bf1eb40d43cd015edd4309b92f8d7",
@@ -46,8 +46,8 @@
     "status": "skipped",
     "reason": "Controlled lifecycle fault fixture; no test ran"
   },
-  "outcome": null,
-  "updated_at": "2026-10-27T02:08:00.223429+00:00",
+  "outcome": "blocked",
+  "updated_at": "2026-10-27T02:18:37.437252+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -68,6 +68,11 @@
       "phase": "worker",
       "reason": "Owned worker dispatched; original reports must pass independent validation.",
       "at": "2026-10-27T02:08:00.223429+00:00"
+    },
+    {
+      "phase": "publication-intent",
+      "reason": "Terminal blocked decision; publication not yet confirmed.",
+      "at": "2026-10-27T02:18:37.437252+00:00"
     }
   ],
   "repair_scope": [
@@ -108,5 +113,18 @@
     "branch": "ankj/flaky-test-153-run-1",
     "deadline_at": "2026-10-27T03:37:50.250214+00:00",
     "id": 40436646545
-  }
+  },
+  "rejected_attempts": [
+    {
+      "phase": "worker",
+      "reason": "Owned test run was cancelled or interrupted",
+      "source_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "sha": "026b4e416f79bc1f5b329158e2d9807312783682",
+      "mode": "single",
+      "branch": "ankj/flaky-test-153-run-1",
+      "run_id": 40436646545
+    }
+  ],
+  "explanation": "Validation/remote operation blocked: Owned test run was cancelled or interrupted",
+  "analysis": null
 }
