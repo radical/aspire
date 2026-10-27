@@ -37,6 +37,16 @@ The tool packaging flow therefore extracts the signed `aspire` binary from the s
 
 Linux native jobs do not sign ELF binaries in `build_sign_native`. For Linux, extracting from the native archive gives the same unsigned ELF payload, and the resulting NuGet packages are signed later as packages by the main Windows build.
 
+The official Assemble job also signs Linux Dashboard NuGet containers.
+Windows/macOS Dashboard packages are staged afterward to avoid reprocessing
+their already-signed executables. Staging must not overwrite the signed Linux
+packages with their unsigned producer copies.
+
+After all packages are staged, Assemble verifies every shipping NuGet signature
+before publishing build artifacts. Native `.symbols.nupkg` files are excluded:
+they are symbol-upload blobs, not release NuGet inputs. The release pipeline
+retains its own signature verification as defense in depth.
+
 ## Nix flake packaging
 
 The root `flake.nix` packages the stable Aspire CLI from the versioned GitHub release archive URLs and hashes tracked in `eng/nix/versions.json`. It is a binary package, not a Nix source build of this repository. This keeps the Nix package aligned with the same canonical signed native archive consumed by the other installers.
