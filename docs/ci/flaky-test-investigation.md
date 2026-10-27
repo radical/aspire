@@ -211,6 +211,107 @@ A reusable caller must allow `contents: write`, `actions: read`, `issues: write`
 and `copilot-requests: write` for the compiled workflow. These are the combined
 job requirements, not the permissions of the model job.
 
+## Unwired trusted-baseline Linux experiment
+
+`baseline.py` is an explicit **fork-only prototype**, not a controller worker
+or a candidate boundary. It accepts neither patches nor arbitrary commands,
+source refs, projects or methods. Production candidate execution and publication
+remain unconditionally blocked.
+
+The enrolled source is `radical/aspire` commit
+`934fbbbe0942da5025abdfefa93edca1ad9ec633`. The sole selection is
+`Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly`
+in `tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj`. Other selections,
+Docker-dependent scenarios, operating systems and architectures are unsupported.
+This limited enrollment is not general issue-to-test discovery.
+
+The source's `global.json` selects SDK `11.0.100-rc.1.26425.128`.
+Its `eng/Versions.props` defaults to `net8.0`, and `global.json` declares the
+additional runtime toolsets. Merely proving SDK 11 and .NET 10 are present does
+not prove this test can run. The normal repository build must provision its
+declared prerequisites; missing runtimes or restore/build failures stop the
+experiment, without framework, SDK or runtime roll-forward workarounds.
+
+`tests/Aspire.Hosting.Tests/TestProgramFixture.cs` and
+`tests/testproject/TestProject.AppHost/TestProgram.cs` establish that this Slim
+fixture disables dashboard and integration services at runtime. It launches
+native DCP and .NET service processes, not test-service containers. Its build
+still includes the Dashboard reference. The enrolled project graph has no npm
+build step; the source's native-tool installer only runs for a `native-tools`
+entry, which this `global.json` does not declare. These observations do not
+waive prerequisites for other tests.
+
+Run on a Linux x64 fork runner with an already available Docker daemon.
+Download the exact SDK archive first; the CLI independently checks its
+207623687-byte size and pinned vendor SHA-512 before copying it into the
+dedicated image context. No SDK is installed on the host.
+
+```bash
+curl --disable --fail --silent --show-error --location \
+  --max-time 180 --max-filesize 207623687 \
+  --output "${RUNNER_TEMP}/baseline-sdk.tar.gz" \
+  https://builds.dotnet.microsoft.com/dotnet/Sdk/11.0.100-rc.1.26425.128/dotnet-sdk-11.0.100-rc.1.26425.128-linux-x64.tar.gz
+
+GITHUB_REPOSITORY=radical/aspire python3 \
+  .github/scripts/flaky_investigation/baseline.py run \
+  --sdk-archive "${RUNNER_TEMP}/baseline-sdk.tar.gz" \
+  --output "${RUNNER_TEMP}/aspire-trusted-baseline"
+```
+
+Use a fresh output directory outside the control checkout. The host checks out
+only the immutable public baseline using credential-free Git configuration and
+disabled hooks. Receipts and the image context remain outside the sole writable
+`work/` mount. No host workspace, token, Docker socket or shared writable package
+cache is mounted. The pinned SDK 10 base retains its runtimes; the verified SDK
+11 archive is extracted by the fixed image recipe with build networking disabled.
+The host records the resulting immutable Linux amd64 image ID.
+
+Two non-root containers use that exact image and dedicated work directory:
+
+1. **Preparation:** bridge networking, a copy of the image's SDK installation
+   into the source's `.dotnet`, an exact SDK check, then
+   `./build.sh -restore -build -projects tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj /p:InstallBrowsersForPlaywright=false /p:RunQuarantinedTests=true`.
+   This is the repository's local build path, not CI partition/archive generation.
+2. **Execution:** networking disabled, another exact SDK check, then
+   `./dotnet.sh test --project tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj --no-launch-profile --no-restore --no-build -- --timeout 8m --results-directory /work/results --report-trx --report-trx-filename original.trx --filter-method Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly --filter-not-trait outerloop=true`.
+   Default quarantine filtering is disabled only inside these experimental
+   containers so this explicitly selected quarantined test can execute.
+
+Each stage has a read-only root filesystem, dropped capabilities, no new
+privileges, two CPUs, 6 GiB memory including swap, 512 processes and a 512 MiB
+temporary filesystem. Preparation has a thirty-minute deadline; execution has
+ten minutes. Combined console capture is capped at 16 MiB per stage. Dedicated
+workspace/package/build files have **no disk quota**; this is acceptable only
+for the enrolled trusted baseline, not an adversarial candidate boundary.
+
+Before any start, the host persists the exact CID, immutable image, ownership
+nonce, source identity, command and start intent outside the mount. A fresh
+process can stop only the matching labelled container:
+
+```bash
+GITHUB_REPOSITORY=radical/aspire python3 \
+  .github/scripts/flaky_investigation/baseline.py cleanup \
+  --output "${RUNNER_TEMP}/aspire-trusted-baseline"
+```
+
+Cleanup also handles a created-but-never-started container without waiting for
+it to start. An interrupted start is never retried. Missing ownership, Docker
+errors or an unconfirmed stop fail visibly; they never permit output import.
+Containers remain stopped for inspection rather than being silently removed.
+An interrupted image build is not an owned test stage; its fixed SDK extraction
+recipe requires separate Docker build inspection if the daemon loses contact.
+
+Only after confirmed whole-container stop are at most 32 single-link regular
+result files, totaling at most 16 MiB, copied to protected `imported/`. Symlinks,
+special files, more than 128 result directories, oversized output,
+absent/empty/skipped/foreign TRX, and
+process/TRX exit inconsistencies are rejected. `observations.json` explicitly
+labels outcomes as untrusted bytes and keeps `accepted_test_counts: null`;
+neither a generated TRX nor these host receipts prove assertion authenticity.
+Local transport tests do not establish an actual Aspire restore/build/test.
+That requires the reviewed hosted run, followed by separate source-review and
+candidate-boundary authorization before any production integration.
+
 ## Evidence and finite limits
 
 The prompt requires checking actual OS, toolchain and test-specific prerequisites,
