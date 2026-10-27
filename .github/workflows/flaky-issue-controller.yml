@@ -1,0 +1,71 @@
+name: Short controller fault proof (fork only)
+on:
+  workflow_dispatch:
+    inputs:
+      issue_url:
+        type: string
+        required: true
+      operation:
+        type: choice
+        options:
+          - start
+          - select
+          - resume
+          - cancel
+          - expire
+          - snapshot
+          - kill-after-dispatch
+          - lose-cancel-response
+        required: true
+permissions:
+  contents: write
+  actions: write
+  issues: write
+  pull-requests: write
+concurrency:
+  group: flaky-test-investigation-controller
+  cancel-in-progress: false
+jobs:
+  advance:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_URL: ${{ inputs.issue_url }}
+      ACTION: ${{ inputs.operation }}
+      OPERATION: ${{ inputs.operation }}
+      FLAKY_AGENT_WORKFLOW: reproduce-flaky-tests.yml
+      FLAKY_AGENT_SHA: 'f1054ddf9069e360e8afc6b4fd0b4b24c578d3cd'
+      FLAKY_WORKER_SHA: 'f1054ddf9069e360e8afc6b4fd0b4b24c578d3cd'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Advance actual controller or apply an explicitly labelled fault
+        shell: bash
+        run: |
+          receipt="$RUNNER_TEMP/controller-fault-receipt.json"
+          python3 .github/scripts/controller-fault-trial.py \
+            --source-root "$GITHUB_WORKSPACE" --issue-url "$ISSUE_URL" \
+            --action preflight --intended-action "$ACTION" \
+            --control-sha "$GITHUB_SHA" --worker-sha "$FLAKY_WORKER_SHA" \
+            --receipt "$RUNNER_TEMP/controller-fault-preflight.json"
+          if [[ "$ACTION" == start || "$ACTION" == resume || "$ACTION" == cancel ]]; then
+            python3 .github/scripts/flaky_investigation/controller.py advance
+            python3 .github/scripts/controller-fault-trial.py \
+              --source-root "$GITHUB_WORKSPACE" --issue-url "$ISSUE_URL" \
+              --action snapshot --receipt "$receipt" \
+              --control-sha "$GITHUB_SHA" --worker-sha "$FLAKY_WORKER_SHA"
+          else
+            python3 .github/scripts/controller-fault-trial.py \
+              --source-root "$GITHUB_WORKSPACE" --issue-url "$ISSUE_URL" \
+              --action "$ACTION" --receipt "$receipt" \
+              --control-sha "$GITHUB_SHA" --worker-sha "$FLAKY_WORKER_SHA"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: controller-fault-receipt
+          path: ${{ runner.temp }}/controller-fault-receipt.json
+          if-no-files-found: warn
