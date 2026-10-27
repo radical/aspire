@@ -11,8 +11,8 @@ import re
 REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "microsoft/aspire")
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", REPOSITORY):
     raise ValueError("Invalid trusted runner repository identity")
-AGENT = "flaky-test-investigator.lock.yml"
-WORKER = "reproduce-flaky-tests.yml"
+AGENT = "flaky-issue-agent.lock.yml"
+WORKER = "flaky-issue-worker.yml"
 LIMITS = {"models": 8, "workers": 5, "fixes": 2, "runner_iterations": 180}
 TERMINAL = {
     "verified", "not-flaky", "ambiguous", "infrastructure", "not-reproduced",

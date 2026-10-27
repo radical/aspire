@@ -1,0 +1,43 @@
+name: Fork Actions Trial Controller
+run-name: "Fork trial ${{ inputs.operation }} ${{ inputs.issue_url }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_url:
+        description: Fresh fork tracker for this bounded trial
+        required: true
+        type: string
+      operation:
+        description: Start, resume, or cancel the exact investigation
+        default: start
+        type: choice
+        options: [start, resume, cancel]
+
+permissions: {}
+
+concurrency:
+  group: flaky-actions-trial-156
+  cancel-in-progress: false
+
+jobs:
+  advance:
+    if: github.repository == 'radical/aspire' && inputs.issue_url == 'https://github.com/radical/aspire/issues/156'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Advance only the admitted fresh fork tracker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_URL: ${{ inputs.issue_url }}
+          OPERATION: ${{ inputs.operation }}
+          FLAKY_INVESTIGATION_EXECUTION_POLICY: actions-draft-review-v1
+        run: python3 .github/scripts/flaky_investigation/controller.py advance
