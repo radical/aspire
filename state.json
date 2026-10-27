@@ -21,7 +21,7 @@
   "target": null,
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T19:43:17.614024+00:00",
+  "updated_at": "2026-10-27T19:43:21.491397+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -37,6 +37,11 @@
       "phase": "agent-intent",
       "reason": "Reserved fresh model phase; dispatch receipt not yet persisted.",
       "at": "2026-10-27T19:43:17.614024+00:00"
+    },
+    {
+      "phase": "agent-intent",
+      "reason": "Reserved fresh model phase; dispatch receipt not yet persisted.",
+      "at": "2026-10-27T19:43:21.491397+00:00"
     }
   ],
   "agent": {
@@ -49,7 +54,9 @@
     "kind": "agent",
     "revision": "b88d167ddcaa38b4b8b451969bc1ed94dfff5ea4",
     "requested_at": "2026-10-27T19:37:06.851120+00:00",
-    "observed_ids": [],
+    "observed_ids": [
+      40571362042
+    ],
     "confirmed": false,
     "outcome": null,
     "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed."
