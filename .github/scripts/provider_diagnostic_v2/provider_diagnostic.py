@@ -18,10 +18,19 @@ MAX_BYTES = 1024 * 1024
 IMAGE = ("ghcr.io/github/gh-aw-firewall/api-proxy:0.28.20"
          "@sha256:30ab6d3261dd95364281fa0b52ab78450e1c01aa074eccc3a8d4f04b12a6560b")
 FIELDS = ("input", "output", "cachedInput", "cacheWrite")
+PROXY_FAILURE_CODES = frozenset({
+    "proxy-inspect-failed", "proxy-logs-failed", "proxy-discovery-failed",
+    "proxy-listing-invalid", "proxy-identities-ambiguous",
+    "proxy-container-mismatch", "proxy-mount-mismatch",
+    "proxy-identity-changed", "proxy-cleanup-transport-failed",
+    "proxy-observer-failed", "proxy-record-invalid",
+})
 
 
 class Rejected(Exception):
-    pass
+    def __init__(self, reason, *, failure_code=None):
+        super().__init__(reason)
+        self.failure_code = failure_code
 
 
 def pairs(values):
@@ -248,13 +257,13 @@ def inspect_proxy(docker, state):
     for line in listing.splitlines():
         fields = line.split()
         if len(fields) != 2 or not re.fullmatch(rb"[0-9a-f]{64}", fields[0]):
-            raise Rejected("proxy-transport-unknown")
+            raise Rejected("proxy-transport-unknown", failure_code="proxy-listing-invalid")
         if fields[1] == b"awf-api-proxy":
             identities.append(fields[0].decode("ascii"))
     if not identities:
         return None
     if len(identities) != 1:
-        raise Rejected("proxy-unattested")
+        raise Rejected("proxy-unattested", failure_code="proxy-identities-ambiguous")
     container_id = identities[0]
     # Docker's Go template selects no Env/Labels/auth or arbitrary account data.
     raw = bounded_command([
@@ -269,12 +278,12 @@ def inspect_proxy(docker, state):
             or not re.fullmatch("sha256:[0-9a-f]{64}", data.get("image_id", ""))
             or data.get("image_ref") != IMAGE
             or data.get("user") != f'{state["uid"]}:{state["gid"]}'):
-        raise Rejected("proxy-unattested")
+        raise Rejected("proxy-unattested", failure_code="proxy-container-mismatch")
     mounts = [m for m in data["mounts"] if m.get("Destination") == "/var/log/api-proxy"]
     if (len(mounts) != 1 or mounts[0].get("Type") != "bind"
             or mounts[0].get("Source") != state["logs"]
             or mounts[0].get("RW") is not True):
-        raise Rejected("proxy-unattested")
+        raise Rejected("proxy-unattested", failure_code="proxy-mount-mismatch")
     created = timestamp(data["created"], state["started_ns"], time.time_ns())
     return {
         "id": data["id"], "image_id": data["image_id"], "image_ref": IMAGE,
@@ -332,18 +341,23 @@ def watch(args):
     seen = set()
     reason = None
     while time.monotonic() < deadline:
+        phase = "proxy-inspect-failed"
         try:
             current = inspect_proxy(args.docker, state)
             if current is not None:
                 seen.add(current["id"])
                 if len(seen) != 1:
-                    raise Rejected("proxy-unattested")
+                    raise Rejected("proxy-unattested", failure_code="proxy-identity-changed")
                 proxy = current
+                phase = "proxy-logs-failed"
                 raw = bounded_command([args.docker, "logs", current["id"]])
                 if raw is not None:
+                    phase = "proxy-discovery-failed"
                     observed = discovery(raw, state["started_ns"], time.time_ns())
+        except Rejected as error:
+            reason = reason or error.failure_code or phase
         except Exception:
-            reason = "proxy-unattested"
+            reason = reason or phase
         if args.state.with_suffix(".exit").exists():
             break
         time.sleep(0.2)
@@ -359,7 +373,7 @@ def watch(args):
         if proxy is not None:
             removed = proxy_absent(args.docker, proxy["id"])
     except Exception:
-        reason = "proxy-unattested"
+        reason = reason or "proxy-cleanup-transport-failed"
     write_new(args.state.with_suffix(".observed.json"), {
         **state, "proxy": proxy, "proxy_observations": len(seen),
         "discovery_direct_success": observed, "observer_reason": reason,
@@ -385,8 +399,16 @@ def finish(args):
     if (state.get("awf_exit") != 0 or type(end) is not int
             or not state["started_ns"] <= end <= time.time_ns()):
         raise Rejected("awf-not-complete")
+    # Only fixed codes leave the private observer state, never exception text
+    # or Docker/provider output, even if an observed-state field is replaced.
+    observer_reason = state.get("observer_reason")
+    failure_code = None
+    if observer_reason:
+        failure_code = (observer_reason if isinstance(observer_reason, str)
+                        and observer_reason in PROXY_FAILURE_CODES
+                        else "proxy-observer-failed")
     if state.get("proxy_absent_after_return") is not True:
-        raise Rejected("proxy-cleanup-unobserved")
+        raise Rejected("proxy-cleanup-unobserved", failure_code=failure_code)
     proxy = state.get("proxy")
     if (not isinstance(proxy, dict) or state.get("observer_reason")
             or state.get("proxy_observations") != 1
@@ -397,7 +419,7 @@ def finish(args):
             or not re.fullmatch("[0-9a-f]{64}", proxy.get("id", ""))
             or not re.fullmatch("sha256:[0-9a-f]{64}", proxy.get("image_id", ""))
             or not state["started_ns"] <= proxy.get("created_ns", 0) <= end):
-        raise Rejected("proxy-unattested")
+        raise Rejected("proxy-unattested", failure_code=failure_code or "proxy-record-invalid")
     path = args.logs / "models.json"
     try:
         raw, info = read_regular(path, state["uid"])
@@ -475,6 +497,8 @@ def main():
         result["status"] = "provider-metadata-observed"
     except Rejected as error:
         result["reason"] = str(error)
+        if error.failure_code in PROXY_FAILURE_CODES:
+            result["failure_code"] = error.failure_code
     except Exception:
         result["reason"] = "metadata-unknown"
     if args.operation == "watch":
