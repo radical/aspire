@@ -37,7 +37,7 @@ class Docker:
                 "Id": cid, "Image": "sha256:" + "b" * 64,
                 "Config": {"Labels": dict(item.split("=", 1) for index, item in enumerate(arguments)
                                           if index and arguments[index - 1] == "--label"),
-                           "User": "65534:65534"},
+                           "User": value("--user")},
                 "State": {"Status": "created", "Running": False, "Pid": 0, "ExitCode": self.exit_code},
                 "HostConfig": {
                     "ReadonlyRootfs": True, "Privileged": False,
@@ -76,6 +76,9 @@ class Docker:
         raise AssertionError(arguments)
 
 
+@unittest.skipUnless(
+    os.name == "posix" and os.getuid() > 0 and os.getgid() > 0,
+    "Linux-container ownership tests require a non-root POSIX host identity")
 class BaselineTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(baseline, "Trusted-baseline execution component is missing")
@@ -102,6 +105,49 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(create[create.index("--mount") + 1],
                          f"type=bind,src={self.work},dst=/work")
         self.assertEqual(create.count("--mount"), 1)
+
+    def test_container_uid_gid_match_checkout_owner_required_by_bootstrap_chmod(self):
+        installer = self.work / "dotnet-install.sh"
+        installer.write_text("#!/bin/sh\n")
+        installer.chmod(0o600)
+        owner = installer.stat()
+        stage = self.stage()
+        stage.create()
+        create = self.docker.calls[0]
+        self.assertEqual(create[create.index("--user") + 1], f"{owner.st_uid}:{owner.st_gid}")
+        plan = json.loads((self.root / "test-plan.json").read_text())
+        self.assertEqual((plan["uid"], plan["gid"]), (owner.st_uid, owner.st_gid))
+        installer.chmod(0o700)
+        self.assertEqual(installer.stat().st_mode & 0o777, 0o700)
+
+    def test_root_or_mismatched_host_identity_is_rejected_before_container_creation(self):
+        uid, gid = os.getuid(), os.getgid()
+        for real_uid, effective_uid, real_gid, effective_gid in (
+                (0, 0, gid, gid), (uid, uid, 0, 0),
+                (uid, uid + 1, gid, gid), (uid, uid, gid, gid + 1)):
+            with self.subTest(identity=(real_uid, effective_uid, real_gid, effective_gid)), \
+                    patch("os.getuid", return_value=real_uid), \
+                    patch("os.geteuid", return_value=effective_uid), \
+                    patch("os.getgid", return_value=real_gid), \
+                    patch("os.getegid", return_value=effective_gid):
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    self.stage()
+        self.assertEqual(self.docker.calls, [])
+
+    def test_foreign_owned_work_is_rejected_without_chown_or_container_creation(self):
+        uid = os.getuid() + 1
+        with patch("os.getuid", return_value=uid), patch("os.geteuid", return_value=uid):
+            with self.assertRaisesRegex(ValueError, "owner"):
+                self.stage().create()
+        self.assertEqual(self.docker.calls, [])
+
+    def test_cleanup_rejects_changed_container_user_without_killing_it(self):
+        self.stage().create()
+        self.docker.record["Config"]["User"] = "0:0"
+        self.docker.record["State"].update(Status="running", Running=True, Pid=987)
+        with self.assertRaisesRegex(ValueError, "identity"):
+            baseline.cleanup(self.root, docker=self.docker)
+        self.assertEqual([call for call in self.docker.calls if call[0] == "kill"], [])
 
     def test_fresh_process_cleanup_uses_only_protected_owned_cid(self):
         self.stage().create()
@@ -211,9 +257,29 @@ class BaselineTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     baseline.import_outputs(results, root / "import", stopped=True, byte_limit=32)
 
-    def test_import_never_runs_before_confirmed_stop(self):
-        with self.assertRaisesRegex(ValueError, "stop"):
-            baseline.import_outputs(self.work, self.root / "import", stopped=False)
+    def test_private_owner_only_output_is_importable_after_confirmed_stop(self):
+        report = self.work / "original.trx"
+        report.write_text(self.trx())
+        report.chmod(0o600)
+        baseline.import_outputs(self.work, self.root / "import", stopped=True)
+        self.assertEqual((self.root / "import" / "original.trx").read_text(), self.trx())
+
+    def test_guest_ownership_preflight_rejects_foreign_installer_before_bootstrap(self):
+        guard = getattr(baseline, "OWNERSHIP_CHECK", "")
+        self.assertTrue(guard, "Guest ownership preflight is missing")
+        installer = self.work / "eng" / "common" / "dotnet-install.sh"
+        installer.parent.mkdir(parents=True)
+        installer.write_text("#!/bin/sh\n")
+        installer.chmod(0o600)
+        self.assertEqual((installer.stat().st_uid, installer.stat().st_gid), baseline.host_identity())
+        subprocess.run(["bash", "-euc", guard + "chmod +x eng/common/dotnet-install.sh"],
+                       cwd=self.work, check=True, capture_output=True)
+        self.assertTrue(installer.stat().st_mode & 0o100)
+        installer.unlink()
+        installer.symlink_to("/bin/sh")
+        result = subprocess.run(["bash", "-euc", guard], cwd=self.work, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"ownership", result.stderr)
 
     def test_import_bounds_empty_directories_as_well_as_file_bytes(self):
         for index in range(129):
@@ -227,42 +293,12 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             baseline.command([sys.executable, "-c", "import time; time.sleep(20)"], timeout=.05)
 
-    def test_source_bootstrap_is_not_executed_for_wrong_authority_or_platform(self):
-        for repository, system, machine in (
-                ("microsoft/aspire", "Linux", "x86_64"),
-                ("radical/aspire", "Darwin", "arm64"),
-                ("radical/aspire", "Linux", "aarch64")):
-            with self.subTest(repository=repository, system=system), \
-                    patch.dict(os.environ, {"GITHUB_REPOSITORY": repository}), \
-                    patch("platform.system", return_value=system), \
-                    patch("platform.machine", return_value=machine):
-                with self.assertRaises(ValueError):
-                    baseline.authorize()
-
-    def test_missing_skipped_empty_or_foreign_trx_is_not_an_execution(self):
-        with self.assertRaisesRegex(ValueError, "report"):
-            baseline.observations(self.work, 0)
-        for outcome, method in (("NotExecuted", "TestProjectStartsAndStopsCleanly"),
-                                ("Passed", "Foreign"), ("", "TestProjectStartsAndStopsCleanly")):
-            with self.subTest(outcome=outcome):
-                (self.work / "original.trx").write_text(self.trx(outcome, method))
-                with self.assertRaises(ValueError):
-                    baseline.observations(self.work, 0)
-
     @staticmethod
     def trx(outcome="Passed", method="TestProjectStartsAndStopsCleanly"):
         return (f'<TestRun><TestDefinitions><UnitTest id="a"><TestMethod '
                 f'className="Aspire.Hosting.Tests.SlimTestProgramTests" name="{method}"/>'
                 f'</UnitTest></TestDefinitions><Results><UnitTestResult testId="a" '
                 f'executionId="b" outcome="{outcome}"/></Results></TestRun>')
-
-    def test_test_bytes_remain_untrusted_even_when_selected_record_passes(self):
-        (self.work / "original.trx").write_text(self.trx())
-        result = baseline.observations(self.work, 0)
-        self.assertEqual(result["untrusted_outcomes"], ["Passed"])
-        self.assertIsNone(result["accepted_test_counts"])
-        with self.assertRaises(ValueError):
-            baseline.observations(self.work, 2)
 
     def test_pipeline_separates_preparation_network_and_imports_only_after_stop(self):
         output = self.root / "run"
@@ -313,6 +349,70 @@ class BaselineTests(unittest.TestCase):
         with patch.object(baseline, "command", side_effect=git):
             with self.assertRaisesRegex(ValueError, "SDK"):
                 baseline.source(source_root)
+
+
+class BaselineContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        # Parser contracts run on Windows too; POSIX no-follow file imports are
+        # exercised separately by the native filesystem tests.
+        reader = patch.object(baseline, "read_regular", side_effect=lambda path, maximum: path.read_bytes())
+        reader.start()
+        self.addCleanup(reader.stop)
+
+    def test_missing_skipped_empty_or_foreign_trx_is_not_an_execution(self):
+        with self.assertRaisesRegex(ValueError, "report"):
+            baseline.observations(self.root, 0)
+        for outcome, method in (("NotExecuted", "TestProjectStartsAndStopsCleanly"),
+                                ("Passed", "Foreign"), ("", "TestProjectStartsAndStopsCleanly")):
+            with self.subTest(outcome=outcome):
+                (self.root / "original.trx").write_text(BaselineTests.trx(outcome, method))
+                with self.assertRaises(ValueError):
+                    baseline.observations(self.root, 0)
+
+    def test_test_bytes_remain_untrusted_even_when_selected_record_passes(self):
+        (self.root / "original.trx").write_text(BaselineTests.trx())
+        result = baseline.observations(self.root, 0)
+        self.assertEqual(result["untrusted_outcomes"], ["Passed"])
+        self.assertIsNone(result["accepted_test_counts"])
+        with self.assertRaises(ValueError):
+            baseline.observations(self.root, 2)
+
+    def test_import_never_runs_before_confirmed_stop(self):
+        with self.assertRaisesRegex(ValueError, "stop"):
+            baseline.import_outputs(self.root, self.root / "import", stopped=False)
+
+    def test_source_bootstrap_is_not_executed_for_wrong_authority_or_platform(self):
+        for repository, system, machine in (
+                ("microsoft/aspire", "Linux", "x86_64"),
+                ("radical/aspire", "Darwin", "arm64"),
+                ("radical/aspire", "Linux", "aarch64")):
+            with self.subTest(repository=repository, system=system), \
+                    patch.dict(os.environ, {"GITHUB_REPOSITORY": repository}), \
+                    patch("platform.system", return_value=system), \
+                    patch("platform.machine", return_value=machine):
+                with self.assertRaises(ValueError):
+                    baseline.authorize()
+
+    def test_windows_is_rejected_before_unavailable_unix_identity_calls(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "radical/aspire"}), \
+                patch("platform.system", return_value="Windows"), \
+                patch("os.getuid", side_effect=AssertionError("Unix UID read on Windows"), create=True):
+            with self.assertRaisesRegex(ValueError, "Linux"):
+                baseline.authorize()
+
+    def test_root_linux_host_is_rejected_before_any_work_is_created(self):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "radical/aspire"}), \
+                patch("platform.system", return_value="Linux"), \
+                patch("platform.machine", return_value="x86_64"), \
+                patch("os.getuid", return_value=0, create=True), \
+                patch("os.geteuid", return_value=0, create=True), \
+                patch("os.getgid", return_value=1001, create=True), \
+                patch("os.getegid", return_value=1001, create=True):
+            with self.assertRaisesRegex(ValueError, "identity"):
+                baseline.authorize()
 
 
 if __name__ == "__main__":

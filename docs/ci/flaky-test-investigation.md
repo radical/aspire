@@ -241,7 +241,9 @@ build step; the source's native-tool installer only runs for a `native-tools`
 entry, which this `global.json` does not declare. These observations do not
 waive prerequisites for other tests.
 
-Run on a Linux x64 fork runner with an already available Docker daemon.
+Run on a Linux x64 fork runner with an already available Docker daemon and
+matching real/effective nonzero host UID and GID. Root identities, root groups
+and mixed real/effective identities are unsupported and rejected before work.
 Download the exact SDK archive first; the CLI independently checks its
 207623687-byte size and pinned vendor SHA-512 before copying it into the
 dedicated image context. No SDK is installed on the host.
@@ -266,7 +268,14 @@ cache is mounted. The pinned SDK 10 base retains its runtimes; the verified SDK
 11 archive is extracted by the fixed image recipe with build networking disabled.
 The host records the resulting immutable Linux amd64 image ID.
 
-Two non-root containers use that exact image and dedicated work directory:
+Two non-root containers use that exact image, the validated host UID/GID and
+the dedicated work directory. The private `work/` directory remains owner-only;
+source permissions are not widened. Matching the checkout owner is necessary
+because Arcade runs `chmod +x` on its tracked installer: writable file contents
+alone do not permit changing a foreign owner's mode. Both stages check the
+actual guest-visible directory/installer ownership before bootstrap. Runtime
+UID/GID remapping that breaks that alignment fails closed, without a root
+preparer, added capabilities or namespace overrides.
 
 1. **Preparation:** bridge networking, a copy of the image's SDK installation
    into the source's `.dotnet`, an exact SDK check, then
@@ -285,7 +294,7 @@ workspace/package/build files have **no disk quota**; this is acceptable only
 for the enrolled trusted baseline, not an adversarial candidate boundary.
 
 Before any start, the host persists the exact CID, immutable image, ownership
-nonce, source identity, command and start intent outside the mount. A fresh
+nonce, execution UID/GID, source identity, command and start intent outside the mount. A fresh
 process can stop only the matching labelled container:
 
 ```bash
@@ -297,6 +306,11 @@ GITHUB_REPOSITORY=radical/aspire python3 \
 Cleanup also handles a created-but-never-started container without waiting for
 it to start. An interrupted start is never retried. Missing ownership, Docker
 errors or an unconfirmed stop fail visibly; they never permit output import.
+Cleanup requires both the persisted UID/GID and the container's configured user
+to match the current validated host identity. Shared numeric identity does not
+mount the host home or protected receipts; those paths remain outside the sole
+work mount. Owner-only result files can therefore be imported by the host after
+the whole container is confirmed stopped.
 Containers remain stopped for inspection rather than being silently removed.
 An interrupted image build is not an owned test stage; its fixed SDK extraction
 recipe requires separate Docker build inspection if the daemon loses contact.

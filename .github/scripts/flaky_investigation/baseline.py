@@ -32,6 +32,20 @@ METHOD = "TestProjectStartsAndStopsCleanly"
 LABEL = "aspire.baseline-experiment"
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}")
 CID = re.compile(r"[0-9a-f]{64}")
+OWNERSHIP_CHECK = (
+    "if ! test -O . || ! test -G . || ! test -O eng/common/dotnet-install.sh "
+    "|| ! test -G eng/common/dotnet-install.sh; then\n"
+    "printf '%s\\n' 'Unsupported work/source ownership mapping for non-root UID/GID' >&2\n"
+    "exit 1\nfi\n"
+)
+
+
+def host_identity():
+    uid, gid = os.getuid(), os.getgid()
+    require(0 < uid <= 2147483647 and 0 < gid <= 2147483647
+            and uid == os.geteuid() and gid == os.getegid(),
+            "A matching real/effective non-root host UID/GID identity is required")
+    return uid, gid
 
 
 def authorize():
@@ -39,6 +53,7 @@ def authorize():
             "Experimental baseline execution requires radical/aspire")
     require(platform.system() == "Linux" and platform.machine() == "x86_64",
             "Only Linux x64 is supported; no platform or SDK fallback")
+    host_identity()
 
 
 def command(arguments, timeout=30, limit=1048576, env=None):
@@ -119,21 +134,26 @@ class Stage:
         require(work.is_absolute() and not re.search(r"[,\n\r]", str(work)), "Invalid dedicated mount path")
         self.root, self.work, self.name, self.image = root, work, name, image
         self.arguments, self.network, self.docker = arguments, network, docker
+        self.uid, self.gid = host_identity()
 
     def create(self):
+        owner = self.work.lstat()
+        require(stat.S_ISDIR(owner.st_mode) and (owner.st_uid, owner.st_gid) == (self.uid, self.gid),
+                "Dedicated work owner must match the non-root execution identity")
         path = self.root / f"{self.name}-plan.json"
         require(not path.exists(), "A stage cannot be dispatched twice")
         nonce = uuid.uuid4().hex
         save(path, {
             "source": SOURCE, "image": self.image, "nonce": nonce,
             "network": self.network, "work": str(self.work), "command": self.arguments,
+            "uid": self.uid, "gid": self.gid,
             "memory_bytes": 6442450944, "cpus": 2, "pids": 512,
             "accepted_test_counts": None,
         })
         self.docker([
             "create", "--cidfile", str(self.root / f"{self.name}.cid"),
             "--label", f"{LABEL}={nonce}", "--label", f"{LABEL}.source={SOURCE}",
-            "--init", "--user", "65534:65534", "--cap-drop", "ALL",
+            "--init", "--user", f"{self.uid}:{self.gid}", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--network", self.network,
             "--read-only", "--pids-limit", "512", "--memory", "6g", "--memory-swap", "6g", "--cpus", "2",
             "--log-driver", "none", "--tmpfs", "/tmp:rw,nosuid,nodev,size=536870912",
@@ -161,6 +181,8 @@ class Stage:
         record = records[0]
         require(record["Id"] == cid and record["Image"] == self.image == plan["image"]
                 and plan["source"] == SOURCE and plan["work"] == str(self.work)
+                and (plan.get("uid"), plan.get("gid")) == (self.uid, self.gid)
+                and record["Config"]["User"] == f"{self.uid}:{self.gid}"
                 and record["Config"]["Labels"].get(LABEL) == plan["nonce"]
                 and record["Config"]["Labels"].get(LABEL + ".source") == SOURCE,
                 "Container identity does not match the protected ownership plan")
@@ -168,8 +190,7 @@ class Stage:
 
     def boundary(self, record):
         config = record["HostConfig"]
-        require(record["Config"]["User"] == "65534:65534"
-                and config["ReadonlyRootfs"] is True and config["Privileged"] is False
+        require(config["ReadonlyRootfs"] is True and config["Privileged"] is False
                 and config["NetworkMode"] == self.network
                 and config["CapDrop"] == ["ALL"]
                 and "no-new-privileges" in config["SecurityOpt"]
@@ -296,9 +317,10 @@ def observations(root, exit_code):
 
 
 def source(root):
+    host_identity()
     work = root / "work"
-    work.mkdir(mode=0o777)
-    work.chmod(0o777)
+    work.mkdir(mode=0o700)
+    work.chmod(0o700)
     checkout = work / "source"
     env = {"PATH": os.defpath, "HOME": str(root), "GIT_CONFIG_GLOBAL": "/dev/null",
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
@@ -312,14 +334,9 @@ def source(root):
     config = json.loads(read_regular(checkout / "global.json", 32768))
     require(config["sdk"]["version"] == SDK and config["tools"]["dotnet"] == SDK,
             "Unsupported baseline SDK; no fallback")
-    # This dedicated public-source tree is writable by the non-root container.
-    # Host receipts and image context are siblings, never included in its mount.
-    for directory, _, names in os.walk(work, followlinks=False):
-        Path(directory).chmod(0o777)
-        for name in names:
-            path = Path(directory) / name
-            if not path.is_symlink():
-                path.chmod(path.stat().st_mode | 0o666)
+    # Match the checkout owner instead of widening write bits: Arcade chmods its
+    # tracked installer, which requires ownership even when bytes are writable.
+    # https://man7.org/linux/man-pages/man2/chmod.2.html
     return work
 
 
@@ -376,7 +393,7 @@ def run(root, archive):
     immutable_image = image(root, archive)
     prepare = [
         "bash", "-euc",
-        "mkdir -p /work/home /work/packages /work/results /work/dcp-logs .dotnet\n"
+        OWNERSHIP_CHECK + "mkdir -p /work/home /work/packages /work/results /work/dcp-logs .dotnet\n"
         "cp -a /usr/share/dotnet/. .dotnet/\n"
         f'test "$(./dotnet.sh --version)" = "{SDK}"\n'
         f"./build.sh -restore -build -projects {PROJECT} "
@@ -386,7 +403,7 @@ def run(root, archive):
     prepared = Stage(root, work, "prepare", immutable_image, prepare, network="bridge").execute(1800)
     require(prepared["exit_code"] == 0, "Trusted-baseline restore/build failed; no test stage started")
     test = [
-        "bash", "-euc", f'test "$(./dotnet.sh --version)" = "{SDK}"\n'
+        "bash", "-euc", OWNERSHIP_CHECK + f'test "$(./dotnet.sh --version)" = "{SDK}"\n'
         f"./dotnet.sh test --project {PROJECT} --no-launch-profile --no-restore --no-build -- "
         "--timeout 8m --results-directory /work/results "
         "--report-trx --report-trx-filename original.trx "
