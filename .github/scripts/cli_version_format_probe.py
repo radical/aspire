@@ -1,4 +1,4 @@
-"""One credential-free --version command; not a provider or inference test."""
+"""One credential-free --help command; not a provider or inference test."""
 
 import argparse
 import hashlib
@@ -21,7 +21,7 @@ BINARY_SHA = "d928a8f4620cf1047ada093b15b26dc3943b963d31f427b081ba1fafa586bfb0"
 BINARY_BYTES = 166464320
 IMAGE = "ghcr.io/github/gh-aw-firewall/agent:0.28.20@sha256:1bacef0f405d77999d01d8c00cb731222531b3f43ef9dc8312c513d6d9038bb1"
 IMAGE_REPO_DIGEST = IMAGE.replace(":0.28.20@", "@")
-LABEL = "io.github.cli-version-format.owner"
+LABEL = "io.github.cli-help-format.owner"
 SOCKET = Path("/var/run/docker.sock")
 CURL = "/usr/bin/curl"
 LIMIT = 16384
@@ -29,9 +29,9 @@ VERSION_SECONDS = 60
 VERSION_SUFFIX_BYTES = 8192
 VERSION_READ_LIMIT = 64 * 1024 * 1024
 COMMAND = ["-i", "PATH=/usr/bin:/bin", "HOME=/home/awfuser", "TMPDIR=/tmp",
-           "LANG=C.UTF-8", "/package/copilot", "--version"]
+           "LANG=C.UTF-8", "/package/copilot", "--help"]
 TMPFS = {"/tmp": "rw,nosuid,nodev,size=32m,mode=1777",
-         # The pinned CLI extracts its ~157 MiB package cache under HOME even for --version.
+         # The pinned CLI extracts its ~157 MiB package cache under HOME before parsing options.
          # Its native addon needs executable mappings; override Docker's default noexec here only.
          # https://docs.docker.com/engine/storage/tmpfs/#options-for---tmpfs
          "/home/awfuser": "rw,exec,nosuid,nodev,size=256m,mode=0700,uid=1000,gid=1000"}
@@ -171,7 +171,7 @@ class Docker:
                         "--config", str(state / "docker-config")]
         self.environment = environment
         self.nonce = uuid.uuid4().hex
-        self.name = "cli-version-format-" + self.nonce
+        self.name = "cli-help-format-" + self.nonce
         self.cid = None
         self.image_id = None
         self.attempted = False
@@ -278,7 +278,7 @@ def main(argv=None):
             or stat.S_IMODE(ready_info.st_mode) != 0o700 or args.ready_file.exists()):
         raise Failure("unsafe-ready-boundary")
     directory(args.output)
-    receipt = {"profile": "credential-free-linux-cli-version-tail-v3",
+    receipt = {"profile": "credential-free-linux-cli-help-tail-v1",
                "status": "rejected", "stage": "setup", "reason": "not-completed",
                "controller_exit_status": 70, "literal_command_exit_status": None,
                "capture_transport_exit_status": None, "capture_termination": "not-started",
@@ -349,7 +349,7 @@ def main(argv=None):
         item = docker.create(payload)
         receipt["container_id"] = docker.cid
         isolated(item, payload)
-        receipt["stage"] = "literal-version-command"
+        receipt["stage"] = "literal-help-command"
         receipt["capture_termination"] = "unobserved-after-interruption"
         captured = capture([*docker.command, "container", "start", "--attach", docker.cid],
                            environment, VERSION_SECONDS, suffix_bytes=VERSION_SUFFIX_BYTES,
@@ -379,7 +379,7 @@ def main(argv=None):
         receipt["literal_command_exit_status"] = status
         if captured["exit"] not in (0, status):
             raise Failure("attach-transport-mismatch")
-        receipt.update(status="version-command-completed", reason="exit-zero" if status == 0 else "cli-nonzero",
+        receipt.update(status="help-command-completed", reason="exit-zero" if status == 0 else "cli-nonzero",
                        controller_exit_status=status)
     except (Failure, OSError, ValueError, KeyError, tarfile.TarError) as error:
         receipt["reason"] = str(error) if isinstance(error, Failure) else "setup-or-control-failed"
@@ -393,9 +393,9 @@ def main(argv=None):
         if cancellation_pending:
             receipt.update(status="rejected", reason="controller-terminated",
                            controller_exit_status=70)
-        eligible = (receipt["status"] == "version-command-completed"
+        eligible = (receipt["status"] == "help-command-completed"
                     and receipt["cleanup"] == "owned-container-removed-absence-confirmed")
-        if not eligible and receipt["status"] == "version-command-completed":
+        if not eligible and receipt["status"] == "help-command-completed":
             receipt.update(status="rejected", reason="cleanup-not-confirmed", controller_exit_status=70)
         if eligible:
             for name in ["stdout", "stderr"]:

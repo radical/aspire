@@ -1,14 +1,14 @@
-name: Credential-free CLI terminal diagnostic
+name: Credential-free CLI help diagnostic
 on:
   workflow_dispatch: {}
 permissions:
   contents: read
 concurrency:
-  group: cli-version-format-${{ github.ref }}
+  group: cli-help-format-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  version_format:
-    if: github.repository == 'radical/aspire' && startsWith(github.ref_name, 'ankj/cli-version-tail-')
+  help_format:
+    if: github.repository == 'radical/aspire' && startsWith(github.ref_name, 'ankj/cli-help-tail-')
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
@@ -18,30 +18,30 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
-      - name: Run only the authenticated Linux CLI version command
-        id: version
+      - name: Run only the authenticated Linux CLI help command
+        id: help
         shell: bash --noprofile --norc -p -e -o pipefail {0}
         run: |
           umask 077
-          /usr/bin/mkdir -m 700 "${RUNNER_TEMP}/cli-version-controller-home"
+          /usr/bin/mkdir -m 700 "${RUNNER_TEMP}/cli-help-controller-home"
           status=0
-          /usr/bin/env -i PATH=/usr/bin:/bin HOME="${RUNNER_TEMP}/cli-version-controller-home" \
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="${RUNNER_TEMP}/cli-help-controller-home" \
             /usr/bin/python3 -I "${GITHUB_WORKSPACE}/.github/scripts/cli_version_format_probe.py" \
-            --state "${RUNNER_TEMP}/cli-version-format-state" \
-            --output "${GITHUB_WORKSPACE}/cli-version-format-evidence" \
-            --ready-file "${RUNNER_TEMP}/cli-version-controller-home/artifact-ready" || status=$?
-          if [ -f "${RUNNER_TEMP}/cli-version-controller-home/artifact-ready" ]; then
+            --state "${RUNNER_TEMP}/cli-help-format-state" \
+            --output "${GITHUB_WORKSPACE}/cli-help-format-evidence" \
+            --ready-file "${RUNNER_TEMP}/cli-help-controller-home/artifact-ready" || status=$?
+          if [ -f "${RUNNER_TEMP}/cli-help-controller-home/artifact-ready" ]; then
             printf 'artifact_ready=true\n' >> "${GITHUB_OUTPUT}"
           fi
           exit "$status"
       - name: Upload only eligible credential-free output and fixed receipt
-        if: always() && steps.version.outputs.artifact_ready == 'true'
+        if: always() && steps.help.outputs.artifact_ready == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: credential-free-linux-cli-version-tail
+          name: credential-free-linux-cli-help-tail
           path: |
-            cli-version-format-evidence/receipt.json
-            cli-version-format-evidence/stdout.tail.log
-            cli-version-format-evidence/stderr.tail.log
+            cli-help-format-evidence/receipt.json
+            cli-help-format-evidence/stdout.tail.log
+            cli-help-format-evidence/stderr.tail.log
           if-no-files-found: error
           retention-days: 7
