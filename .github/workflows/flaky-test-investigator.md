@@ -99,8 +99,10 @@ can advance the investigation. Do not request another model phase just to
 continue reading, form a hypothesis or do an available local check.
 
 Yield only when the next useful step needs hosted reproduction/verification,
-or when a supported terminal outcome is established. A `select` proposal is
-the first hosted-baseline handoff, not a discovery-only deliverable. A `repair`
+or when a supported terminal outcome is established. Include `selection` in the
+first targeted `reproduce`, `repair` or `finish` proposal; selection alone is not
+a handoff and `action: select` is rejected. A `reproduce` proposal explicitly
+requests external reproduction. A `repair`
 proposal hands off a complete candidate for hosted verification. A `finish`
 proposal hands off a terminal decision for the controller to validate.
 Use the fifteen-minute job budget sensibly and leave time to persist the
@@ -126,7 +128,7 @@ Every proposal contains:
   "version": 1,
   "issue_url": "the exact supplied issue URL",
   "state_revision": "the exact supplied checkpoint revision",
-  "action": "select",
+  "action": "reproduce",
   "explanation": "Observed facts; hypothesis and uncertainty; outstanding work and why it needs the handoff.",
   "evidence_read": ["Actual source/report/log paths and excerpts inspected."]
 }
@@ -140,8 +142,8 @@ Keep the handoff useful to another human or fresh agent:
 - In `evidence_read`, cite actual frozen source paths and relevant excerpts,
   original run/report/log identities and dates, and concrete prerequisite
   probes or error output. Cite the base SHA and any candidate SHA being used.
-- For `select`, supply `local_precheck`; for `repair` or `finish`, include it
-  when local work was performed or attempted. A completed precheck records
+- When supplying `selection`, also supply `local_precheck`; later proposals
+  include it when local work was performed or attempted. A completed precheck records
   `os`, up to five exact `commands`, bounded `observed_output`, and `reason`.
   For an environment skip, put the actual probes and results in
   `evidence_read` and explain the specific blocker in `reason`. Never call a
@@ -165,9 +167,10 @@ Use the Bash tool to read the staged
 and the relevant referenced guidance/scripts. Read the substantive sections
 for the current work, not only a header or the first 1500 bytes. Record the
 actual path and a relevant excerpt in `evidence_read`; merely naming the skill
-does not establish reading or following it. Apply its gather → historical
-evidence → local reproduction → hosted reproduction → diagnosis → repair →
-verification discipline, subject to the execution protocol above.
+does not establish reading or following it. Let the skill guide investigation,
+local reproduction, failure-log analysis, repair and verification. Request hosted
+reproduction when it is the useful next experiment, not to satisfy a controller
+prerequisite. Final exact-candidate hosted verification is still mandatory.
 
 When `checkpoint.target` is null, identify the test from the issue and relevant
 comments, without a catalog. Use the **checkpoint.base_sha** tree materialized
@@ -218,21 +221,25 @@ the useful analysis still available. Do not treat an unavailable prerequisite
 as a matching test failure or silently stop at checking tool names.
 
 Interpret local outcomes and available logs. State what they support, what
-they do not establish, and why hosted evidence is the next useful step. Even
-a local matching failure does not authorize repair before the trusted hosted
-baseline gate. Local passing results do not establish that a rare flake is fixed.
+they do not establish, and the next useful step. A locally reproduced failure
+or sufficiently supported log/source diagnosis can guide a candidate without
+a prior hosted reproduction. Local records are model-authored, not independently
+authenticated hosted TRX. Local passing results do not establish that a rare
+flake is fixed and never replace final hosted verification.
 
-If the issue is not a flaky-test report, finish with `not-flaky`. If it does not
+If the issue is not a test-failure report, finish with `not-flaky`; consistently
+failing attempts alone are not a reason to reject a test report. If it does not
 uniquely identify a supported ordinary test declaration, finish with `ambiguous`.
 Do not guess a name, broad wildcard, project or failure. CLI E2E investigations
 finish `blocked`: their prebuilt runtime images are not candidate-aware.
 Automated candidate execution/publication is currently blocked until its
-execution-isolation boundary is independently validated. After a matching
-baseline, preserve the diagnosis and remaining work honestly; do not claim a
+execution-isolation boundary is independently validated. Preserve the diagnosis,
+any complete candidate proposal and remaining work honestly; do not claim a
 safe hosted candidate run or a fix PR can already be produced.
 
-Only after this available investigation/local work, propose `select` for the
-first hosted reproduction:
+Only after this available investigation/local work, attach the target selection
+to the next substantive handoff: `reproduce` for a useful external experiment,
+`repair` for a locally developed candidate, or `finish` for a supported finding:
 
 ```json
 {
@@ -246,7 +253,7 @@ first hosted reproduction:
   },
   "local_precheck": {
     "status": "completed",
-    "reason": "Actual work performed and why hosted baseline evidence is still needed.",
+    "reason": "Actual work performed and why the requested external step or terminal finding is appropriate.",
     "os": "Actual local OS",
     "commands": ["Exact bounded local build/test commands actually run."],
     "observed_output": "Actual execution counts or prerequisite failure; never invented output."
@@ -261,28 +268,39 @@ instead and cite the concrete probes/results in `evidence_read`.
 
 ### Hosted evidence and continued diagnosis
 
-Validated selection starts reproduction immediately, without a model phase
-just to request it. The controller chooses three runners × three iterations
-per selected OS. Clean rounds advance deterministically through single,
-single, then quarantined-project contention when supported (otherwise single).
-There are at most three baseline rounds; no fresh model is needed between clean
-rounds. A fresh phase is required for actual diagnosis/repair or the final
-no-reproduction analysis, and for final exact-candidate review.
-It retains original TRX and logs from every iteration. Project mode can execute
+Propose `action: reproduce` only when hosted execution is the next useful step.
+Choose `mode: single` or, for a quarantined target, `mode: project` to exercise
+contention with other quarantined tests. Optional `runners` (1–3) and `iterations`
+(1–10) default to three each; `mode` defaults to `single`. These bounded values
+configure the fixed worker, never arbitrary shell commands. The controller
+authenticates, checkpoints and dispatches the requested run, then exits. It
+retains original TRX and logs from every iteration. Project mode can execute
 many tests per iteration; requested iterations are not actual test counts.
 
+After accepting the exact owned run's evidence, the controller resumes a fresh
+investigator phase with the reports, logs and prior observations. It never
+automatically requests another reproduction, even after clean results. Decide
+whether further experiments, available local work, a candidate or a terminal
+finding are useful. All external rounds, including verification, consume the
+existing shared five-worker budget. No separate verification allowance is
+granted; exhaustion cannot waive final verification.
+
 On return, inspect the target's actual TRX outcomes, errors, raw output,
-and source from all accepted rounds. A valid flaky baseline needs both target passes and failures with
-the issue's error. All failures may be deterministic: investigate or finish
-`not-flaky`. Unrelated test, build, runner or network failures mean
-`infrastructure`/`blocked`, not reproduction. No failures after three rounds
-means `not-reproduced`; the controller rejects that outcome before three
-complete clean policy rounds. Never invent a fix for a passing baseline.
+and source from all accepted rounds. An accepted target failure matching the
+issue's error is reproduced even if every observed attempt failed; it can proceed
+to diagnosis and repair without a pre-fix pass. Mixed passes and failures for the
+same case and OS show observed intermittency. An all-failed finite sample does
+not prove permanent determinism. Unrelated test, build, runner or network failures mean
+`infrastructure`/`blocked`, not reproduction. A supported `not-reproduced` finding
+does not require any fixed number of hosted rounds, but must explain the actual
+investigation, limitations and next action. It cannot contradict accepted target
+failures or an existing candidate. Do not invent a fix unsupported by the failure
+evidence.
 
 ### Repair locally, then hand off exact verification
 
-Only after accepted hosted matching target failure **and** pass evidence,
-continue diagnosis and source-scoped local work in this agent. Do not yield
+Use the skill to diagnose the available local, historical and requested hosted
+evidence, then continue source-scoped local work in this agent. Do not yield
 merely to request another phase for log reading or analysis. Apply and check a
 candidate locally when the actual environment permits, using the relevant
 test/project and retaining commands, outcomes and limitations in
@@ -292,6 +310,10 @@ not assumed; source and report analysis must still be completed.
 When exact hosted candidate verification is the next useful step, propose `repair` with
 `diagnosis` (observed error, root cause, prior art, why this fix, limitations)
 and `files`, a map of existing source paths to full replacement file contents.
+Include `selection` and `local_precheck` if this is the first targeted handoff.
+Optional `mode: project` requests contention verification for a quarantined target
+without requiring a prior hosted reproduction. Otherwise verification defaults
+to `single`, retaining project mode if it was used in any requested reproduction.
 Read each file at `checkpoint.base_sha` first. Use the simplest source-scoped
 fix, retaining assertions and scheduling/data/quarantine attributes. At most
 five existing C# files and 800 changed lines are allowed. No workflows, build
@@ -301,13 +323,19 @@ The trusted publisher validates paths and limits, then verifies the exact
 candidate through the read-only reproduction workflow. After failed
 verification, inspect the new error and propose a revised complete candidate
 against the original base, within two fix attempts. Never repeat an ineffective
-candidate. The final verification must retain the reproduced contention mode.
+candidate. Final verification must retain requested or previously exercised
+project contention, and cannot be downgraded by a later candidate.
 
 After verification passes, inspect **all final published candidate files**
 and original verification reports from context, not just a proposal or counts.
 Propose `finish`, `outcome: verified`, and `reviewed_candidate_sha` equal to the
 exact `checkpoint.candidate.sha`. State the finite evidence and limitations:
-nine passes do not prove a rare flake eliminated; separate quarantine monitoring
+the controller requires at least nine passes and no failures for every selected
+OS and every observed target case/definition. If hosted reproduction identified
+failing cases, each exact case/definition/OS must also be covered. Without that
+baseline, the original final TRX must still bind every case to the selected
+class/method; local model summaries cannot supply missing counts or identities.
+Nine passes do not prove a rare flake eliminated; separate quarantine monitoring
 and human review remain required.
 
 Other finite finish outcomes: `not-flaky`, `ambiguous`, `infrastructure`,

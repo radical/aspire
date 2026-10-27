@@ -20,7 +20,7 @@ from contracts import (
     selection, validate_candidate, validate_checkpoint, validate_proposal,
 )
 from controller import Controller, authorize, main, prepare, stage_source
-from evidence import flaky_cases, summarize
+from evidence import reproduced_cases, summarize
 from github import GitHub, GitHubAPIError, owned_run, state_branch
 from runner import execute, run_streamed
 from reporting import findings
@@ -211,6 +211,243 @@ class OrchestrationTests(unittest.TestCase):
     def live(self):
         return self.github.load(123)
 
+    def test_local_first_candidate_goes_directly_to_exact_hosted_verification(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "repair",
+                selection={**SELECT, "oses": ["ubuntu-latest", "windows-latest"]},
+                local_precheck={
+                    "status": "completed", "reason": "Local failure/log analysis supports a readiness fix.",
+                    "os": "Linux", "commands": ["local-test-command"],
+                    "observed_output": "Model-reported local failure, then passing local candidate; not hosted evidence."},
+                mode="project", diagnosis="Local missing-widget error: readiness was not awaited.",
+                files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")}
+            )).encode()}
+        # Only synthetic execution admission; production remains closed.
+        with patch("controller.require_candidate_isolation"):
+            self.invoke_controller()
+        state, revision = self.live()
+        self.assertEqual("worker", state["phase"])
+        self.assertEqual(("verify", "project", state["candidate"]["sha"]), (
+            state["worker"]["phase"], state["worker"]["mode"], state["worker"]["source_sha"]))
+        self.assertEqual([], state["history"])
+        self.assertEqual((1, 1, 1, 18), (
+            state["used"]["models"], state["used"]["workers"], state["used"]["fixes"],
+            state["used"]["runner_iterations"]))
+        self.assertEqual("project", state["candidate"]["mode"])
+        self.complete_worker(False)
+        state, revision = self.live()
+        self.assertEqual("ready", state["phase"])
+        self.assertEqual(1, len(state["history"]))
+        self.assertEqual((18, 0), (state["history"][0]["passed"], state["history"][0]["failed"]))
+        finish = proposal(state, revision, "finish", outcome="verified",
+                          reviewed_candidate_sha=state["candidate"]["sha"])
+        with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+            self.controller.handle(state, revision, finish)
+        self.assertEqual([], self.github.pulls)
+        self.invoke_controller()
+        state, _ = self.live()
+        self.assertEqual(1, state["used"]["workers"])
+        self.assertEqual(2, state["used"]["models"])
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "finish", outcome="verified",
+                reviewed_candidate_sha=state["candidate"]["sha"])).encode()}
+        with patch("controller.require_candidate_isolation"):
+            self.invoke_controller()
+        self.assertEqual("verified", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.pulls))
+        self.assertTrue(self.github.pulls[0]["draft"])
+        self.assertEqual(state["candidate"]["sha"], self.github.pulls[0]["head"]["sha"])
+
+    def test_skill_driven_reproduction_is_explicit_and_resumes_with_original_evidence(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "reproduce", selection=SELECT,
+                local_precheck={"status": "skipped", "reason": "Actual issue OS differs from the runner."},
+                mode="project", runners=1, iterations=2)).encode()}
+        self.invoke_controller()
+        state, _ = self.live()
+        self.assertEqual("worker", state["phase"])
+        self.assertEqual(("reproduce", "project", BASE, 1, 2), (
+            state["worker"]["phase"], state["worker"]["mode"], state["worker"]["source_sha"],
+            state["worker"]["runners"], state["worker"]["iterations"]))
+        self.complete_worker(True)
+        state, _ = self.live()
+        self.assertEqual("ready", state["phase"])
+        self.assertEqual((1, 1), (state["used"]["workers"], len(state["history"])))
+        self.invoke_controller()
+        state, _ = self.live()
+        self.assertEqual("agent", state["phase"])
+        self.assertEqual((1, 2, 1, 1), (
+            state["used"]["workers"], state["used"]["models"],
+            state["history"][0]["passed"], state["history"][0]["failed"]))
+        with tempfile.TemporaryDirectory() as temporary, patch("controller.ROOT", Path(temporary)), \
+                patch("controller.stage_source", return_value=Path(temporary) / "source"), \
+                patch("preparation.shutil.which", return_value=None), \
+                patch.dict(os.environ, {"GITHUB_RUN_ID": str(state["agent"]["id"])}):
+            source = Path(temporary) / "source"
+            source.mkdir()
+            (source / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100"}}))
+            prepare(self.github, URL, state["agent"]["revision"])
+            context = json.loads((Path(temporary) / "context.json").read_text())
+            batch = context["checkpoint"]["history"][0]
+            report = Path(temporary) / "evidence" / str(batch["id"]) / "ubuntu-latest/1/iteration-1/original.trx"
+            self.assertEqual(trx("Failed", f"{batch['id']}-ubuntu-latest-1-1"), report.read_bytes())
+            self.assertEqual(BASE, batch["source_sha"])
+
+    def test_not_reproduced_can_follow_local_investigation_without_hosted_rounds(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "finish", outcome="not-reproduced", selection=SELECT,
+                local_precheck={"status": "skipped", "reason": "Confirmed missing service; logs inspected."},
+                analysis={"why_no_fix": "Available logs/local checks did not reproduce the issue.",
+                          "attempted": ["Read source and available failure logs; checked service availability."],
+                          "next_action": "Compare the original service environment before further reproduction."}
+            )).encode()}
+        self.invoke_controller()
+        self.assertEqual("not-reproduced", self.github.state["outcome"])
+        self.assertEqual(0, self.github.state["used"]["workers"])
+        self.assertEqual([], self.github.state["history"])
+        self.assertIn("No accepted test executions", self.github.comments[0]["body"])
+        self.assertIn("Model analysis (not independently established)", self.github.comments[0]["body"])
+        self.assertEqual([], self.github.pulls)
+
+    def test_local_first_verification_rejects_mismatched_or_insufficient_original_evidence(self):
+        for defect in ("source", "attempt", "os", "mode", "missing-os", "target", "zero", "case-count", "failed", "review"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                self.selected()
+                self.state["target"]["oses"] = ["ubuntu-latest", "windows-latest"]
+                with patch("controller.require_candidate_isolation"):
+                    self.controller.handle(self.state, self.revision, proposal(
+                        self.state, self.revision, "repair", diagnosis="Local missing-widget readiness race.",
+                        files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")}))
+                state, _ = self.live()
+                worker = state["worker"]
+                self.github.runs[worker["id"]].update(
+                    status="completed", conclusion="failure" if defect == "failed" else "success")
+                for (os_name, index), files in evidence(worker, state["target"]).items():
+                    if os_name == "ubuntu-latest" and index == 1:
+                        if defect in {"source", "attempt", "os", "mode"}:
+                            receipt = json.loads(files["receipt.json"])
+                            key, value = {"source": ("sha", BASE), "attempt": ("run_attempt", 2),
+                                          "os": ("os", "windows-latest"), "mode": ("mode", "project")}[defect]
+                            receipt[key] = value
+                            files["receipt.json"] = json.dumps(receipt).encode()
+                        elif defect == "target":
+                            files["iteration-1/original.trx"] = trx(method="OtherTest")
+                        elif defect == "zero":
+                            files["iteration-1/original.trx"] = b"<TestRun/>"
+                        elif defect == "case-count":
+                            files["iteration-1/original.trx"] = files["iteration-1/original.trx"].replace(
+                                b'testName="WaitsForWidget"', b'testName="WaitsForWidget(other row)"')
+                        elif defect == "failed":
+                            files["iteration-1/original.trx"] = trx("Failed", execution="failed-verification")
+                            files["iteration-1/result.json"] = b'{"exit_code":2}'
+                    if defect != "missing-os" or os_name != "windows-latest":
+                        self.github.artifacts[(worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
+                self.invoke_controller()
+                if defect in {"case-count", "failed", "review"}:
+                    state, _ = self.live()
+                    self.assertEqual("agent", state["phase"])
+                    self.assertEqual(1, len(state["history"]))
+                    run_id = state["agent"]["id"]
+                    self.github.runs[run_id].update(status="completed", conclusion="success")
+                    self.github.artifacts[(run_id, "repo-memory-default")] = {
+                        "proposal.json": json.dumps(proposal(
+                            state, state["agent"]["revision"], "finish", outcome="verified",
+                            reviewed_candidate_sha=BASE if defect == "review" else state["candidate"]["sha"]
+                        )).encode()}
+                    with patch("controller.require_candidate_isolation") as isolation:
+                        self.invoke_controller()
+                    isolation.assert_not_called()
+                else:
+                    self.assertEqual([], self.github.state["history"])
+                self.assertEqual("blocked", self.github.state["outcome"])
+                self.assertEqual([], self.github.pulls)
+
+    def test_requested_contention_is_retained_without_a_matching_hosted_failure(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "project")
+        self.complete_worker(False)
+        state, revision = self.live()
+        request = proposal(state, revision, "repair", mode="single", diagnosis="Local readiness diagnosis.",
+                           files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")})
+        with self.assertRaisesRegex(ValueError, "retain required contention"):
+            self.controller.handle(copy.deepcopy(state), revision, request)
+        state["candidate"] = {
+            "sha": "c" * 40, "paths": [SOURCE], "diagnosis": "Local readiness diagnosis.", "mode": "single"}
+        state["phase"] = "candidate-ready"
+        revision = self.controller.save(state, revision)
+        with patch("controller.require_candidate_isolation"):
+            self.controller.advance(state, revision)
+        self.assertEqual("project", self.github.state["worker"]["mode"])
+        self.complete_worker(False)
+        state, revision = self.live()
+        with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+            self.controller.handle(state, revision, proposal(
+                state, revision, "finish", outcome="verified", reviewed_candidate_sha="c" * 40))
+        self.assertEqual([], self.github.pulls)
+
+    def test_selection_only_handoff_does_not_dispatch_or_claim_substantive_work(self):
+        before = copy.deepcopy(self.github.calls)
+        with self.assertRaisesRegex(ValueError, "Selection alone is not a handoff"):
+            self.controller.handle(self.state, self.revision, proposal(
+                self.state, self.revision, "select", selection=SELECT,
+                local_precheck={"status": "skipped", "reason": "No investigation performed."}))
+        self.assertIsNone(self.github.state["target"])
+        self.assertEqual(before, self.github.calls)
+        self.assertEqual({}, self.github.commits)
+
+    def test_local_contention_is_retained_across_candidate_revisions(self):
+        self.selected()
+        request = proposal(self.state, self.revision, "repair", mode="project", diagnosis="Local contention race.",
+                           files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")})
+        with patch("controller.require_candidate_isolation"):
+            self.controller.handle(self.state, self.revision, request)
+        self.complete_worker(True)
+        state, revision = self.live()
+        request = proposal(state, revision, "repair", mode="single", diagnosis="Refined local contention fix.",
+                           files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReady2Async()")})
+        with self.assertRaisesRegex(ValueError, "retain required contention"):
+            self.controller.handle(copy.deepcopy(state), revision, request)
+        del request["mode"]
+        with patch("controller.require_candidate_isolation"):
+            self.controller.handle(state, revision, request)
+        self.assertEqual(("project", 2, 2), (
+            self.github.state["worker"]["mode"], self.github.state["used"]["workers"],
+            self.github.state["used"]["fixes"]))
+
+    def test_explicit_reproduction_configuration_is_bounded_and_quarantine_scoped(self):
+        self.selected()
+        for fields in ({"mode": []}, {"mode": "shell"}, {"runners": 4}, {"iterations": 11},
+                       {"runners": 0}, {"iterations": True}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self.controller.handle(copy.deepcopy(self.state), self.revision, proposal(
+                    self.state, self.revision, "reproduce", **fields))
+        self.state["target"]["quarantined"] = False
+        with self.assertRaisesRegex(ValueError, "quarantined"):
+            self.controller.handle(self.state, self.revision, proposal(
+                self.state, self.revision, "reproduce", mode="project"))
+        self.assertEqual(0, self.github.state["used"]["workers"])
+        self.assertEqual(0, self.github.state["used"]["runner_iterations"])
+        self.assertEqual([], [call for call in self.github.calls if call[0] == "dispatch"])
+
     def invoke_controller(self):
         with patch.dict(os.environ, {
             "GITHUB_REPOSITORY": REPOSITORY, "ISSUE_URL": URL,
@@ -249,14 +486,14 @@ class OrchestrationTests(unittest.TestCase):
             self.assertIn("terminal-noop", summary)
             self.assertIn("Agent failed/cancelled", summary)
 
-    def test_selection_and_clean_baselines_need_only_selection_and_final_analysis_models(self):
+    def test_requested_worker_progress_is_observable_and_clean_completion_returns_to_agent(self):
         self.controller.advance(self.state, self.revision)
         state, _ = self.live()
         run_id = state["agent"]["id"]
         self.github.runs[run_id].update(status="completed", conclusion="success")
         self.github.artifacts[(run_id, "repo-memory-default")] = {
             "proposal.json": json.dumps(proposal(
-                state, state["agent"]["revision"], "select", selection=SELECT,
+                state, state["agent"]["revision"], "reproduce", selection=SELECT,
                 local_precheck={"status": "skipped", "reason": "Issue OS differs from agent runner."})).encode()}
         with patch("sys.stdout", io.StringIO()) as output:
             self.invoke_controller()
@@ -281,20 +518,14 @@ class OrchestrationTests(unittest.TestCase):
                  "deadline_at": "2026-10-21T01:30:00+00:00",
                  "source_sha": BASE, "phase": "reproduce", "mode": "single", "runners": 3, "iterations": 3},
             ], item["children"])
-        for index, mode in enumerate(("single", "single", "project"), 1):
-            state, _ = self.live()
-            self.assertEqual(mode, state["worker"]["mode"])
-            self.assertEqual(index, state["used"]["workers"])
-            self.assertEqual(1, state["used"]["models"])
-            self.complete_worker(False)
+        self.complete_worker(False)
         self.invoke_controller()
         state, _ = self.live()
         self.assertEqual("agent", state["phase"])
         self.assertEqual(2, state["used"]["models"])
-        self.assertEqual(3, state["used"]["workers"])
-        self.assertEqual(27, state["used"]["runner_iterations"])
-        self.assertEqual(27, sum(item["passed"] for item in state["history"]))
-        self.assertTrue(any("clean baseline" in item["reason"] for item in state["transitions"]))
+        self.assertEqual(1, state["used"]["workers"])
+        self.assertEqual(9, state["used"]["runner_iterations"])
+        self.assertEqual(9, sum(item["passed"] for item in state["history"]))
         run_id = state["agent"]["id"]
         self.github.runs[run_id].update(status="completed", conclusion="success")
         self.github.artifacts[(run_id, "repo-memory-default")] = {
@@ -324,33 +555,168 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(1, len(self.github.comments))
         self.assertEqual("terminal", self.github.state["phase"])
 
-    def test_ready_checkpoint_recovery_does_not_spend_a_model_requesting_clean_baseline(self):
+    def test_ready_checkpoint_recovery_returns_to_agent_without_another_worker(self):
         self.selected()
-        self.controller.advance(self.state, self.revision)
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         state, revision = self.live()
         worker = state["worker"]
         self.github.runs[worker["id"]].update(status="completed", conclusion="success")
         for (os_name, index), files in evidence(worker, state["target"]).items():
             self.github.artifacts[(worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
-        with patch.object(self.controller, "baseline", side_effect=RuntimeError("controller interrupted")):
-            with self.assertRaisesRegex(RuntimeError, "interrupted"):
-                self.controller.advance(state, revision)
+        self.controller.advance(state, revision)
         self.assertEqual("ready", self.github.state["phase"])
         self.invoke_controller()
-        self.assertEqual("worker", self.github.state["phase"])
-        self.assertEqual(0, self.github.state["used"]["models"])
-        self.assertEqual(2, self.github.state["used"]["workers"])
+        self.assertEqual("agent", self.github.state["phase"])
+        self.assertEqual(1, self.github.state["used"]["models"])
+        self.assertEqual(1, self.github.state["used"]["workers"])
         self.assertEqual(1, len(self.github.state["history"]))
 
-    def test_not_reproduced_is_rejected_before_three_complete_clean_policy_rounds(self):
+    def test_not_reproduced_accepts_one_clean_requested_round(self):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         self.complete_worker(False)
         state, revision = self.live()
-        with self.assertRaisesRegex(ValueError, "three clean baseline"):
-            self.controller.handle(state, revision, proposal(
-                state, revision, "finish", outcome="not-reproduced"))
-        self.assertEqual([], self.github.comments)
+        self.controller.handle(state, revision, proposal(state, revision, "finish", outcome="not-reproduced"))
+        self.assertEqual("not-reproduced", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.state["history"]))
+        self.assertEqual(1, len(self.github.comments))
+
+    def test_requested_extra_baseline_rounds_use_shared_budget_without_automatic_continuation(self):
+        for last_round in (4, 5):
+            with self.subTest(last_round=last_round):
+                self.setUp()
+                self.selected()
+                for _ in range(3):
+                    state, revision = self.live()
+                    self.controller.dispatch_worker(state, revision, "reproduce", 3, 3, "single")
+                    self.complete_worker(False)
+                for round_number in range(4, last_round + 1):
+                    state, revision = self.live()
+                    self.assertEqual("ready", state["phase"])
+                    self.assertEqual(round_number - 1, state["used"]["workers"])
+                    self.controller.advance(state, revision)
+                    state, _ = self.live()
+                    self.assertEqual("agent", state["phase"])
+                    self.assertEqual(round_number - 1, state["used"]["workers"])
+                    run_id = state["agent"]["id"]
+                    self.github.runs[run_id].update(status="completed", conclusion="success")
+                    self.github.artifacts[(run_id, "repo-memory-default")] = {
+                        "proposal.json": json.dumps(proposal(
+                            state, state["agent"]["revision"], "reproduce",
+                            explanation="Request another bounded sample after inspecting the original clean reports."
+                        )).encode()}
+                    self.invoke_controller()
+                    state, _ = self.live()
+                    self.assertEqual("worker", state["phase"])
+                    self.assertEqual((round_number, 9 * round_number),
+                                     (state["used"]["workers"], state["used"]["runner_iterations"]))
+                    self.assertEqual(("single", BASE, CONTROL, 3, 3), (
+                        state["worker"]["mode"], state["worker"]["source_sha"],
+                        state["worker"]["sha"], state["worker"]["runners"], state["worker"]["iterations"]))
+                    self.complete_worker(False)
+                    state, _ = self.live()
+                    self.assertEqual("ready", state["phase"])
+                    self.assertEqual(round_number, len(state["history"]))
+                    self.assertEqual(round_number, state["used"]["workers"])
+                for field, value in (("failed", 1), ("source_sha", CONTROL)):
+                    with self.subTest(extra_round_defect=field):
+                        changed = copy.deepcopy(state)
+                        changed["history"][-1][field] = value
+                        with self.assertRaisesRegex(ValueError, "accepted target failure"):
+                            self.controller.handle(changed, self.github.revision, proposal(
+                                changed, self.github.revision, "finish", outcome="not-reproduced"))
+                self.invoke_controller()
+                state, _ = self.live()
+                run_id = state["agent"]["id"]
+                self.github.runs[run_id].update(status="completed", conclusion="success")
+                self.github.artifacts[(run_id, "repo-memory-default")] = {
+                    "proposal.json": json.dumps(proposal(
+                        state, state["agent"]["revision"], "finish", outcome="not-reproduced")).encode()}
+                self.invoke_controller()
+                self.assertEqual("not-reproduced", self.github.state["outcome"])
+                self.assertEqual(last_round, self.github.state["used"]["workers"])
+                self.assertEqual([], self.github.pulls)
+
+    def test_extra_baseline_requests_cannot_exceed_existing_shared_budgets(self):
+        for exhausted in ("workers", "runner_iterations", "models", "deadline"):
+            with self.subTest(exhausted=exhausted):
+                self.setUp()
+                self.selected()
+                for _ in range(3):
+                    state, revision = self.live()
+                    self.controller.dispatch_worker(state, revision, "reproduce", 3, 3, "single")
+                    self.complete_worker(False)
+                state, revision = self.live()
+                if exhausted == "models":
+                    state["used"]["models"] = 8
+                    self.controller.save(state, revision)
+                else:
+                    self.controller.advance(state, revision)
+                    state, revision = self.live()
+                    run_id = state["agent"]["id"]
+                    self.github.runs[run_id].update(status="completed", conclusion="success")
+                    self.github.artifacts[(run_id, "repo-memory-default")] = {
+                        "proposal.json": json.dumps(proposal(
+                            state, state["agent"]["revision"], "reproduce")).encode()}
+                    if exhausted == "deadline":
+                        self.controller.now = lambda: NOW + timedelta(hours=13)
+                    else:
+                        # Reservations can outnumber accepted batches after rejected attempts.
+                        state["used"][exhausted] = 5 if exhausted == "workers" else 180
+                        self.controller.save(state, revision)
+                self.invoke_controller()
+                self.assertEqual("budget-exhausted", self.github.state["outcome"])
+                self.assertIn({
+                    "workers": "workers budget exhausted",
+                    "runner_iterations": "runner_iterations budget exhausted",
+                    "models": "model phase budget exhausted",
+                    "deadline": "twelve-hour investigation budget expired",
+                }[exhausted], self.github.state["explanation"])
+                self.assertEqual(3, len(self.github.state["history"]))
+                self.assertEqual(3, len([call for call in self.github.calls
+                                         if call[0] == "dispatch" and call[1] == WORKER]))
+                self.assertEqual([], self.github.pulls)
+
+    def test_sixth_baseline_and_verification_after_five_workers_are_blocked_before_dispatch(self):
+        for action in ("reproduce", "verify"):
+            with self.subTest(action=action):
+                self.setUp()
+                self.selected()
+                for _ in range(3):
+                    state, revision = self.live()
+                    self.controller.dispatch_worker(state, revision, "reproduce", 3, 3, "single")
+                    self.complete_worker(False)
+                for _ in range(2):
+                    state, revision = self.live()
+                    self.controller.dispatch_worker(state, revision, "reproduce", 3, 3, "single")
+                    self.complete_worker(True)
+                state, revision = self.live()
+                if action == "verify":
+                    state["candidate"] = {
+                        "sha": "c" * 40, "paths": [SOURCE], "diagnosis": "Readiness defect."}
+                    with self.assertRaisesRegex(ValueError, "nine target passes"):
+                        self.controller.handle(copy.deepcopy(state), revision, proposal(
+                            state, revision, "finish", outcome="verified", reviewed_candidate_sha="c" * 40))
+                    state["phase"] = "candidate-ready"
+                    self.controller.save(state, revision)
+                else:
+                    self.controller.advance(state, revision)
+                    state, _ = self.live()
+                    run_id = state["agent"]["id"]
+                    self.github.runs[run_id].update(status="completed", conclusion="success")
+                    self.github.artifacts[(run_id, "repo-memory-default")] = {
+                        "proposal.json": json.dumps(proposal(
+                            state, state["agent"]["revision"], "reproduce")).encode()}
+                # Synthetic isolation admission reaches the existing shared worker
+                # budget; it does not authorize production candidate execution.
+                with patch("controller.require_candidate_isolation"):
+                    self.invoke_controller()
+                self.assertEqual("budget-exhausted", self.github.state["outcome"])
+                self.assertEqual(5, self.github.state["used"]["workers"])
+                self.assertEqual(45, self.github.state["used"]["runner_iterations"])
+                self.assertEqual(5, len([call for call in self.github.calls
+                                         if call[0] == "dispatch" and call[1] == WORKER]))
+                self.assertEqual([], self.github.pulls)
 
     def test_main_unsupported_cli_selection_posts_one_blocked_finding_without_interrupted_resume(self):
         project = "tests/Aspire.Cli.EndToEnd.Tests/Aspire.Cli.EndToEnd.Tests.csproj"
@@ -362,7 +728,7 @@ class OrchestrationTests(unittest.TestCase):
         self.github.runs[run_id].update(status="completed", conclusion="success")
         self.github.artifacts[(run_id, "repo-memory-default")] = {
             "proposal.json": json.dumps(proposal(
-                state, state["agent"]["revision"], "select",
+                state, state["agent"]["revision"], "reproduce",
                 selection={**SELECT, "source": source, "project": project},
                 local_precheck={"status": "skipped", "reason": "Prebuilt CLI images unavailable."})).encode()}
         with patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
@@ -371,7 +737,7 @@ class OrchestrationTests(unittest.TestCase):
             self.assertEqual("blocked", self.github.state["outcome"])
             self.assertEqual(1, len(self.github.comments))
             self.assertIn("candidate-aware prebuilt images", self.github.comments[0]["body"])
-            self.assertEqual("select", self.github.state["rejected_attempts"][0]["action"])
+            self.assertEqual("reproduce", self.github.state["rejected_attempts"][0]["action"])
             before = copy.deepcopy((self.github.state, self.github.revision, self.github.comments, self.github.refs))
             self.invoke_controller()
             self.assertEqual(before, (self.github.state, self.github.revision, self.github.comments, self.github.refs))
@@ -382,14 +748,12 @@ class OrchestrationTests(unittest.TestCase):
                   for frame in output.getvalue().splitlines()]
         self.assertEqual("terminal-noop", events[-1]["event"])
 
-    def test_not_reproduced_requires_each_clean_round_condition_at_each_os_threshold(self):
+    def test_not_reproduced_cannot_contradict_accepted_failure_source_or_candidate(self):
         for os_count in (1, 2, 3):
             oses = ["ubuntu-latest", "windows-latest", "macos-latest"][:os_count]
             for quarantined in (True, False):
                 cases = [
                     ("valid", None), ("failed", 1), ("source_sha", CONTROL),
-                    ("passed", 9 * os_count - 1), ("runners", 2), ("iterations", 2),
-                    ("mode", "single" if quarantined else "project"),
                     ("candidate", {"sha": CONTROL}), ("target", None),
                 ]
                 for field, value in cases:
@@ -413,7 +777,7 @@ class OrchestrationTests(unittest.TestCase):
                             self.assertEqual("not-reproduced", self.github.state["outcome"])
                             self.assertEqual(1, len(self.github.comments))
                         else:
-                            with self.assertRaisesRegex(ValueError, "three clean baseline"):
+                            with self.assertRaisesRegex(ValueError, "accepted target failure"):
                                 self.controller.handle(self.state, self.revision, request)
                             self.assertEqual(self.revision, self.github.revision)
                             self.assertEqual([], self.github.comments)
@@ -472,7 +836,7 @@ class OrchestrationTests(unittest.TestCase):
                 prepare(self.github, URL, state["agent"]["revision"])
                 return json.loads((Path(temporary) / "context.json").read_text())
         self.controller.advance(self.state, self.revision)
-        complete_agent("select", selection_reason, selection=SELECT, local_precheck=local)
+        complete_agent("reproduce", selection_reason, selection=SELECT, local_precheck=local)
         self.complete_worker(True)
         self.invoke_controller()
         first = context()
@@ -523,6 +887,8 @@ class OrchestrationTests(unittest.TestCase):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
         self.complete_worker(False)
+        state, revision = self.live()
+        self.controller.dispatch_worker(state, revision, "reproduce", 3, 3, "single")
         state, _ = self.live()
         worker = state["worker"]
         self.github.runs[worker["id"]].update(status="completed", conclusion="failure")
@@ -900,7 +1266,7 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_issue_url_only_selection_has_no_target_catalog(self):
         self.controller.handle(self.state, self.revision, proposal(
-            self.state, self.revision, "select", selection=SELECT,
+            self.state, self.revision, "reproduce", selection=SELECT,
             local_precheck={"status": "skipped", "reason": "Windows issue; Linux runner lacks matching OS."}))
         state, _ = self.live()
         self.assertEqual("WaitsForWidget", state["target"]["method"])
@@ -1283,7 +1649,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(1, state["history"][0]["passed"])
         self.controller.advance(state, revision)
         self.assertEqual(1, len(self.github.state["history"]))
-        self.assertEqual("worker", self.github.state["phase"])
+        self.assertEqual("agent", self.github.state["phase"])
         self.assertEqual(2, len(self.github.runs))
 
     def test_fixed_worker_dispatch_never_writes_workflow_or_candidate_trees(self):
@@ -1338,11 +1704,11 @@ class OrchestrationTests(unittest.TestCase):
         self.github.runs[state["agent"]["id"]].update(status="completed", conclusion="success")
         self.github.artifacts[(state["agent"]["id"], "repo-memory-default")] = {
             "proposal.json": json.dumps(proposal(
-                state, state["agent"]["revision"], "select", selection=SELECT,
+                state, state["agent"]["revision"], "reproduce", selection=SELECT,
                 local_precheck={"status": "skipped", "reason": "Runner environment unavailable."})).encode()}
         self.controller.advance(state, revision)
         self.assertEqual("worker", self.github.state["phase"])
-        self.assertEqual("select", self.github.state["notes"][-1]["action"])
+        self.assertEqual("reproduce", self.github.state["notes"][-1]["action"])
         self.assertEqual("WaitsForWidget", self.github.state["target"]["method"])
 
     def test_failed_model_requires_blocked_findings_not_candidate_publication(self):
@@ -1587,7 +1953,7 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_timely_completed_worker_observed_late_is_counted_without_an_extra_model(self):
         self.selected()
-        self.controller.advance(self.state, self.revision)
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         state, revision = self.live()
         owned = state["worker"]
         self.github.runs[owned["id"]].update(status="completed", conclusion="success")
@@ -1602,12 +1968,12 @@ class OrchestrationTests(unittest.TestCase):
             later.advance(state, revision)
         self.assertEqual(9, self.github.state["history"][0]["passed"])
         self.assertEqual(0, self.github.state["used"]["models"])
-        self.assertEqual(2, self.github.state["used"]["workers"])
-        self.assertEqual("worker", self.github.state["phase"])
+        self.assertEqual(1, self.github.state["used"]["workers"])
+        self.assertEqual("ready", self.github.state["phase"])
 
     def test_complete_live_checkpoint_shapes_and_inactive_objects_are_validated(self):
         self.controller.handle(self.state, self.revision, proposal(
-            self.state, self.revision, "select", selection=SELECT,
+            self.state, self.revision, "reproduce", selection=SELECT,
             local_precheck={"status": "skipped", "reason": "Target OS unavailable."}))
         self.complete_worker(True)
         state, revision = self.live()
@@ -1675,17 +2041,74 @@ class OrchestrationTests(unittest.TestCase):
                 reserve(self.state, "runner_iterations", count)
         self.assertEqual(179, self.state["used"]["runner_iterations"])
 
-    def test_candidate_cannot_be_published_without_matching_pass_and_failure(self):
+    def test_all_failed_matching_baseline_reaches_repair_and_final_gates_without_a_prior_pass(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        state, revision = self.live()
+        worker = state["worker"]
+        self.github.runs[worker["id"]].update(status="completed", conclusion="failure")
+        for (os_name, index), files in evidence(worker, state["target"]).items():
+            for iteration in range(1, worker["iterations"] + 1):
+                prefix = f"iteration-{iteration}/"
+                files[prefix + "original.trx"] = trx("Failed", f"{index}-{iteration}")
+                files[prefix + "result.json"] = b'{"exit_code":2}'
+            self.github.artifacts[(worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
+        self.controller.advance(state, revision)
+        state, revision = self.live()
+        self.assertEqual((0, 9), (state["history"][0]["passed"], state["history"][0]["failed"]))
+        request = proposal(state, revision, "repair", files={
+            SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+            diagnosis="Reproduced Missing widget on every observed attempt; readiness was not awaited.")
+        with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+            self.controller.handle(state, revision, request)
+        self.assertEqual({}, self.github.commits)
+        state, revision = self.live()
+        with patch("controller.require_candidate_isolation"):
+            self.controller.handle(state, revision, request)
+            self.complete_worker(False)
+        state, revision = self.live()
+        candidate_sha = state["candidate"]["sha"]
+        self.assertEqual((9, 0), (state["history"][-1]["passed"], state["history"][-1]["failed"]))
+        for defect in ("mode", "source", "review"):
+            with self.subTest(defect=defect):
+                changed = copy.deepcopy(state)
+                reviewed = candidate_sha
+                if defect == "mode":
+                    changed["history"][-1]["mode"] = "project"
+                elif defect == "source":
+                    changed["history"][-1]["source_sha"] = BASE
+                else:
+                    reviewed = BASE
+                with patch("controller.require_candidate_isolation") as isolation, \
+                        self.assertRaisesRegex(ValueError, "reproduced mode|exact candidate"):
+                    self.controller.handle(changed, revision, proposal(
+                        changed, revision, "finish", outcome="verified", reviewed_candidate_sha=reviewed))
+                isolation.assert_not_called()
+        finish = proposal(state, revision, "finish", outcome="verified", reviewed_candidate_sha=candidate_sha)
+        with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+            self.controller.handle(state, revision, finish)
+        self.assertEqual([], self.github.pulls)
+        state, revision = self.live()
+        # Synthetic isolation admission tests orchestration only, not production
+        # authorization, hosted review or execution.
+        with patch("controller.require_candidate_isolation"):
+            self.controller.handle(state, revision, finish)
+        self.assertEqual("verified", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.pulls))
+        self.assertEqual(candidate_sha, self.github.pulls[0]["head"]["sha"])
+        self.assertTrue(self.github.pulls[0]["draft"])
+
+    def test_local_first_candidate_cannot_bypass_production_isolation(self):
         self.selected()
         request = proposal(self.state, self.revision, "repair",
                            files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
                            diagnosis="Observed missing-widget error and confirmed readiness race.")
-        with self.assertRaisesRegex(ValueError, "unreproduced"):
+        with self.assertRaisesRegex(ValueError, "execution.*boundary"):
             self.controller.handle(self.state, self.revision, request)
         self.assertEqual({}, self.github.commits)
 
-    def test_repair_rejects_pooled_cases_oses_or_legacy_aggregate_evidence(self):
-        for defect in ("case", "os", "legacy", "source"):
+    def test_clean_or_legacy_evidence_does_not_bypass_production_isolation(self):
+        for defect in ("clean", "legacy", "source"):
             with self.subTest(defect=defect):
                 self.setUp()
                 self.selected()
@@ -1698,10 +2121,9 @@ class OrchestrationTests(unittest.TestCase):
                         {"os": "ubuntu-latest", "name": "row-a", "test_id": "test", "passed": 1, "failed": 0},
                     ],
                 }
-                if defect == "case":
-                    batch["cases"][1]["name"] = "row-b"
-                elif defect == "os":
-                    batch["cases"][1]["os"] = "windows-latest"
+                if defect == "clean":
+                    batch.update(passed=2, failed=0)
+                    batch["cases"][0].update(passed=1, failed=0)
                 elif defect == "legacy":
                     del batch["cases"]
                 else:
@@ -1710,7 +2132,7 @@ class OrchestrationTests(unittest.TestCase):
                 request = proposal(self.state, self.revision, "repair", files={
                     SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
                     diagnosis="Unproven readiness hypothesis.")
-                with self.assertRaisesRegex(ValueError, "case.*OS"):
+                with self.assertRaisesRegex(ValueError, "execution.*boundary"):
                     self.controller.handle(self.state, self.revision, request)
                 self.assertEqual({}, self.github.commits)
                 self.assertEqual([], self.github.pulls)
@@ -1723,6 +2145,8 @@ class OrchestrationTests(unittest.TestCase):
                 self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
                 self.complete_worker(True)
                 state, revision = self.live()
+                state["history"][0].update(passed=0, failed=9)
+                state["history"][0]["cases"][0].update(passed=0, failed=9)
                 state["candidate"] = {"sha": "c" * 40, "paths": [SOURCE], "diagnosis": "Readiness race"}
                 verified = copy.deepcopy(state["history"][0])
                 verified.update(phase="verify", source_sha="c" * 40, passed=9, failed=0,
@@ -2212,6 +2636,18 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual((1, 1, 2, 2),
                          (result["passed"], result["failed"], result["actual_tests"], result["runner_iterations"]))
 
+    def test_all_failed_issue_matching_case_is_reproduced_without_observed_intermittency(self):
+        for iteration in (1, 2):
+            files = self.files[("ubuntu-latest", 1)]
+            prefix = f"iteration-{iteration}/"
+            files[prefix + "original.trx"] = trx("Failed", f"all-failed-{iteration}")
+            files[prefix + "result.json"] = b'{"exit_code":2}'
+        result = summarize(self.files, self.worker, self.target)
+        self.assertEqual((0, 2, 2, 2),
+                         (result["passed"], result["failed"], result["actual_tests"], result["runner_iterations"]))
+        self.assertEqual({("ubuntu-latest", "WaitsForWidget", "test")},
+                         reproduced_cases([{**self.worker, **result}], BASE))
+
     def test_fully_qualified_mtp_method_names_count_the_exact_target(self):
         for files in self.files.values():
             for path in list(files):
@@ -2239,6 +2675,8 @@ class EvidenceTests(unittest.TestCase):
             {"os": "ubuntu-latest", "name": "WaitsForWidget(value: 1)", "test_id": "test", "passed": 0, "failed": 1},
             {"os": "ubuntu-latest", "name": "WaitsForWidget(value: 2)", "test_id": "test", "passed": 1, "failed": 0},
         ], result["cases"])
+        self.assertEqual({("ubuntu-latest", "WaitsForWidget(value: 1)", "test")},
+                         reproduced_cases([{**self.worker, **result}], BASE))
 
     def test_distinct_test_ids_with_the_same_display_name_cannot_pool_deterministic_cases(self):
         for iteration in (1, 2):
@@ -2261,7 +2699,7 @@ class EvidenceTests(unittest.TestCase):
                     files[path] = files[path].replace(b'"test"', b'"different-definition"')
         second = summarize(changed, self.worker, self.target)
         with self.assertRaisesRegex(ValueError, "identit.*across rounds"):
-            flaky_cases([
+            reproduced_cases([
                 {**self.worker, **first}, {**self.worker, **second},
             ], BASE)
         github = FakeGitHub()
@@ -2285,10 +2723,10 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual({
             ("ubuntu-latest", "WaitsForWidget", "test"),
             ("windows-latest", "WaitsForWidget", "different-os-identity"),
-        }, flaky_cases([batch], BASE))
+        }, reproduced_cases([batch], BASE))
         for item in batch["cases"]:
             del item["test_id"]
-        self.assertEqual(set(), flaky_cases([batch], BASE))
+        self.assertEqual(set(), reproduced_cases([batch], BASE))
 
     def test_project_mode_actual_tests_are_not_runner_iterations(self):
         self.worker["mode"] = "project"
@@ -2300,7 +2738,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_missing_reports_zero_tests_build_exit_skip_signature_and_duplicate_fail_closed(self):
         for defect in ("missing", "empty", "build", "skip", "signature", "duplicate",
-                       "identity", "unrelated", "malformed-xml", "malformed-exit"):
+                       "identity", "os", "target", "unrelated", "malformed-xml", "malformed-exit"):
             files = copy.deepcopy(self.files)
             runner = files[("ubuntu-latest", 1)]
             with self.subTest(defect=defect), self.assertRaises((ValueError, KeyError)):
@@ -2316,10 +2754,13 @@ class EvidenceTests(unittest.TestCase):
                     runner["iteration-1/original.trx"] = trx("Failed", error="network restore error")
                 elif defect == "duplicate":
                     runner["iteration-1/merged.trx"] = runner["iteration-1/original.trx"]
-                elif defect == "identity":
+                elif defect in {"identity", "os"}:
                     receipt = json.loads(runner["receipt.json"])
-                    receipt["sha"] = CONTROL
+                    receipt["sha" if defect == "identity" else "os"] = (
+                        CONTROL if defect == "identity" else "windows-latest")
                     runner["receipt.json"] = json.dumps(receipt).encode()
+                elif defect == "target":
+                    runner["iteration-1/original.trx"] = trx("Failed", method="DifferentTest")
                 elif defect == "malformed-xml":
                     runner["iteration-1/original.trx"] = b"<not XML"
                 elif defect == "malformed-exit":

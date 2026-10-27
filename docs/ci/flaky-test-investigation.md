@@ -31,10 +31,13 @@ separates this flaky-task guidance from execution and handoff mechanics; it
 does not introduce another task implementation or a generic plugin system.
 
 The controller advances actionable transitions and exits; no model waits for CI.
-A completed selection handoff starts the first baseline immediately. Clean rounds continue through
-single, single, then project contention (or single for non-quarantined targets)
-without a fresh model just to request another run. Diagnosis/repair, final
-no-reproduction analysis, and exact-candidate review still use fresh phases.
+A substantive handoff includes target selection alongside an explicit
+reproduction request, a locally developed candidate, or a terminal finding.
+Selection alone is rejected rather than starting a discovery-only phase.
+Hosted reproduction is optional and happens only when the investigator requests
+it. After accepting the exact owned run's evidence, the controller resumes a
+fresh phase with the original artifacts and logs; it does not automatically
+repeat clean rounds. Final exact-candidate hosted verification remains mandatory.
 A scheduled
 controller reconciles checkpoints every 15 minutes. Child completion notifications
 also wake reconciliation; the triggering payload is never authority for source,
@@ -47,9 +50,10 @@ completion events from token-dispatched workflows. Scheduled recovery can also
 resume a completed worker after an interrupted controller.
 
 ```text
-issue URL → local investigation → hosted baseline
-hosted evidence → local diagnosis/candidate → hosted verification
-accepted verification → final source review → draft PR/findings
+issue URL → skill-driven source/log/local investigation
+  → requested hosted reproduction → resume investigation (when useful)
+  → local candidate → exact hosted verification → final source review → draft PR
+  → supported terminal findings (without a verified fix)
 ```
 
 ### Operator walkthrough
@@ -100,9 +104,10 @@ proposal-version change is needed.
 
 These local records are model-authored evidence, not independently validated
 test results. A prerequisite/build failure is not a test pass. Older proposals
-remain readable without local-work metadata. Hosted accepted-baseline,
-candidate verification and final source-review gates remain required; local
-work alone cannot authorize a fix PR.
+remain readable without local-work metadata. Local/log evidence can guide a
+candidate without a hosted baseline. It cannot replace exact hosted candidate
+verification or final source review, or waive execution-isolation and independent
+review admissions. Local work alone cannot authorize a fix PR.
 
 The original issue receives the confirmed terminal finding URL. A terminal
 resume is a no-op, and repeated start does not reset budgets. There is no
@@ -217,25 +222,46 @@ The prompt requires checking actual OS, toolchain and test-specific prerequisite
 then bounded local work when feasible. A skip cites actual probes/results and
 the concrete blocker, not unchecked assumptions about a cold agent environment.
 Source/history analysis continues where possible even when local execution is
-unavailable. Local results never replace the hosted gate.
+unavailable. The skill and supplemental prompt guide diagnosis and experiment
+selection; the controller does not require a hosted baseline before repair.
+Local results never replace final exact-candidate hosted verification.
 
-Baseline rounds use three runners × three iterations per selected OS. At most
-three rounds are permitted; the third can escalate to all quarantined tests in
-the project. The controller permits `not-reproduced` only after three complete,
-clean policy rounds at the frozen base. A flaky baseline requires both target passes and target failures
-matching the issue's error. Unrelated failures, build/runner errors, missing or
+A first targeted `reproduce`, `repair` or `finish` proposal supplies `selection`
+and `local_precheck` together. No proposal-version change or selection-only phase
+is needed. An explicit `reproduce` request chooses `single` mode or quarantined
+`project` contention, 1–3 runners and 1–10 iterations per selected OS. Defaults
+are single-test mode and three runners × three iterations. Selection, bounded
+configuration, quarantine rules and exact frozen source remain validated.
+Every requested run yields to the controller and resumes a fresh phase with
+authenticated results, not an automatic experiment sequence.
+
+An honest `not-reproduced` finding can follow local/log investigation or any
+number of clean requested hosted rounds. It must not contradict an accepted
+target failure or an existing candidate; no three-round threshold is imposed.
+Findings distinguish model-authored local analysis from accepted hosted execution
+counts, including when there are no accepted executions.
+
+When hosted reproduction is requested, target failures must match the issue's
+error; a pre-fix pass is not required. A test that failed on every observed
+attempt remains repair-eligible, subject to the same isolation, review and
+final verification gates. Unrelated failures, build/runner errors, missing or
 skipped tests, and missing TRX cannot authorize a candidate.
-The mixed pass/failure must concern the same case display name and TRX
-definition ID on the same OS at the frozen source, including across baseline
+Reproduction concerns an exact case display name and TRX definition ID on an
+exact OS at the frozen source, including across baseline
 rounds. Colliding IDs for one display name are rejected before accepting a
 batch; OS-specific IDs are not pooled. ID stability is checked, not assumed
-for every theory or candidate revision. Failure
+for every theory or candidate revision. Mixed passes and matching failures for
+the same case/OS establish observed intermittency; a finite all-failed sample
+does not prove permanent determinism. Failure
 signatures are matched only against TRX `ErrorInfo`, never `StdOut`. Both short
 and class-qualified MTP method names resolve to the exact selected method.
-Older aggregate-only or display-name-only records cannot authorize repair.
-Verification must
-cover each reproduced case/OS with at least nine passes and no failures;
-passing other rows, definition IDs or OSes cannot substitute.
+Older aggregate-only or display-name-only records cannot supply exact-case
+verification coverage. Final verification must cover every selected OS and
+every observed target case/definition with at least nine passes and no failures.
+Any exact failing cases from requested hosted reproduction must also be covered;
+passing other rows, definition IDs or OSes cannot substitute. Without a hosted
+baseline, the final original TRX still binds executed cases to the selected
+class/method. Model-authored local records cannot fill missing coverage.
 
 Every runner retains each iteration's original TRX, output, process exit and
 checkout receipt, including passing iterations. The controller validates exact
@@ -253,7 +279,16 @@ Each issue has eight model phases, five worker rounds, two repair attempts,
 180 runner-iterations, and twelve hours. Each model has 15 minutes; the existing
 reproduction runner has a 60-minute job timeout. Repairs are limited to five
 existing files and 800 changed lines. Final verification requires at least nine
-target passes, no failures, and the mode that reproduced the failure. The final
+target passes per selected OS and observed target case, no failures, and the
+requested contention mode. A `repair` proposal may request `mode: project` for
+a quarantined target without a prior hosted round. Any previously requested
+project-mode reproduction also requires project-mode verification, even if it
+was clean. The chosen candidate mode is checkpointed for recovery; older
+candidates without it retain project mode when their history requires it.
+All worker rounds share the existing cap, including verification. The user's
+final investigation-versus-verification accounting is not resolved by this
+mechanical limit; it does not grant five investigations plus extra verification.
+Exhaustion cannot waive mandatory verification. The final
 fresh agent phase must review the exact verified candidate SHA and its files.
 Nine passes are finite evidence, not proof that a low-frequency flake is gone.
 

@@ -95,8 +95,8 @@ def summarize(artifacts, owned, target):
             "cases": [cases[key] for key in sorted(cases)]}
 
 
-def flaky_cases(history, source_sha):
-    """Only one exact case on one OS can establish a mixed baseline."""
+def reproduced_cases(history, source_sha):
+    """Issue-matching failures establish reproduction; prior passes are not required."""
     counts = {}
     definitions = {}
     for batch in history:
@@ -114,4 +114,4 @@ def flaky_cases(history, source_sha):
             key = (*display, identity)
             passed, failed = counts.get(key, (0, 0))
             counts[key] = (passed + case["passed"], failed + case["failed"])
-    return {key for key, (passed, failed) in counts.items() if passed and failed}
+    return {key for key, (_, failed) in counts.items() if failed}

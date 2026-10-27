@@ -14,7 +14,7 @@ from contracts import (
     repair_scope, require, require_candidate_isolation, reserve, selection, sha, terminal_analysis, text,
     timestamp, validate_candidate, validate_checkpoint, validate_proposal,
 )
-from evidence import flaky_cases, summarize
+from evidence import reproduced_cases, summarize
 from github import GitHub, correlated_run, dispatch_title, owned_run, state_branch
 from preparation import prepare_inputs
 from reporting import console_json, detail, diagnostic, findings
@@ -162,7 +162,8 @@ class Controller:
         validate_worker_target(target)
         integer(runners, 3)
         integer(iterations, 10)
-        require(mode in {"single", "project"} and (mode != "project" or target["quarantined"]),
+        require(isinstance(mode, str) and mode in {"single", "project"}
+                and (mode != "project" or target["quarantined"]),
                 "Project escalation requires a quarantined test")
         reserve(state, "workers")
         reserve(state, "runner_iterations", runners * iterations * len(target["oses"]))
@@ -185,13 +186,10 @@ class Controller:
         state["phase"] = "worker"
         return self.save(state, intent)
 
-    def baseline(self, state, revision, reason):
-        rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-        if len(rounds) >= 3:
-            raise BudgetExceeded("Baseline round budget exhausted")
-        mode = "project" if len(rounds) == 2 and state["target"]["quarantined"] else "single"
+    def baseline(self, state, revision, request):
         return self.dispatch_worker(
-            state, revision, "reproduce", 3, 3, mode, f"Baseline {len(rounds) + 1}/3 ({mode}): {reason}")
+            state, revision, "reproduce", request.get("runners", 3), request.get("iterations", 3),
+            request.get("mode", "single"), "Investigator requested hosted reproduction: " + request["explanation"])
 
     def proposal(self, state):
         run = owned_run(self.github.api(f"actions/runs/{state['agent']['id']}"), state["agent"])
@@ -223,7 +221,7 @@ class Controller:
                 "Workflow failure is not a target test failure")
         batch = {**copy.deepcopy(worker), **result}
         if worker["phase"] == "reproduce":
-            flaky_cases([*state["history"], batch], state["base_sha"])
+            reproduced_cases([*state["history"], batch], state["base_sha"])
         return batch
 
     def handle(self, state, revision, proposal):
@@ -232,39 +230,10 @@ class Controller:
             "explanation": proposal["explanation"], "evidence_read": proposal["evidence_read"],
         })
         action = proposal["action"]
-        if action == "select" or "local_precheck" in proposal:
+        require(action != "select", "Selection alone is not a handoff; request reproduce, repair or finish")
+        if "selection" in proposal or "local_precheck" in proposal:
             state["notes"][-1]["local_precheck"] = local_precheck(proposal.get("local_precheck"))
-        if action == "finish":
-            outcome = proposal.get("outcome")
-            require(isinstance(outcome, str) and outcome in TERMINAL - {"cancelled"}, "Unknown terminal finding")
-            if outcome == "not-reproduced":
-                rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-                require(state["target"] and state["candidate"] is None and len(rounds) == 3 and all(
-                    item["source_sha"] == state["base_sha"] and item["failed"] == 0
-                    and item["passed"] >= 9 * len(state["target"]["oses"])
-                    and item["runners"] == 3 and item["iterations"] == 3
-                    and item["mode"] == ("project" if index == 2 and state["target"]["quarantined"] else "single")
-                    for index, item in enumerate(rounds)), "not-reproduced requires three clean baseline policy rounds")
-            if outcome == "verified":
-                candidate = state["candidate"]
-                require(candidate and proposal.get("reviewed_candidate_sha") == candidate["sha"],
-                        "Final source review must name the exact candidate")
-                baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
-                verified = [item for item in state["history"]
-                            if item["phase"] == "verify" and item["source_sha"] == candidate["sha"]]
-                reproduced = flaky_cases(baseline, state["base_sha"])
-                require(reproduced, "A flaky baseline requires matching target case and OS passes and failures")
-                require(verified and verified[-1]["failed"] == 0
-                        and verified[-1]["passed"] >= 9
-                        and verified[-1]["mode"] == next(item["mode"] for item in reversed(baseline) if item["failed"]),
-                        "Final candidate needs nine target passes in the reproduced mode")
-                covered = {(case["os"], case["name"], case["test_id"]) for case in verified[-1].get("cases", [])
-                           if "test_id" in case and case["passed"] >= 9 and case["failed"] == 0}
-                require(reproduced <= covered, "Final candidate needs nine passes for each reproduced case and OS")
-                require_candidate_isolation()
-            analysis = terminal_analysis(proposal["analysis"]) if "analysis" in proposal else None
-            return self.finish(state, revision, outcome, proposal["explanation"], analysis)
-        if action == "select":
+        if "selection" in proposal:
             require(state["target"] is None, "Selection is immutable after enrollment")
             tree = self.github.tree(state["base_sha"])
             selected = proposal.get("selection", {})
@@ -299,16 +268,49 @@ class Controller:
             # No arbitrary agent shell command is forwarded to a trusted runner.
             state["local_precheck"] = state["notes"][-1]["local_precheck"]
             state["phase"] = "ready"
-            revision = self.save(state, revision, "Validated test selection and local precheck; start baseline directly.")
-            return self.baseline(state, revision, "validated selection; no extra model needed to request reproduction.")
+        if action == "finish":
+            outcome = proposal.get("outcome")
+            require(isinstance(outcome, str) and outcome in TERMINAL - {"cancelled"}, "Unknown terminal finding")
+            baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
+            if outcome == "not-reproduced":
+                require(state["target"] and state["candidate"] is None and all(
+                    item["source_sha"] == state["base_sha"] and item["failed"] == 0 for item in baseline),
+                    "not-reproduced cannot contradict an accepted target failure or existing candidate")
+            if outcome == "verified":
+                candidate = state["candidate"]
+                require(candidate and state["target"] and proposal.get("reviewed_candidate_sha") == candidate["sha"],
+                        "Final source review must name the exact candidate")
+                verified = [item for item in state["history"]
+                            if item["phase"] == "verify" and item["source_sha"] == candidate["sha"]]
+                mode = "project" if candidate.get("mode") == "project" or any(
+                    item["mode"] == "project" for item in baseline) else "single"
+                require(verified and verified[-1]["failed"] == 0
+                        and verified[-1]["passed"] >= 9 * len(state["target"]["oses"])
+                        and verified[-1]["actual_tests"] >= verified[-1]["passed"]
+                        and verified[-1]["mode"] == mode,
+                        "Final candidate needs nine target passes per selected OS in the requested/reproduced mode")
+                cases = verified[-1].get("cases", [])
+                covered = {(case["os"], case["name"], case["test_id"]) for case in cases
+                           if "test_id" in case and case["passed"] >= 9 and case["failed"] == 0}
+                require(cases and len(covered) == len(cases)
+                        and {case[0] for case in covered} == set(state["target"]["oses"])
+                        and reproduced_cases(baseline, state["base_sha"]) <= covered,
+                        "Final candidate needs nine passes for each reproduced case and OS, "
+                        "and every selected verification case and OS")
+                require_candidate_isolation()
+            analysis = terminal_analysis(proposal["analysis"]) if "analysis" in proposal else None
+            return self.finish(state, revision, outcome, proposal["explanation"], analysis)
         require(state["target"] is not None, "A validated test must be selected first")
         if action == "reproduce":
             require(state["candidate"] is None, "Cannot restart baseline after publishing a candidate")
-            return self.baseline(state, revision, "validated model request for further reproduction.")
+            return self.baseline(state, revision, proposal)
         require(action == "repair", "Unsupported action")
-        baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
-        require(flaky_cases(baseline, state["base_sha"]),
-                "Do not repair an unreproduced test: the same case and OS need passes and matching failures")
+        contention = (any(item["mode"] == "project" for item in state["history"])
+                      or (state["candidate"] is not None and state["candidate"].get("mode") == "project"))
+        mode = proposal.get("mode", "project" if contention else "single")
+        require(isinstance(mode, str) and mode in {"single", "project"}
+                and (mode != "project" or state["target"]["quarantined"])
+                and (not contention or mode == "project"), "Candidate verification must retain required contention")
         text(proposal.get("diagnosis"), 12000)
         files = proposal.get("files")
         require(isinstance(files, dict), "Repair requires full proposed file contents")
@@ -328,7 +330,7 @@ class Controller:
         state["candidate"] = {
             "sha": self.github.commit(state["base_sha"], files,
                                       f"fix: stabilize {state['target']['method']}"),
-            "paths": sorted(files), "diagnosis": proposal["diagnosis"],
+            "paths": sorted(files), "diagnosis": proposal["diagnosis"], "mode": mode,
         }
         revision = self.save(state, revision)
         return self.advance(state, revision)
@@ -600,13 +602,10 @@ class Controller:
                     state, revision, "budget-exhausted", f"Owned {state['phase']} absolute deadline expired.")
         if state["phase"] == "candidate-ready":
             baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
-            mode = next(item["mode"] for item in reversed(baseline) if item["failed"])
+            mode = "project" if state["candidate"].get("mode") == "project" or any(
+                item["mode"] == "project" for item in baseline) else "single"
             return self.dispatch_worker(state, revision, "verify", 3, 3, mode)
         if state["phase"] == "ready":
-            rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-            if state["target"] and state["candidate"] is None and len(rounds) < 3 \
-                    and all(item["failed"] == 0 for item in rounds):
-                return self.baseline(state, revision, "validated selection/clean baseline; continue without a model.")
             if state["used"]["models"] >= LIMITS["models"]:
                 return self.finish(state, revision, "budget-exhausted", "Fresh model phase budget exhausted.")
             return self.dispatch_agent(state, revision)
@@ -624,9 +623,6 @@ class Controller:
         revision = self.save(state, revision, f"Accepted {result['phase']}/{result['mode']} evidence: "
                              f"{result['passed']} target passes, {result['failed']} target failures; "
                              f"{result['actual_tests']} actual tests.")
-        rounds = [item for item in state["history"] if item["phase"] == "reproduce"]
-        if result["phase"] == "reproduce" and all(item["failed"] == 0 for item in rounds) and len(rounds) < 3:
-            return self.baseline(state, revision, "previous clean baseline; continue the fixed policy without a model.")
         return revision
 
 

@@ -319,6 +319,10 @@ def validate_checkpoint(state, issue):
         for path in paths:
             source_path(path)
         text(candidate.get("diagnosis"))
+        if "mode" in candidate:
+            require(isinstance(candidate["mode"], str) and candidate["mode"] in {"single", "project"}
+                    and target is not None and (candidate["mode"] != "project" or target["quarantined"]),
+                    "Malformed candidate verification mode")
     if state["phase"] == "candidate-ready":
         require(candidate is not None, "Missing candidate identity")
     if "repair_scope" in state:

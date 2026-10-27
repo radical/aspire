@@ -48,13 +48,13 @@ def fallback(state, controller_reason):
         "not-flaky": "The investigation did not establish a supported flaky-test defect.",
         "ambiguous": "The issue did not identify one supported test and failure.",
         "infrastructure": "Infrastructure prevented trustworthy target reproduction or verification.",
-        "not-reproduced": "No matching flaky baseline was established; a speculative fix was not published.",
+        "not-reproduced": "The reported failure was not reproduced in the available investigation; no verified fix was published.",
         "budget-exhausted": "The investigation reached its finite budget without a verified fix.",
         "cancelled": "A maintainer cancelled the investigation before a verified fix was published.",
         "blocked": "The investigation could not establish a verified fix.",
     }
     next_actions = {
-        "not-flaky": "Have a maintainer confirm whether this is a deterministic defect or a non-test issue.",
+        "not-flaky": "Have a maintainer confirm whether the report identifies a supported test failure.",
         "ambiguous": "Provide the exact test, affected environment and original failure evidence for maintainer review.",
         "infrastructure": "Resolve the recorded infrastructure blocker before authorizing further execution.",
         "not-reproduced": "Review the issue's environment and historical failures before authorizing further reproduction.",
