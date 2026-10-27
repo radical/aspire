@@ -47,7 +47,7 @@
     "reason": "Controlled lifecycle fault fixture; no test ran"
   },
   "outcome": null,
-  "updated_at": "2026-10-27T01:45:41.211862+00:00",
+  "updated_at": "2026-10-27T01:46:36.483918+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -63,6 +63,11 @@
       "phase": "worker-intent",
       "reason": "Baseline 1/3 (single): validated selection; no extra model needed to request reproduction.",
       "at": "2026-10-27T01:45:41.211862+00:00"
+    },
+    {
+      "phase": "worker-intent",
+      "reason": "Reserved worker execution; dispatch receipt not yet persisted.",
+      "at": "2026-10-27T01:46:36.483918+00:00"
     }
   ],
   "repair_scope": [
@@ -102,5 +107,14 @@
     "mode": "single",
     "branch": "ankj/flaky-test-152-run-1",
     "deadline_at": "2026-10-27T03:15:41.211842+00:00"
+  },
+  "dispatch_recovery": {
+    "kind": "worker",
+    "revision": "20634afc2b78f6a2ca0057aee6faee702bb5c277",
+    "requested_at": "2026-10-27T01:45:41.211862+00:00",
+    "observed_ids": [],
+    "confirmed": false,
+    "outcome": null,
+    "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed."
   }
 }
