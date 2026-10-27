@@ -47,7 +47,7 @@
     "reason": "Controlled lifecycle fault fixture; no test ran"
   },
   "outcome": null,
-  "updated_at": "2026-10-27T01:46:36.483918+00:00",
+  "updated_at": "2026-10-27T01:46:39.081914+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -68,6 +68,11 @@
       "phase": "worker-intent",
       "reason": "Reserved worker execution; dispatch receipt not yet persisted.",
       "at": "2026-10-27T01:46:36.483918+00:00"
+    },
+    {
+      "phase": "worker-intent",
+      "reason": "Reserved worker execution; dispatch receipt not yet persisted.",
+      "at": "2026-10-27T01:46:39.081914+00:00"
     }
   ],
   "repair_scope": [
@@ -112,7 +117,9 @@
     "kind": "worker",
     "revision": "20634afc2b78f6a2ca0057aee6faee702bb5c277",
     "requested_at": "2026-10-27T01:45:41.211862+00:00",
-    "observed_ids": [],
+    "observed_ids": [
+      40434485367
+    ],
     "confirmed": false,
     "outcome": null,
     "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed."
