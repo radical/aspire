@@ -18,15 +18,30 @@
   "history": [],
   "notes": [],
   "candidate": null,
-  "target": null,
+  "target": {
+    "source": "tests/Aspire.Hosting.Tests/SlimTestProgramTests.cs",
+    "project": "tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj",
+    "class_name": "Aspire.Hosting.Tests.SlimTestProgramTests",
+    "method": "TestProjectStartsAndStopsCleanly",
+    "oses": [
+      "ubuntu-latest"
+    ],
+    "failure_signature": "TaskCanceledException",
+    "quarantined": false
+  },
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T04:51:45.095998+00:00",
+  "updated_at": "2026-10-27T04:51:47.134630+00:00",
   "transitions": [
     {
       "phase": "ready",
       "reason": "Validated inputs/evidence ready for the next decision.",
       "at": "2026-10-27T04:51:45.095998+00:00"
+    },
+    {
+      "phase": "ready",
+      "reason": "Manually enrolled fixed trusted source for one worker-only integration trial; no model selection.",
+      "at": "2026-10-27T04:51:47.134630+00:00"
     }
   ]
 }
