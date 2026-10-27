@@ -26,7 +26,8 @@ SOCKET = Path("/var/run/docker.sock")
 CURL = "/usr/bin/curl"
 LIMIT = 16384
 VERSION_SECONDS = 60
-VERSION_SUFFIX_BYTES = 8192
+# Allow the pinned CLI's 13,521-byte help output to fit within one bounded stream.
+VERSION_SUFFIX_BYTES = 16384
 VERSION_READ_LIMIT = 64 * 1024 * 1024
 COMMAND = ["-i", "PATH=/usr/bin:/bin", "HOME=/home/awfuser", "TMPDIR=/tmp",
            "LANG=C.UTF-8", "/package/copilot", "--help"]
@@ -278,7 +279,7 @@ def main(argv=None):
             or stat.S_IMODE(ready_info.st_mode) != 0o700 or args.ready_file.exists()):
         raise Failure("unsafe-ready-boundary")
     directory(args.output)
-    receipt = {"profile": "credential-free-linux-cli-help-tail-v1",
+    receipt = {"profile": "credential-free-linux-cli-help-tail-v2",
                "status": "rejected", "stage": "setup", "reason": "not-completed",
                "controller_exit_status": 70, "literal_command_exit_status": None,
                "capture_transport_exit_status": None, "capture_termination": "not-started",
