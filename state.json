@@ -16,17 +16,75 @@
     "runner_iterations": 0
   },
   "history": [],
-  "notes": [],
+  "notes": [
+    {
+      "run_id": null,
+      "action": "select",
+      "explanation": "Controlled lifecycle fault fixture; no test ran",
+      "evidence_read": [
+        "Fork main SlimTestProgramTests.cs; controlled hung-child fixture"
+      ],
+      "local_precheck": {
+        "status": "skipped",
+        "reason": "Controlled lifecycle fault fixture; no test ran"
+      }
+    }
+  ],
   "candidate": null,
-  "target": null,
-  "local_precheck": null,
+  "target": {
+    "source": "tests/Aspire.Hosting.Tests/SlimTestProgramTests.cs",
+    "project": "tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj",
+    "class_name": "Aspire.Hosting.Tests.SlimTestProgramTests",
+    "method": "TestProjectStartsAndStopsCleanly",
+    "oses": [
+      "ubuntu-latest"
+    ],
+    "failure_signature": "Controlled lifecycle fault fixture; no test ran",
+    "quarantined": false
+  },
+  "local_precheck": {
+    "status": "skipped",
+    "reason": "Controlled lifecycle fault fixture; no test ran"
+  },
   "outcome": null,
-  "updated_at": "2026-10-27T01:45:30.200998+00:00",
+  "updated_at": "2026-10-27T01:45:39.014415+00:00",
   "transitions": [
     {
       "phase": "ready",
       "reason": "Validated inputs/evidence ready for the next decision.",
       "at": "2026-10-27T01:45:30.200998+00:00"
+    },
+    {
+      "phase": "ready",
+      "reason": "Validated test selection and local precheck; start baseline directly.",
+      "at": "2026-10-27T01:45:39.014415+00:00"
     }
+  ],
+  "repair_scope": [
+    "src/Aspire.Dashboard/",
+    "src/Aspire.Hosting.Analyzers/",
+    "src/Aspire.Hosting.AppHost/",
+    "src/Aspire.Hosting.Azure.AppContainers/",
+    "src/Aspire.Hosting.Azure.ContainerRegistry/",
+    "src/Aspire.Hosting.Azure.OperationalInsights/",
+    "src/Aspire.Hosting.Azure/",
+    "src/Aspire.Hosting.DevTunnels/",
+    "src/Aspire.Hosting.JavaScript/",
+    "src/Aspire.Hosting.Python/",
+    "src/Aspire.Hosting.Tasks/",
+    "src/Aspire.Hosting.Testing/",
+    "src/Aspire.Hosting.Yarp/",
+    "src/Aspire.Hosting/",
+    "src/Aspire.TypeSystem/",
+    "tests/Aspire.Components.Common.TestUtilities/",
+    "tests/Aspire.Hosting.TestUtilities/",
+    "tests/Aspire.Hosting.Tests/",
+    "tests/Aspire.TestUtilities/",
+    "tests/testproject/TestProject.AppHost/",
+    "tests/testproject/TestProject.IntegrationServiceA/",
+    "tests/testproject/TestProject.ServiceA/",
+    "tests/testproject/TestProject.ServiceB/",
+    "tests/testproject/TestProject.ServiceC/",
+    "tests/testproject/TestProject.WorkerA/"
   ]
 }
