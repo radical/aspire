@@ -21,7 +21,7 @@
   "target": null,
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T02:09:30.372180+00:00",
+  "updated_at": "2026-10-27T02:11:10.955742+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -47,13 +47,18 @@
       "phase": "agent",
       "reason": "Recovered exact full-intent dispatch; no dispatch was repeated.",
       "at": "2026-10-27T02:09:30.372180+00:00"
+    },
+    {
+      "phase": "agent",
+      "reason": "fixture-seeded expired child deadline",
+      "at": "2026-10-27T02:11:10.955742+00:00"
     }
   ],
   "agent": {
     "sha": "026b4e416f79bc1f5b329158e2d9807312783682",
     "workflow": "reproduce-flaky-tests.yml",
     "branch": "ankj/flaky-test-154-agent-1",
-    "deadline_at": "2026-10-27T02:37:10.379580+00:00",
+    "deadline_at": "2026-10-27T02:11:09.955718+00:00",
     "id": 40436582345,
     "revision": "764d85e438b62470b07d3148fef0c6d3ef7265f5"
   },
