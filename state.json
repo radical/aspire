@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 155,
   "issue_url": "https://github.com/radical/aspire/issues/155",
-  "phase": "ready",
+  "phase": "worker-intent",
   "created_at": "2026-10-27T04:51:45.095818+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "5c2ee96d64fbe1b82047648253df2772a5a4dee4",
@@ -11,9 +11,9 @@
   "agent_workflow": "reproduce-flaky-tests.yml",
   "used": {
     "models": 0,
-    "workers": 0,
+    "workers": 1,
     "fixes": 0,
-    "runner_iterations": 0
+    "runner_iterations": 1
   },
   "history": [],
   "notes": [],
@@ -31,7 +31,7 @@
   },
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T04:51:47.134630+00:00",
+  "updated_at": "2026-10-27T04:52:57.088075+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -42,6 +42,22 @@
       "phase": "ready",
       "reason": "Manually enrolled fixed trusted source for one worker-only integration trial; no model selection.",
       "at": "2026-10-27T04:51:47.134630+00:00"
+    },
+    {
+      "phase": "worker-intent",
+      "reason": "One corrected-runner RC1 integration iteration, not a policy baseline round.",
+      "at": "2026-10-27T04:52:57.088075+00:00"
     }
-  ]
+  ],
+  "worker": {
+    "sha": "5c2ee96d64fbe1b82047648253df2772a5a4dee4",
+    "source_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+    "workflow": "reproduce-flaky-tests.yml",
+    "phase": "reproduce",
+    "runners": 1,
+    "iterations": 1,
+    "mode": "single",
+    "branch": "ankj/flaky-test-155-run-1",
+    "deadline_at": "2026-10-27T06:22:57.087906+00:00"
+  }
 }
