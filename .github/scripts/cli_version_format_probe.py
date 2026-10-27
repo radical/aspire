@@ -31,7 +31,8 @@ VERSION_READ_LIMIT = 64 * 1024 * 1024
 COMMAND = ["-i", "PATH=/usr/bin:/bin", "HOME=/home/awfuser", "TMPDIR=/tmp",
            "LANG=C.UTF-8", "/package/copilot", "--version"]
 TMPFS = {"/tmp": "rw,nosuid,nodev,size=32m,mode=1777",
-         "/home/awfuser": "rw,nosuid,nodev,size=32m,mode=0700,uid=1000,gid=1000"}
+         # The pinned CLI extracts its ~157 MiB package cache under HOME even for --version.
+         "/home/awfuser": "rw,nosuid,nodev,size=256m,mode=0700,uid=1000,gid=1000"}
 
 
 class Failure(Exception):
