@@ -368,8 +368,41 @@ def validate_checkpoint(state, issue):
                 and type(cancellation.get("confirmed")) is bool, "Malformed cancellation outcome/receipt")
         text(cancellation.get("reason"))
         timestamp(cancellation.get("requested_at"))
-    if state["phase"] in {"cancelling", "cleanup-pending"}:
+    if "dispatch_recovery" in state:
+        recovery = state["dispatch_recovery"]
+        require(isinstance(recovery, dict) and {
+            "kind", "revision", "requested_at", "observed_ids", "confirmed", "outcome", "reason",
+        } <= recovery.keys() and isinstance(recovery.get("kind"), str)
+                and recovery["kind"] in {"agent", "worker"} and recovery["kind"] in state
+                and type(recovery.get("confirmed")) is bool, "Malformed dispatch recovery")
+        sha(recovery.get("revision"))
+        timestamp(recovery.get("requested_at"))
+        text(recovery.get("reason"))
+        require(recovery.get("outcome") is None or isinstance(recovery["outcome"], str)
+                and recovery["outcome"] in {"blocked", "cancelled", "budget-exhausted"},
+                "Malformed dispatch recovery outcome")
+        observed = recovery.get("observed_ids")
+        require(isinstance(observed, list) and len(observed) <= 100, "Malformed discovered dispatch IDs")
+        for run_id in observed:
+            integer(run_id, 10 ** 15)
+        require(len(set(observed)) == len(observed), "Duplicate discovered dispatch IDs")
+        if recovery["confirmed"]:
+            require(observed, "Dispatch confirmation requires an observed exact run")
+            if len(observed) == 1:
+                require(state[recovery["kind"]].get("id") == observed[0],
+                        "Recovered child differs from the observed exact run")
+            else:
+                require(state["phase"] in {"publication-intent", "terminal"},
+                        "Ambiguous dispatch confirmation cannot resume work")
+        else:
+            require("id" not in state[recovery["kind"]]
+                    and state["phase"] in {recovery["kind"] + "-intent", "cleanup-pending", "publication-intent"},
+                    "Unconfirmed dispatch ownership cannot advance work")
+    if state["phase"] == "cancelling":
         require("cancellation" in state, "Missing cancellation reconciliation receipt")
+    if state["phase"] == "cleanup-pending":
+        require(any(state.get(key, {}).get("confirmed") is False
+                    for key in ("cancellation", "dispatch_recovery")), "Missing cleanup reconciliation receipt")
     if state.get("outcome") is not None:
         require(isinstance(state["outcome"], str) and state["outcome"] in TERMINAL, "Malformed terminal outcome")
     if state.get("analysis") is not None:

@@ -7,8 +7,9 @@ from pathlib import PurePosixPath
 import re
 import subprocess
 import zipfile
+from urllib.parse import urlencode
 
-from contracts import REPOSITORY, require, sha, validate_checkpoint
+from contracts import REPOSITORY, integer, require, sha, timestamp, validate_checkpoint
 
 
 TRAILER = "\n\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>\n"
@@ -123,6 +124,28 @@ class GitHub:
                 "Dispatch has no run-ID receipt; inspect the persisted intent, do not retry")
         return value["workflow_run_id"]
 
+    def dispatch_candidates(self, owned, title, requested_at, now):
+        # REST exposes display_title, not dispatch inputs. Both workflows embed
+        # the full immutable intent SHA, e.g. "Flaky reproduction <issue> [<sha>]".
+        # A complete bounded response is required; never choose the newest run.
+        # https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow
+        query = urlencode({
+            "branch": owned["branch"], "event": "workflow_dispatch", "head_sha": owned["sha"],
+            "created": requested_at.replace(microsecond=0).isoformat() + ".." + now.isoformat(),
+            "per_page": 100,
+        })
+        value = self.api(f"actions/workflows/{owned['workflow']}/runs?{query}")
+        require(isinstance(value, dict), "Malformed dispatch discovery response")
+        count = integer(value.get("total_count"), 100, minimum=0)
+        runs = value.get("workflow_runs")
+        require(isinstance(runs, list) and len(runs) == count, "Incomplete dispatch discovery response")
+        seen = set()
+        for run in runs:
+            correlated_run(run, owned, title, requested_at, now)
+            require(run["id"] not in seen, "Duplicate dispatch discovery record")
+            seen.add(run["id"])
+        return runs
+
     def artifact(self, run_id, name, maximum=15000000):
         artifacts = self.pages(f"actions/runs/{run_id}/artifacts", "artifacts")
         matches = [item for item in artifacts if not item["expired"] and (
@@ -150,11 +173,34 @@ def state_branch(issue):
 
 
 def owned_run(run, owned):
-    require(run.get("id") == owned["id"] and run.get("run_attempt") == 1
+    require(isinstance(run, dict) and isinstance(run.get("head_repository"), dict)
+            and run.get("id") == owned["id"] and run.get("run_attempt") == 1
             and run.get("head_sha") == owned["sha"]
             and run.get("head_branch") == owned["branch"]
             and run.get("event") == "workflow_dispatch"
             and run.get("path") == f".github/workflows/{owned['workflow']}"
             and run.get("head_repository", {}).get("full_name") == REPOSITORY,
             "Run identity/attempt does not match the owned dispatch")
+    return run
+
+
+def dispatch_title(kind, issue_url, revision):
+    require(kind in {"agent", "worker"}, "Unknown dispatch kind")
+    return f"Flaky {'investigator' if kind == 'agent' else 'reproduction'} {issue_url} [{sha(revision)}]"
+
+
+def correlated_run(run, owned, title, requested_at, now):
+    require(isinstance(run, dict), "Malformed dispatch discovery record")
+    run_id = integer(run.get("id"), 10 ** 15)
+    owned_run(run, {**owned, "id": owned.get("id", run_id)})
+    require(isinstance(run.get("repository"), dict)
+            and run["repository"].get("full_name") == REPOSITORY
+            and run.get("display_title") == title, "Dispatch repository/intent correlation mismatch")
+    # GitHub serializes created_at to seconds; the persisted intent has
+    # microseconds. A run created in that same second must remain discoverable.
+    require(requested_at.replace(microsecond=0) <= timestamp(run.get("created_at")) <= now,
+            "Dispatch creation time is outside the intent window")
+    require(isinstance(run.get("status"), str) and run["status"] in
+            {"queued", "in_progress", "completed", "waiting", "pending", "requested"},
+            "Unknown discovered run status")
     return run

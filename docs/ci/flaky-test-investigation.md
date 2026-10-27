@@ -133,8 +133,39 @@ to `microsoft/aspire`.
 The controller records a dispatch intent before calling the API and captures
 `return_run_details.workflow_run_id` from the response. It never finds a run by
 looking up the latest run. If a dispatch succeeded but its receipt/checkpoint
-was lost, recovery stops with an explicit blocker instead of dispatching twice.
-Rerun attempts and foreign workflow/source/repository identities are rejected.
+was lost, recovery preserves the original immutable intent revision and time
+before querying the workflow's runs. A complete response of at most 100 records
+is required. Recovery verifies the exact repository and head repository,
+workflow, unique owned ref, pinned workflow SHA, dispatch event, attempt one,
+creation window, and full `display_title` correlation:
+
+```text
+Flaky reproduction {exact issue URL} [{full investigation_revision SHA}]
+Flaky investigator {exact issue URL} [{full state_revision SHA}]
+```
+
+These are exact string matches, not prefixes or extracted dispatch inputs;
+the runs API does not expose those inputs. The reproduction workflow emits
+the first title for investigation inputs, while ordinary manual reproduction
+retains `Reproduce Flaky Tests`. The compiled investigator emits the second.
+Runtime source and configuration must still match the original intent.
+
+One uniquely correlated run restores its exact ID without another dispatch,
+budget reservation or model phase. A recovered agent retains the original
+proposal revision. Resumes do not refresh child deadlines. Missing runs get
+five minutes for visibility before a blocked finding; cancellation and
+expired budgets do not wait for that grace period.
+
+Zero matches, duplicate/foreign records, incomplete responses, lookup failures,
+or multiple correlated runs never prove that no child is active. The controller
+posts at most one finding and retains `cleanup-pending`; independent recovery
+continues after the task budget expires. A later unique match after a blocker
+is cleanup-only, not permission to accept evidence or restart work.
+Ambiguous runs are not automatically cancelled. Every previously observed
+exact run ID must be confirmed completed before ambiguous cleanup can finish.
+If ownership remains unknowable, restore API access or inspect the immutable
+intent and matching runs manually; absence alone cannot terminate recovery.
+Already-terminal checkpoints from older implementations are not migrated.
 
 Issue text, comments, source, logs and model output are untrusted. They cannot
 authorize arbitrary shell, refs, workflows, feeds or credentials. Discovery
@@ -251,6 +282,8 @@ prevent other recovery issues from advancing, but the sweep still fails visibly.
 cannot be read, recovery cannot safely cancel the run; restore access or inspect
 the exact checkpointed run manually. Missing evidence alone is not a trusted
 runner-loss diagnosis and does not trigger an automatic infrastructure retry.
+Uncertain finding publication is reconciled by bot-authored marker, never
+reposted merely because dispatch cleanup later completes.
 
 CLI E2E selections stop before dispatch with an actionable blocker because their
 prebuilt runtime images are not candidate-aware. Existing manual CLI E2E

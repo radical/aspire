@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 import zipfile
 
 from contracts import (
@@ -106,6 +107,8 @@ class FakeGitHub:
         self.comments = []
         self.pulls = []
         self.fail_dispatch = False
+        self.interrupt_dispatch = False
+        self.run_listing = None
 
     def api(self, endpoint, body=None, method=None):
         self.calls.append((endpoint, body, method))
@@ -113,6 +116,10 @@ class FakeGitHub:
             return copy.deepcopy(ISSUE)
         if endpoint == "git/ref/heads/main":
             return {"object": {"sha": BASE}}
+        if endpoint.startswith("actions/workflows/") and "/runs?" in endpoint:
+            return copy.deepcopy(self.run_listing if self.run_listing is not None else {
+                "total_count": len(self.runs), "workflow_runs": list(self.runs.values()),
+            })
         if endpoint.startswith("actions/runs/") and not endpoint.endswith("/cancel"):
             return copy.deepcopy(self.runs[int(endpoint.rsplit("/", 1)[1])])
         if endpoint.endswith("/cancel"):
@@ -170,9 +177,19 @@ class FakeGitHub:
             "id": run_id, "head_sha": self.refs[branch], "head_branch": branch,
             "run_attempt": 1, "event": "workflow_dispatch",
             "path": ".github/workflows/" + workflow, "head_repository": {"full_name": REPOSITORY},
+            "repository": {"full_name": REPOSITORY}, "created_at": NOW.isoformat(),
+            "display_title": (
+                f"Flaky investigator {inputs['issue_url']} [{inputs['state_revision']}]"
+                if "state_revision" in inputs else
+                f"Flaky reproduction {inputs['investigation_issue_url']} [{inputs['investigation_revision']}]"),
             "status": "in_progress", "conclusion": None,
         }
+        if self.interrupt_dispatch:
+            raise SystemExit(137)
         return run_id
+
+    def dispatch_candidates(self, *args):
+        return GitHub.dispatch_candidates(self, *args)
 
     def artifact(self, run_id, name, maximum=None):
         return self.artifacts[(run_id, name)]
@@ -637,15 +654,13 @@ class OrchestrationTests(unittest.TestCase):
                 self.assertNotIn("Model analysis (not independently established)", body)
 
     def test_budget_cancellation_and_uncertain_intent_have_actionable_fallbacks(self):
-        for reason in ("time", "models", "cancel", "intent"):
+        for reason in ("time", "models", "cancel"):
             with self.subTest(reason=reason):
                 self.setUp()
                 if reason == "time":
                     self.state["created_at"] = (NOW - timedelta(hours=12)).isoformat()
                 elif reason == "models":
                     self.state["used"]["models"] = 8
-                elif reason == "intent":
-                    self.state["phase"] = "worker-intent"
                 self.controller.advance(self.state, self.revision, cancel=reason == "cancel")
                 body = self.github.comments[0]["body"]
                 self.assertIn("**Why no verified fix:**", body)
@@ -709,7 +724,7 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.controller.dispatch_worker(self.state, self.revision, "reproduce", 1, 1, "single")
         state, revision = self.live()
-        self.controller.advance(state, revision)
+        Controller(self.github, lambda: NOW + timedelta(minutes=6)).advance(state, revision)
         rejected = self.github.state["rejected_attempts"][0]
         self.assertEqual("worker-intent", rejected["phase"])
         self.assertEqual(CONTROL, rejected["sha"])
@@ -911,15 +926,335 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Nonfastforward"):
             self.controller.save(state2, self.revision)
 
-    def test_lost_dispatch_receipt_recovers_to_finite_blocker_without_redispatch(self):
+    def test_missing_dispatch_receipt_reports_blocker_but_keeps_cleanup_live_without_redispatch(self):
         self.github.fail_dispatch = True
         with self.assertRaisesRegex(ValueError, "receipt"):
             self.controller.advance(self.state, self.revision)
         state, revision = self.live()
         self.assertEqual("agent-intent", state["phase"])
-        self.controller.advance(state, revision)
+        Controller(self.github, lambda: NOW + timedelta(minutes=6)).advance(state, revision)
         self.assertEqual("blocked", self.github.state["outcome"])
+        self.assertEqual("cleanup-pending", self.github.state["phase"])
         self.assertEqual(1, len([call for call in self.github.calls if call[0] == "dispatch"]))
+
+    def interrupted_dispatch(self, kind):
+        if kind == "worker":
+            self.selected()
+        self.github.interrupt_dispatch = True
+        with self.assertRaises(SystemExit) as stopped:
+            if kind == "worker":
+                self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+            else:
+                self.controller.dispatch_agent(self.state, self.revision)
+        self.assertEqual(137, stopped.exception.code)
+        self.github.interrupt_dispatch = False
+        state, revision = self.live()
+        self.assertEqual(kind + "-intent", state["phase"])
+        self.assertNotIn("id", state[kind])
+        return state, revision, next(iter(self.github.runs))
+
+    def test_receipt_loss_recovers_exact_correlated_child_then_cancels_once_and_confirms_stop(self):
+        for kind in ("agent", "worker"):
+            with self.subTest(kind=kind):
+                self.setUp()
+                state, intent, run_id = self.interrupted_dispatch(kind)
+                budgets = copy.deepcopy(state["used"])
+                Controller(self.github, lambda: NOW + timedelta(seconds=20)).advance(state, intent)
+                state, revision = self.live()
+                self.assertEqual(kind, state["phase"])
+                self.assertEqual(run_id, state[kind].get("id"))
+                if kind == "agent":
+                    self.assertEqual(intent, state[kind]["revision"])
+                Controller(self.github, lambda: NOW + timedelta(minutes=1)).advance(state, revision, cancel=True)
+                state, revision = self.live()
+                self.assertEqual("cancelling", state["phase"])
+                Controller(self.github, lambda: NOW + timedelta(minutes=2)).advance(state, revision)
+                self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+                state, revision = self.live()
+                Controller(self.github, lambda: NOW + timedelta(minutes=3)).advance(state, revision)
+                self.assertEqual("terminal", self.github.state["phase"])
+                self.assertTrue(self.github.state["cancellation"]["confirmed"])
+                self.assertEqual("cancelled", self.github.state["outcome"])
+                self.assertEqual(budgets, self.github.state["used"])
+                self.assertEqual([], self.github.state["history"])
+                self.assertEqual(1, len(self.github.comments))
+                self.assertEqual(1, len([c for c in self.github.calls if c[0] == "dispatch"]))
+                self.assertEqual([f"actions/runs/{run_id}/cancel"],
+                                 [c[0] for c in self.github.calls if c[0].endswith("/cancel")])
+                for snapshot in self.github.snapshots.values():
+                    validate_checkpoint(snapshot, 123)
+
+    def test_receipt_lookup_zero_then_eventual_visibility_keeps_original_intent_authority(self):
+        self.controller = Controller(self.github, lambda: NOW.replace(microsecond=590960))
+        state, intent, run_id = self.interrupted_dispatch("agent")
+        self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+        Controller(self.github, lambda: NOW + timedelta(seconds=20)).advance(state, intent)
+        state, revision = self.live()
+        self.assertEqual("agent-intent", state["phase"])
+        self.assertEqual(intent, state["dispatch_recovery"]["revision"])
+        self.assertEqual([], self.github.comments)
+        self.github.run_listing = None
+        Controller(self.github, lambda: NOW + timedelta(seconds=40)).advance(state, revision)
+        state, _ = self.live()
+        self.assertEqual("agent", state["phase"])
+        self.assertEqual(run_id, state["agent"]["id"])
+        self.assertEqual(intent, state["agent"]["revision"])
+        lookup = [call[0] for call in self.github.calls if "/runs?" in call[0]][-1]
+        self.assertEqual({
+            "branch": ["ankj/flaky-test-123-agent-1"], "event": ["workflow_dispatch"], "head_sha": [CONTROL],
+            "created": ["2026-10-21T00:00:00+00:00..2026-10-21T00:00:40+00:00"], "per_page": ["100"],
+        }, parse_qs(urlsplit(lookup).query))
+        validate_checkpoint(state, 123)
+
+    def test_receipt_lookup_missing_after_grace_keeps_cleanup_live_until_late_child_stops(self):
+        state, intent, run_id = self.interrupted_dispatch("worker")
+        budgets = copy.deepcopy(state["used"])
+        self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+        later = Controller(self.github, lambda: NOW + timedelta(minutes=6))
+        later.advance(state, intent)
+        state, revision = self.live()
+        self.assertEqual("cleanup-pending", state["phase"])
+        self.assertFalse(state["dispatch_recovery"]["confirmed"])
+        self.assertEqual(1, len(self.github.comments))
+        later.advance(state, revision)
+        self.github.run_listing = None
+        state, revision = self.live()
+        later.advance(state, revision)
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        later.advance(state, revision)
+        self.assertEqual("terminal", self.github.state["phase"])
+        self.assertEqual(budgets, self.github.state["used"])
+        self.assertEqual([], self.github.state["history"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual(1, len([c for c in self.github.calls if c[0] == "dispatch"]))
+
+    def test_receipt_lookup_ambiguity_foreign_metadata_and_failure_never_end_cleanup(self):
+        for defect in ("duplicate", "two-runs", "foreign-sha", "foreign-repo", "foreign-head",
+                       "foreign-workflow", "foreign-ref", "foreign-event", "rerun", "missing-title",
+                       "wrong-intent", "wrong-issue", "old-created", "future-created",
+                       "truncated", "malformed", "lookup-error", "changed-direct-run"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                state, intent, run_id = self.interrupted_dispatch("worker")
+                item = copy.deepcopy(self.github.runs[run_id])
+                rows = [item]
+                changes = {
+                    "foreign-sha": {"head_sha": BASE},
+                    "foreign-repo": {"repository": {"full_name": "foreign/aspire"}},
+                    "foreign-head": {"head_repository": {"full_name": "foreign/aspire"}},
+                    "foreign-workflow": {"path": ".github/workflows/other.yml"},
+                    "foreign-ref": {"head_branch": "ankj/flaky-test-124-run-1"},
+                    "foreign-event": {"event": "push"}, "rerun": {"run_attempt": 2},
+                    "missing-title": {"display_title": "Reproduce Flaky Tests"},
+                    "wrong-intent": {"display_title": f"Flaky reproduction {URL} [{BASE}]"},
+                    "wrong-issue": {"display_title": f"Flaky reproduction {URL}4 [{intent}]"},
+                    "old-created": {"created_at": (NOW - timedelta(seconds=1)).isoformat()},
+                    "future-created": {"created_at": (NOW + timedelta(hours=1)).isoformat()},
+                }
+                item.update(changes.get(defect, {}))
+                if defect in {"duplicate", "two-runs"}:
+                    other = copy.deepcopy(item)
+                    if defect == "two-runs":
+                        other["id"] += 1
+                        self.github.runs[other["id"]] = other
+                    rows.append(other)
+                self.github.run_listing = {"total_count": 101 if defect == "truncated" else len(rows),
+                                           "workflow_runs": rows}
+                if defect == "malformed":
+                    self.github.run_listing["workflow_runs"] = [[]]
+                api = self.github.api
+                def transport(endpoint, body=None, method=None):
+                    if defect == "lookup-error" and "/runs?" in endpoint:
+                        raise subprocess.TimeoutExpired(["gh", "api"], 120)
+                    result = api(endpoint, body, method)
+                    if defect == "changed-direct-run" and endpoint.startswith("actions/runs/"):
+                        result["id"] += 1
+                    return result
+                for minute in (1, 7):
+                    state, revision = self.live()
+                    self.controller = Controller(self.github, lambda: NOW + timedelta(minutes=minute))
+                    with patch.object(self.github, "api", side_effect=transport):
+                        self.invoke_controller()
+                    self.assertEqual("cleanup-pending", self.github.state["phase"])
+                    self.assertNotIn("id", self.github.state["worker"])
+                    validate_checkpoint(self.github.state, 123)
+                self.assertEqual(1, len(self.github.comments))
+                self.assertFalse(any(c[0].endswith("/cancel") for c in self.github.calls))
+                self.assertEqual([], self.github.state["history"])
+                self.assertEqual(1, len([c for c in self.github.calls if c[0] == "dispatch"]))
+
+    def test_receipt_recovery_cancel_and_expiry_do_not_accept_results_or_reset_deadlines(self):
+        for kind in ("agent", "worker"):
+            for operation in ("cancel", "child-expiry", "overall-expiry"):
+                with self.subTest(kind=kind, operation=operation):
+                    self.setUp()
+                    state, intent, run_id = self.interrupted_dispatch(kind)
+                    deadline = state[kind]["deadline_at"]
+                    delay = 1 if operation == "cancel" else 91 if operation == "child-expiry" else 721
+                    later = Controller(self.github, lambda: NOW + timedelta(minutes=delay))
+                    later.advance(state, intent, cancel=operation == "cancel")
+                    state, revision = self.live()
+                    self.assertEqual("cancelling", state["phase"])
+                    self.assertEqual(deadline, state[kind]["deadline_at"])
+                    self.assertEqual(run_id, state["cancellation"]["run_id"])
+                    self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+                    later.advance(state, revision)
+                    self.assertEqual("terminal", self.github.state["phase"])
+                    self.assertEqual("cancelled" if operation == "cancel" else "budget-exhausted",
+                                     self.github.state["outcome"])
+                    self.assertEqual([], self.github.state["history"])
+                    self.assertEqual(1, len(self.github.comments))
+                    self.assertEqual(1, len([c for c in self.github.calls if c[0] == "dispatch"]))
+
+    def test_receipt_recovery_cannot_adopt_a_child_configuration_changed_after_the_original_intent(self):
+        state, intent, _ = self.interrupted_dispatch("worker")
+        self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+        self.controller.advance(state, intent)
+        state, revision = self.live()
+        state["worker"]["source_sha"] = "c" * 40
+        revision = self.controller.save(state, revision)
+        self.github.run_listing = None
+        self.invoke_controller()
+        self.assertEqual("cleanup-pending", self.github.state["phase"])
+        self.assertNotIn("id", self.github.state["worker"])
+        self.assertFalse(any(c[0].endswith("/cancel") for c in self.github.calls))
+
+    def test_dispatch_recovery_present_shapes_are_validated_before_the_sweep(self):
+        state, intent, _ = self.interrupted_dispatch("worker")
+        self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+        self.controller.advance(state, intent)
+        state, _ = self.live()
+        validate_checkpoint(state, 123)
+        for key, value in (("kind", []), ("outcome", []), ("confirmed", 1), ("confirmed", True),
+                           ("revision", "unknown"),
+                           ("requested_at", "today"), ("observed_ids", [True]), ("reason", [])):
+            with self.subTest(key=key):
+                malformed = copy.deepcopy(state)
+                malformed["dispatch_recovery"][key] = value
+                with self.assertRaises(ValueError):
+                    validate_checkpoint(malformed, 123)
+        for key in state["dispatch_recovery"]:
+            with self.subTest(missing=key):
+                malformed = copy.deepcopy(state)
+                del malformed["dispatch_recovery"][key]
+                with self.assertRaises(ValueError):
+                    validate_checkpoint(malformed, 123)
+
+    def test_ambiguous_dispatches_never_select_a_newest_run_and_cleanup_waits_for_every_observed_id(self):
+        state, intent, run_id = self.interrupted_dispatch("worker")
+        second = copy.deepcopy(self.github.runs[run_id])
+        second["id"] += 1
+        self.github.runs[second["id"]] = second
+        self.controller.advance(state, intent)
+        state, revision = self.live()
+        self.assertEqual("cleanup-pending", state["phase"])
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        self.github.run_listing = {"total_count": 1, "workflow_runs": [self.github.runs[run_id]]}
+        self.controller.advance(state, revision)
+        self.assertEqual("cleanup-pending", self.github.state["phase"])
+        self.github.runs[second["id"]].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        self.controller.advance(state, revision)
+        self.assertEqual("terminal", self.github.state["phase"])
+        self.assertTrue(self.github.state["dispatch_recovery"]["confirmed"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual([], self.github.state["history"])
+        self.assertFalse(any(c[0].endswith("/cancel") for c in self.github.calls))
+
+    def test_receipt_recovery_never_retries_uncertain_finding_after_eventual_owned_cleanup(self):
+        for delivered in (False, True):
+            with self.subTest(delivered=delivered):
+                self.setUp()
+                state, intent, run_id = self.interrupted_dispatch("worker")
+                self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+                later = Controller(self.github, lambda: NOW + timedelta(minutes=6))
+                api = self.github.api
+                posts = []
+                def transport(endpoint, body=None, method=None):
+                    if endpoint == "issues/123/comments" and body is not None:
+                        posts.append(body)
+                        if len(posts) == 1:
+                            if delivered:
+                                api(endpoint, body, method)
+                            raise SystemExit(137)
+                    return api(endpoint, body, method)
+                with patch.object(self.github, "api", side_effect=transport):
+                    with self.assertRaises(SystemExit):
+                        later.advance(state, intent)
+                    state, revision = self.live()
+                    self.assertEqual("publication-intent", state["phase"])
+                    later.advance(state, revision)
+                    state, revision = self.live()
+                    self.assertEqual("cleanup-pending", state["phase"])
+                    self.github.run_listing = None
+                    later.advance(state, revision)
+                    self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+                    state, revision = self.live()
+                    later.advance(state, revision)
+                self.assertEqual("terminal", self.github.state["phase"])
+                self.assertEqual(1, len(posts))
+                self.assertEqual(1 if delivered else 0, len(self.github.comments))
+                self.assertEqual(not delivered, self.github.state.get("publication_uncertain", False))
+                self.assertEqual([], self.github.state["history"])
+
+    def test_recovered_id_and_desired_cancel_survive_interruption_before_cancel_write(self):
+        state, intent, run_id = self.interrupted_dispatch("worker")
+        save = self.controller.save
+        def interrupt(state, revision, reason=None):
+            result = save(state, revision, reason)
+            if state["phase"] == "worker":
+                raise SystemExit(137)
+            return result
+        with patch.object(self.controller, "save", side_effect=interrupt), self.assertRaises(SystemExit):
+            self.controller.advance(state, intent, cancel=True)
+        state, revision = self.live()
+        self.assertEqual(run_id, state["worker"]["id"])
+        self.assertEqual("cancelled", state["dispatch_recovery"]["outcome"])
+        self.assertFalse(any(c[0].endswith("/cancel") for c in self.github.calls))
+        Controller(self.github, lambda: NOW + timedelta(minutes=1)).advance(state, revision)
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.assertEqual([f"actions/runs/{run_id}/cancel"],
+                         [c[0] for c in self.github.calls if c[0].endswith("/cancel")])
+
+    def test_missing_receipt_cancel_remains_desired_outcome_even_after_overall_expiry(self):
+        state, intent, run_id = self.interrupted_dispatch("agent")
+        self.github.run_listing = {"total_count": 0, "workflow_runs": []}
+        self.controller.advance(state, intent, cancel=True)
+        state, revision = self.live()
+        self.assertEqual("cleanup-pending", state["phase"])
+        much_later = Controller(self.github, lambda: NOW + timedelta(hours=13))
+        much_later.advance(state, revision)
+        self.assertEqual("cancelled", self.github.state["dispatch_recovery"]["outcome"])
+        self.github.run_listing = None
+        state, revision = self.live()
+        much_later.advance(state, revision)
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        much_later.advance(state, revision)
+        self.assertEqual("cancelled", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual([], self.github.state["history"])
+
+    def test_recovered_completed_agent_observed_late_keeps_original_intent_and_job_deadline(self):
+        state, intent, run_id = self.interrupted_dispatch("agent")
+        self.github.runs[run_id].update(status="completed", conclusion="success")
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(state, intent, "finish", outcome="not-flaky")).encode()}
+        jobs = [{
+            "id": 777, "run_id": run_id, "run_attempt": 1, "head_sha": CONTROL, "status": "completed",
+            "completed_at": (NOW + timedelta(minutes=10)).isoformat(),
+        }]
+        pages = self.github.pages
+        with patch.object(self.github, "pages", side_effect=lambda endpoint, key=None:
+                          jobs if endpoint.endswith("/attempts/1/jobs") else pages(endpoint, key)):
+            Controller(self.github, lambda: NOW + timedelta(minutes=31)).advance(state, intent)
+        self.assertEqual("not-flaky", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual(1, len([c for c in self.github.calls if c[0] == "dispatch"]))
+        self.assertFalse(any(c[0].endswith("/cancel") for c in self.github.calls))
 
     def test_worker_ref_failure_resumes_to_blocked_without_worker_or_retry(self):
         self.selected()
@@ -931,9 +1266,9 @@ class OrchestrationTests(unittest.TestCase):
             state, revision = self.live()
             self.assertEqual("worker-intent", state["phase"])
             self.assertIsNone(state["worker"].get("id"))
-            self.controller.advance(state, revision)
+            Controller(self.github, lambda: NOW + timedelta(minutes=6)).advance(state, revision)
             create_ref.assert_called_once_with(state["worker"]["branch"], CONTROL)
-        self.assertEqual("terminal", self.github.state["phase"])
+        self.assertEqual("cleanup-pending", self.github.state["phase"])
         self.assertEqual("blocked", self.github.state["outcome"])
         self.assertEqual(1, len(self.github.comments))
         self.assertEqual([], self.github.pulls)

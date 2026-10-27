@@ -10,6 +10,8 @@
 # who modify the env vars below and push to trigger a run.
 
 name: Reproduce Flaky Tests
+# REST exposes this full intent binding, not the workflow_dispatch inputs.
+run-name: ${{ inputs.investigation_revision != '' && format('Flaky reproduction {0} [{1}]', inputs.investigation_issue_url, inputs.investigation_revision) || 'Reproduce Flaky Tests' }}
 
 on:
   workflow_dispatch:

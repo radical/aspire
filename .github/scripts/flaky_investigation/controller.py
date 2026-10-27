@@ -15,7 +15,7 @@ from contracts import (
     timestamp, validate_candidate, validate_checkpoint, validate_proposal,
 )
 from evidence import flaky_cases, summarize
-from github import GitHub, owned_run, state_branch
+from github import GitHub, correlated_run, dispatch_title, owned_run, state_branch
 from preparation import prepare_inputs
 from reporting import console_json, detail, diagnostic, findings
 
@@ -59,6 +59,10 @@ def observe(state, revision, event, reason=""):
     if cancellation := state.get("cancellation"):
         item["cancellation"] = {
             key: cancellation[key] for key in ("run_id", "requested_at", "confirmed")
+        }
+    if recovery := state.get("dispatch_recovery"):
+        item["dispatch_recovery"] = {
+            key: recovery[key] for key in ("kind", "revision", "observed_ids", "confirmed", "outcome")
         }
     if state["notes"]:
         note = state["notes"][-1]
@@ -132,6 +136,7 @@ class Controller:
         return state, self.save(state, None)
 
     def dispatch_agent(self, state, revision):
+        state.pop("dispatch_recovery", None)
         reserve(state, "models")
         state["phase"] = "agent-intent"
         branch = f"ankj/flaky-test-{state['issue']}-agent-{state['used']['models']}"
@@ -139,7 +144,7 @@ class Controller:
                           "deadline_at": (self.now() + timedelta(minutes=30)).isoformat()}
         intent = self.save(state, revision)
         # Commit the intent before dispatch. If the response/save is lost, recovery
-        # reports the ambiguity; it never guesses the newest matching run.
+        # reconciles full-intent correlation; it never guesses the newest run.
         self.github.create_ref(branch, state["agent_sha"])
         run_id = self.github.dispatch(state["agent_workflow"], branch, {
             "issue_url": state["issue_url"], "issue_number": str(state["issue"]), "state_revision": intent,
@@ -152,6 +157,7 @@ class Controller:
         require(phase in {"reproduce", "verify"}, "Invalid worker phase")
         if phase == "verify":
             require_candidate_isolation()
+        state.pop("dispatch_recovery", None)
         target = state["target"]
         validate_worker_target(target)
         integer(runners, 3)
@@ -328,9 +334,10 @@ class Controller:
         return self.advance(state, revision)
 
     def finish(self, state, revision, outcome, explanation, analysis=None):
+        first = not (state.get("finding_url") or state.get("publication_uncertain"))
         state.update(phase="publication-intent", outcome=outcome, explanation=text(explanation), analysis=analysis)
         revision = self.save(state, revision)
-        return self.publish(state, revision, first=True)
+        return self.publish(state, revision, first=first)
 
     def publish(self, state, revision, first=False):
         issue = state["issue"]
@@ -341,7 +348,7 @@ class Controller:
                     and comment.get("user", {}).get("type") == "Bot"]
         if not existing:
             if not first:
-                state.update(phase="cleanup-pending" if state.get("cancellation", {}).get("confirmed") is False
+                state.update(phase="cleanup-pending" if cleanup_pending(state)
                              else "terminal", outcome="blocked", publication_uncertain=True,
                              explanation="Uncertain findings publication; inspect manually before retrying.")
                 print(f"::error::{state['explanation']} Issue {issue}", file=sys.stderr)
@@ -390,9 +397,91 @@ class Controller:
                 f"{state['issue_url']}#issuecomment-{receipt['id']}")
         elif existing[0].get("html_url"):
             state["finding_url"] = existing[0]["html_url"]
-        state["phase"] = ("cleanup-pending" if state.get("cancellation", {}).get("confirmed") is False
+        state["phase"] = ("cleanup-pending" if cleanup_pending(state)
                           else "terminal")
         return self.save(state, revision)
+
+    def reconcile_dispatch(self, state, revision, cancel=False):
+        recovery = state.get("dispatch_recovery")
+        if recovery is None:
+            kind = state["phase"].removesuffix("-intent")
+            # Retain this original revision/time before any reconciliation save.
+            # It is also the proposal binding for a recovered model run.
+            recovery = state["dispatch_recovery"] = {
+                "kind": kind, "revision": revision, "requested_at": state["updated_at"],
+                "observed_ids": [], "confirmed": False, "outcome": None,
+                "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed.",
+            }
+            revision = self.save(state, revision)
+        kind = recovery["kind"]
+        owned = state[kind]
+        if cancel or expired(state, self.now()) and recovery["outcome"] not in {"cancelled", "budget-exhausted"}:
+            recovery.update(
+                outcome="cancelled" if cancel else "budget-exhausted",
+                reason="Maintainer cancelled this investigation." if cancel
+                       else "The twelve-hour investigation budget expired.")
+            revision = self.save(state, revision)
+        requested = timestamp(recovery["requested_at"])
+        title = dispatch_title(kind, state["issue_url"], recovery["revision"])
+        try:
+            original, _ = self.github.load(state["issue"], recovery["revision"])
+            validate_checkpoint(original, state["issue"])
+            require(original["phase"] == kind + "-intent" and original[kind] == owned
+                    and original["updated_at"] == recovery["requested_at"]
+                    and all(original[key] == state[key] for key in
+                            ("issue_url", "base_sha", "control_sha", "agent_sha", "worker_sha",
+                             "agent_workflow", "target", "used")),
+                    "Dispatch recovery differs from the original immutable intent")
+            matches = self.github.dispatch_candidates(owned, title, requested, self.now())
+            discovered = sorted(set(recovery["observed_ids"]) | {item["id"] for item in matches})
+            require(len(discovered) <= 100, "Dispatch recovery exceeds bounded ownership collection")
+            if discovered != recovery["observed_ids"]:
+                recovery["observed_ids"] = discovered
+                revision = self.save(state, revision)
+            runs = [correlated_run(self.github.api(f"actions/runs/{run_id}"), {**owned, "id": run_id},
+                                   title, requested, self.now()) for run_id in discovered]
+        except (ValueError, KeyError, subprocess.SubprocessError) as error:
+            return self.unresolved_dispatch(
+                state, revision, "Dispatch ownership lookup blocked: " + diagnostic(error))
+        if len(runs) == 1:
+            owned["id"] = runs[0]["id"]
+            owned.setdefault("deadline_at", (
+                requested + timedelta(minutes=30 if kind == "agent" else 90)).isoformat())
+            if kind == "agent":
+                owned["revision"] = recovery["revision"]
+            recovery["confirmed"] = True
+            # A previously reported blocker cannot resume accepting test/model
+            # results merely because ownership becomes visible later.
+            if state.get("outcome") is not None and recovery["outcome"] is None:
+                recovery.update(outcome="blocked", reason="Earlier dispatch ownership blocker; cleanup only.")
+            state["phase"] = kind
+            revision = self.save(state, revision, "Recovered exact full-intent dispatch; no dispatch was repeated.")
+            return self.advance(state, revision)
+        if runs and all(run["status"] == "completed" for run in runs):
+            recovery["confirmed"] = True
+            if state.get("outcome") is not None:
+                state["phase"] = "terminal"
+                return self.save(state, revision, "All ambiguous dispatch candidates confirmed stopped; no results accepted.")
+            return self.finish(state, revision, "blocked",
+                               "Multiple exact-intent runs were found; all are stopped. No results were accepted.")
+        if not runs and recovery["outcome"] is None and self.now() < requested + timedelta(minutes=5):
+            return revision
+        return self.unresolved_dispatch(
+            state, revision,
+            f"Dispatch receipt missing; {len(runs)} exact-intent runs found. A child may still be active. "
+            "No dispatch or ambiguous cancellation was retried; independent cleanup recovery continues.")
+
+    def unresolved_dispatch(self, state, revision, reason):
+        recovery = state["dispatch_recovery"]
+        if state["phase"] == "cleanup-pending":
+            # Already reported; retain the desired outcome and never duplicate
+            # the finding or turn API failure/absence into confirmed cleanup.
+            observe(state, revision, "cleanup-unconfirmed", reason)
+            return revision
+        if recovery["outcome"] is None:
+            recovery.update(outcome="blocked", reason=reason)
+        record_rejection(state, reason)
+        return self.finish(state, revision, "blocked", reason)
 
     def cancel_owned(self, state, revision, outcome, reason):
         kind = state["phase"]
@@ -457,6 +546,16 @@ class Controller:
         return max(completed) < deadline
 
     def advance(self, state, revision, cancel=False):
+        # Publication reconciliation has priority over uncertain dispatch cleanup.
+        if state["phase"] == "publication-intent":
+            return self.publish(state, revision)
+        recovery = state.get("dispatch_recovery")
+        if state["phase"] in {"agent-intent", "worker-intent"} or (
+                recovery and not recovery["confirmed"] and state["phase"] == "cleanup-pending"):
+            return self.reconcile_dispatch(state, revision, cancel)
+        if recovery and recovery["confirmed"] and recovery["outcome"] \
+                and state["phase"] == recovery["kind"]:
+            return self.cancel_owned(state, revision, recovery["outcome"], recovery["reason"])
         if state["phase"] == "cleanup-pending":
             cancellation = state["cancellation"]
             owned = state[cancellation["kind"]]
@@ -471,8 +570,6 @@ class Controller:
         if state["phase"] == "terminal":
             return revision
         # Cancellation cannot establish whether an earlier publication succeeded.
-        if state["phase"] == "publication-intent":
-            return self.publish(state, revision)
         if state["phase"] in {"cancellation-intent", "cancelling"} and state.get("cancellation"):
             return self.reconcile_cancellation(state, revision)
         if cancel:
@@ -531,6 +628,10 @@ class Controller:
         if result["phase"] == "reproduce" and all(item["failed"] == 0 for item in rounds) and len(rounds) < 3:
             return self.baseline(state, revision, "previous clean baseline; continue the fixed policy without a model.")
         return revision
+
+
+def cleanup_pending(state):
+    return any(state.get(key, {}).get("confirmed") is False for key in ("cancellation", "dispatch_recovery"))
 
 
 def evidence_table(state):
