@@ -1701,54 +1701,6 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     }
 
     [Fact]
-    public async Task RepresentativeWorkflowFixturesStayAlignedWithCurrentWorkflowDefinitions()
-    {
-        Dictionary<string, string[]> expectations = new()
-        {
-            [".github/workflows/run-tests.yml"] =
-            [
-                "- name: Checkout code",
-                "- name: Set up .NET Core",
-                "- name: Install sdk for nuget based testing",
-                "- name: Build test project",
-                "- name: Run tests (Windows)",
-                "- name: Upload logs, and test results",
-                "- name: Copy CLI E2E recordings for upload",
-                "- name: Upload CLI E2E recordings",
-                "- name: Generate test results summary",
-            ],
-            [".github/workflows/build-packages.yml"] =
-            [
-                "- name: Build with packages",
-            ],
-            [".github/workflows/polyglot-validation.yml"] =
-            [
-                "- name: Build Python validation image",
-                "- name: Run TypeScript SDK validation",
-            ],
-            [".github/workflows/ci.yml"] =
-            [
-                "name: Final Results",
-            ],
-            [".github/workflows/tests.yml"] =
-            [
-                "- uses: ./.github/actions/enumerate-tests",
-                "name: Final Test Results",
-            ],
-        };
-
-        foreach ((string relativePath, string[] expectedLines) in expectations)
-        {
-            string workflowText = await ReadRepoFileAsync(relativePath);
-
-            foreach (string expectedLine in expectedLines)
-            {
-                Assert.Contains(expectedLine, workflowText);
-            }
-        }
-    }
-
-    [Fact]
     [RequiresTools(["node"])]
     public async Task WriteAnalysisSummaryUsesExplicitOutcomeHeadingAndClickableAnalyzedRunLink()
     {

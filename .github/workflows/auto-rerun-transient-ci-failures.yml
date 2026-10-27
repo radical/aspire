@@ -34,7 +34,7 @@ jobs:
     name: Analyze CI rerun eligibility
     if: >-
       ${{
-          github.repository_owner == 'microsoft' &&
+          github.repository == 'microsoft/aspire' &&
           (github.event_name == 'workflow_dispatch' ||
            github.event.workflow_run.conclusion == 'failure')
       }}
@@ -44,6 +44,7 @@ jobs:
       checks: read
       contents: read
       issues: read
+      pull-requests: read
     outputs:
       analysis: ${{ steps.analyze.outputs.analysis }}
       rerun_execution_eligible: ${{ steps.analyze.outputs.rerun_execution_eligible }}

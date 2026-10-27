@@ -281,6 +281,10 @@ expressions, and a token cannot be escalated between steps. Only the execution
 job gets rerun and PR-comment write permissions. See
 [GitHub's job permissions reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idpermissions).
 
+Analysis needs `pull-requests: read` for its head-branch PR lookup when the
+source run has no embedded PR association, and `issues: read` to check whether
+the associated PRs are still open.
+
 Analysis emits a serialized decision. Execution selects the same policy from
 that decision, checks eligibility, and invokes its handler. The PR handler
 rechecks open PRs and the exact source attempt; the main handler revalidates the
@@ -305,6 +309,12 @@ They are intentionally behavior-focused rather than regex-focused:
 - they test the `promoteTestExecutionFailureJobs` promotion logic and `selectTestResultsArtifact` selection
 - they test the `analyzeFailedJobs` integration with `retryPatternsConfig` for job log pattern matching
 - they exercise dispatcher routing, manual dry-run handling, PR force-mode job-read bypass, and main freshness checks across both phases
+
+Workflow-only safety rails such as the optional manual `dry_run` override,
+up-to-three-attempt automatic reruns, `workflow_dispatch`, and the
+`rerun_execution_eligible` job gate need validation in the actual workflow.
+Source-text assertions do not establish their behavior and should not be copied
+or mechanically updated as regression coverage.
 
 ### Running the tests
 
