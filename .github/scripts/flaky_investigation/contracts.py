@@ -33,9 +33,13 @@ def require(condition, message):
 
 
 def require_candidate_isolation():
+    # Only the trusted controller/worker configuration selects this policy.
+    # Standard Actions isolation and human draft review are not adversarial TRX attestation.
+    if os.environ.get("FLAKY_INVESTIGATION_EXECUTION_POLICY") == "actions-draft-review-v1":
+        return
     raise ValueError(
-        "Automated candidate execution/publication is blocked: an independently validated execution "
-        "boundary protecting the supervisor, configuration and evidence is not available")
+        "Automated candidate execution/publication is blocked: an explicit trusted execution "
+        "boundary policy is absent or unknown")
 
 
 def issue_number(url):
@@ -117,7 +121,7 @@ def selection(proposal, issue, files):
     return {
         "source": source, "project": project, "class_name": class_name,
         "method": method, "oses": oses, "failure_signature": signature,
-        "quarantined": issue_url in attributes and "QuarantinedTest" in attributes,
+        "quarantined": re.search(r"\[QuarantinedTest\b", attributes) is not None,
     }
 
 

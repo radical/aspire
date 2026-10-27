@@ -30,7 +30,8 @@ from worker import configuration, setup_outputs, validate_checkout
 
 BASE = "a" * 40
 CONTROL = "b" * 40
-URL = "https://github.com/microsoft/aspire/issues/123"
+URL = f"https://github.com/{REPOSITORY}/issues/123"
+FOREIGN_URL = f"https://github.com/{REPOSITORY}-foreign/issues/123"
 SOURCE = "tests/Sample.Tests/WidgetTests.cs"
 PROJECT = "tests/Sample.Tests/Sample.Tests.csproj"
 CODE = f"""namespace Sample.Tests;
@@ -128,7 +129,7 @@ class FakeGitHub:
             self.comments.append({"body": body["body"], "user": {"login": "github-actions[bot]", "type": "Bot"}})
             return {"id": len(self.comments)}
         if endpoint == "pulls":
-            value = {**body, "html_url": "https://github.com/microsoft/aspire/pull/999",
+            value = {**body, "html_url": f"https://github.com/{REPOSITORY}/pull/999",
                      "head": {"sha": self.refs[body["head"]]}, "user": {"login": "github-actions[bot]"},
                      "state": "open"}
             self.pulls.append(value)
@@ -210,6 +211,54 @@ class OrchestrationTests(unittest.TestCase):
 
     def live(self):
         return self.github.load(123)
+
+    def test_trusted_actions_draft_policy_allows_exact_candidate_worker_and_draft(self):
+        self.selected()
+        state, revision = self.live()
+        with patch.dict(os.environ, {"FLAKY_INVESTIGATION_EXECUTION_POLICY": "actions-draft-review-v1"}):
+            self.controller.handle(state, revision, proposal(
+                state, revision, "repair", mode="project",
+                files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                diagnosis="Missing widget: readiness was not awaited."))
+            state, revision = self.live()
+            worker = state["worker"]
+            intent = self.github.runs[worker["id"]]["display_title"].split("[")[1][:-1]
+            config = configuration(self.github, URL, intent, worker["id"], CONTROL)
+            self.assertEqual((state["candidate"]["sha"], "project"),
+                             (config["source_sha"], config["mode"]))
+            self.assertEqual([], self.github.pulls)
+            with self.assertRaisesRegex(ValueError, "nine target passes"):
+                self.controller.handle(copy.deepcopy(state), revision, proposal(
+                    state, revision, "finish", outcome="verified",
+                    reviewed_candidate_sha=state["candidate"]["sha"]))
+            for policy in ("", "unknown", "actions-draft-review-v2"):
+                with self.subTest(policy=policy), patch.dict(
+                        os.environ, {"FLAKY_INVESTIGATION_EXECUTION_POLICY": policy}):
+                    with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+                        configuration(self.github, URL, intent, worker["id"], CONTROL)
+            self.complete_worker(False)
+            state, revision = self.live()
+            self.controller.handle(state, revision, proposal(
+                state, revision, "finish", outcome="verified", reviewed_candidate_sha=state["candidate"]["sha"]))
+        self.assertEqual("verified", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.pulls))
+        self.assertTrue(self.github.pulls[0]["draft"])
+        self.assertEqual(worker["source_sha"], self.github.pulls[0]["head"]["sha"])
+    def test_untrusted_policy_fields_do_not_admit_candidate_execution(self):
+        self.selected()
+        state, revision = self.live()
+        state["execution_policy"] = "actions-draft-review-v1"
+        request = proposal(
+            state, revision, "repair", execution_policy="actions-draft-review-v1",
+            files={SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+            diagnosis="Missing widget: readiness was not awaited.")
+        for policy in ("", "unknown", "actions-draft-review-v2"):
+            with self.subTest(policy=policy), patch.dict(os.environ, {"FLAKY_INVESTIGATION_EXECUTION_POLICY": policy}):
+                with self.assertRaisesRegex(ValueError, "execution.*boundary"):
+                    self.controller.handle(copy.deepcopy(state), revision, request)
+        self.assertEqual({}, self.github.commits)
+        self.assertEqual([], self.github.pulls)
+        self.assertEqual(0, self.github.state["used"]["workers"])
 
     def test_local_first_candidate_goes_directly_to_exact_hosted_verification(self):
         self.controller.advance(self.state, self.revision)
@@ -915,7 +964,10 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("Rejected attempts (not accepted test counts)", details)
         self.assertLess(len(summary), 1600)
         golden = Path(__file__).with_name("fixtures") / "rejected-worker-comment.txt"
-        self.assertEqual(golden.read_text(encoding="utf-8"), body + "\n")
+        expected = golden.read_text(encoding="utf-8").replace(
+            "https://github.com/microsoft/aspire/", f"https://github.com/{REPOSITORY}/").replace(
+            '"workflow": "reproduce-flaky-tests.yml"', f'"workflow": "{WORKER}"')
+        self.assertEqual(expected, body + "\n")
         self.assertEqual([], self.github.pulls)
         before = copy.deepcopy((self.github.state, self.github.comments, self.github.refs))
         self.invoke_controller()
@@ -2320,7 +2372,7 @@ class BoundaryTests(unittest.TestCase):
     def test_tainted_checkpoint_identity_budgets_and_clock_fail_before_remote_writes(self):
         state, revision = Controller(FakeGitHub(), lambda: NOW).start(URL, CONTROL)
         for key, value in (
-            ("issue_url", URL.replace("microsoft", "elsewhere")),
+            ("issue_url", FOREIGN_URL),
             ("base_sha", "main"), ("phase", "shell"), ("created_at", "2026-10-21"),
             ("used", {**state["used"], "workers": -1}), ("history", None),
         ):
@@ -2472,7 +2524,7 @@ print("fork identity and exact authority verified")
 
     def test_reject_foreign_urls_pull_requests_query_strings_and_shell(self):
         for url in (URL + "?x=1", URL + "#comment", URL.replace("/issues/", "/pull/"),
-                    URL.replace("microsoft", "elsewhere"), URL + ";echo hacked", "123"):
+                    FOREIGN_URL, URL + ";echo hacked", "123"):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 issue_number(url)
 
@@ -2488,6 +2540,17 @@ print("fork identity and exact authority verified")
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 selection({**SELECT, **changes}, ISSUE, {SOURCE: code, PROJECT: "<Project/>"})
+
+    def test_mirrored_issue_retains_actual_upstream_quarantine_classification(self):
+        code = CODE.replace(URL, "https://github.com/microsoft/aspire/issues/9672")
+        mirror = {**ISSUE, "html_url": f"https://github.com/{REPOSITORY}/issues/156"}
+        target = selection(SELECT, mirror, {SOURCE: code, PROJECT: "<Project/>"})
+        self.assertTrue(target["quarantined"])
+        self.assertEqual(SELECT["method"], target["method"])
+        with self.assertRaisesRegex(ValueError, "Issue does not identify"):
+            selection(SELECT, {**mirror, "title": "Unrelated issue"}, {SOURCE: code, PROJECT: "<Project/>"})
+        ordinary = code.replace('[QuarantinedTest("https://github.com/microsoft/aspire/issues/9672")]', "[Fact]")
+        self.assertFalse(selection(SELECT, mirror, {SOURCE: ordinary, PROJECT: "<Project/>"})["quarantined"])
 
     def test_source_scope_follows_explicit_references_not_dynamic_globs(self):
         scopes = repair_scope(PROJECT, {

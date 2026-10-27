@@ -691,6 +691,7 @@ def prepare(github, url, revision):
                 and str(live["agent"]["id"]) == os.environ["GITHUB_RUN_ID"], "Agent does not own this checkpoint")
     source = stage_source(state, Path.cwd())
     context = {"checkpoint": state, "state_revision": revision,
+               "execution_policy": os.environ.get("FLAKY_INVESTIGATION_EXECUTION_POLICY", "closed"),
                "source": {"sha": state["base_sha"], "path": str(source)},
                "historical_evidence": {
                    "fetched_at": datetime.now(timezone.utc).isoformat(), "logs_collected": False,

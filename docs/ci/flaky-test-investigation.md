@@ -3,11 +3,12 @@
 A maintainer can enroll an open Aspire issue by URL alone. Fresh, bounded
 agent phases follow the `fix-flaky-test` skill, discover the test from source,
 reproduce it, diagnose matching failures, and verify a source-scoped candidate.
-The current production path ends with finite, evidence-backed findings.
-**Automated candidate execution and fix-PR publication are blocked** until an
-independently validated execution boundary protects the trusted supervisor,
-configuration and evidence. Separate directories under one host user do not
-provide that boundary. Nothing merges, closes the issue, or removes quarantine.
+Without an explicit trusted execution policy, candidate execution and fix-PR
+publication remain blocked. An operator-admitted fork trial can select
+`FLAKY_INVESTIGATION_EXECUTION_POLICY=actions-draft-review-v1` in its trusted
+controller and worker workflows. That policy accepts the existing Copilot/Actions
+boundary and subsequent human draft-PR review, not adversarial TRX attestation.
+Nothing merges, closes the issue, or removes quarantine.
 
 ## Start, resume, cancel
 
@@ -106,8 +107,8 @@ These local records are model-authored evidence, not independently validated
 test results. A prerequisite/build failure is not a test pass. Older proposals
 remain readable without local-work metadata. Local/log evidence can guide a
 candidate without a hosted baseline. It cannot replace exact hosted candidate
-verification or final source review, or waive execution-isolation and independent
-review admissions. Local work alone cannot authorize a fix PR.
+verification, final source review, or the trusted execution-policy gate.
+Local work alone cannot authorize a fix PR.
 
 The original issue receives the confirmed terminal finding URL. A terminal
 resume is a no-op, and repeated start does not reset budgets. There is no
@@ -122,6 +123,13 @@ The trusted implementation is `.github/scripts/flaky_investigation/`.
 REST and immutable Git checkpoints; `evidence.py` accounts for original test
 records; `worker.py` validates fixed-workflow activation; `runner.py` retains
 original test iterations; `controller.py` advances the state machine and publishes.
+
+Repeated worker executions bind `--results-directory` before the SDK's `--`
+separator because each iteration directory already exists when execution starts.
+The ten-minute MTP timeout, TRX reporting and selection filters follow `--`;
+the outer process timeout remains 720 seconds. This boundary must work with the
+SDK selected by the source checkout, independently of the trusted runner's own
+checkout. Original output, reports and execution receipts remain retained.
 
 The checkpoint is `state.json` on
 `ankj/flaky-test-<issue>-state`. Each transition creates a new commit and updates
@@ -203,8 +211,22 @@ publication job or receives write credentials.
 This token boundary alone does not protect the root checkout, configuration or
 evidence from candidate code running as the same host user. The trusted
 controller and worker reject candidate execution and fix publication by default.
-Orchestration tests using a synthetic approved isolation boundary do not prove
-that a production candidate run is safe.
+The explicit `actions-draft-review-v1` trial accepts that standard platform
+boundary rather than claiming tamper-proof configuration or evidence. Set the
+policy only in trusted control/setup steps, never from proposals, issue text,
+candidate files or runtime-produced receipts. Unknown policies fail closed.
+Preparation reports the configured policy to the investigator; that context
+is guidance, not authority to change the controller's environment.
+
+The investigator uses `gpt-6.1-sol` with `--reasoning-effort high` and a
+15-minute phase limit. Eight model phases are not eight inference calls or a
+monetary ceiling. Existing worker, fix, runner-iteration and deadline budgets
+remain unchanged; final hosted verification shares the worker cap.
+
+A fork mirror retains the source's actual `QuarantinedTest` classification even
+when the attribute links the original upstream issue. The mirror must still
+identify the exact source method and failure; the upstream quarantine URL and
+scheduling attributes are not rewritten.
 
 The agent job is read-only. Compiler-generated proposal-memory persistence has
 `contents: write` to its scoped proposal branch; the generated conclusion job
