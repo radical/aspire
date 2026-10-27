@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 154,
   "issue_url": "https://github.com/radical/aspire/issues/154",
-  "phase": "publication-intent",
+  "phase": "terminal",
   "created_at": "2026-10-27T02:07:08.467698+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "32e9f6a4156bf1eb40d43cd015edd4309b92f8d7",
@@ -21,7 +21,7 @@
   "target": null,
   "local_precheck": null,
   "outcome": "budget-exhausted",
-  "updated_at": "2026-10-27T02:14:01.819142+00:00",
+  "updated_at": "2026-10-27T02:14:05.932220+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -67,6 +67,11 @@
       "phase": "publication-intent",
       "reason": "Terminal budget-exhausted decision; publication not yet confirmed.",
       "at": "2026-10-27T02:14:01.819142+00:00"
+    },
+    {
+      "phase": "terminal",
+      "reason": "Original-issue finding confirmed; terminal resume is a no-op.",
+      "at": "2026-10-27T02:14:05.932220+00:00"
     }
   ],
   "agent": {
@@ -97,5 +102,6 @@
     "confirmed": true
   },
   "explanation": "Owned agent absolute deadline expired. Exact owned run completion confirmed.",
-  "analysis": null
+  "analysis": null,
+  "finding_url": "https://github.com/radical/aspire/issues/154#issuecomment-6432054064"
 }
