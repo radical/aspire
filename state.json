@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 154,
   "issue_url": "https://github.com/radical/aspire/issues/154",
-  "phase": "agent",
+  "phase": "cancellation-intent",
   "created_at": "2026-10-27T02:07:08.467698+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "32e9f6a4156bf1eb40d43cd015edd4309b92f8d7",
@@ -21,7 +21,7 @@
   "target": null,
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T02:11:10.955742+00:00",
+  "updated_at": "2026-10-27T02:11:39.001771+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -52,6 +52,11 @@
       "phase": "agent",
       "reason": "fixture-seeded expired child deadline",
       "at": "2026-10-27T02:11:10.955742+00:00"
+    },
+    {
+      "phase": "cancellation-intent",
+      "reason": "Cancellation of the exact owned run requested; response not yet confirmed.",
+      "at": "2026-10-27T02:11:39.001771+00:00"
     }
   ],
   "agent": {
@@ -72,5 +77,13 @@
     "confirmed": true,
     "outcome": null,
     "reason": "Dispatch receipt missing; exact intent ownership remains unconfirmed."
+  },
+  "cancellation": {
+    "kind": "agent",
+    "run_id": 40436582345,
+    "outcome": "budget-exhausted",
+    "reason": "Owned agent absolute deadline expired.",
+    "requested_at": "2026-10-27T02:11:39.001753+00:00",
+    "confirmed": false
   }
 }
