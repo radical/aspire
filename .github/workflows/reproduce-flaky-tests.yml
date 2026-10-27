@@ -1,60 +1,56 @@
-name: Trusted baseline execution proof (fork only)
+# Proposed separate overlay only. Requires independently admitted frozen v4
+# baseline.py plus this helper in the checked-out control tree. Never replaces
+# the normal v4 wrapper; no production workflow consumes this file.
+name: Trusted baseline owned launcher interruption (fork only)
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  python-contracts-windows:
-    if: github.repository == 'radical/aspire'
-    runs-on: windows-latest
-    timeout-minutes: 5
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Run existing Python contract discovery on Windows
-        run: python -m unittest discover -s .github/scripts/flaky_investigation -p "test_*.py" -v
-  trusted-baseline:
+  owned-launcher-interruption:
     if: github.repository == 'radical/aspire'
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 35
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Download the exact reviewed vendor SDK archive
+      - name: Download only the fixed vendor SDK archive
         shell: bash
         run: |
           curl --disable --fail --silent --show-error --location \
             --max-time 180 --max-filesize 207623687 \
             --output "$RUNNER_TEMP/baseline-sdk.tar.gz" \
             https://builds.dotnet.microsoft.com/dotnet/Sdk/11.0.100-rc.1.26425.128/dotnet-sdk-11.0.100-rc.1.26425.128-linux-x64.tar.gz
-      - name: Prepare and run only the fixed trusted baseline
+      - name: Spawn fixed baseline, interrupt its owned launcher, prove fresh cleanup
         shell: bash
-        run: |
-          python3 .github/scripts/flaky_investigation/baseline.py run \
-            --sdk-archive "$RUNNER_TEMP/baseline-sdk.tar.gz" \
-            --output "$RUNNER_TEMP/aspire-trusted-baseline"
-      - name: Reconcile owned containers from a fresh process
+        run: python3 -B .github/scripts/flaky_investigation/baseline_interruption.py
+      - name: Ordinary final cleanup safety only, not interruption evidence
         if: always()
         shell: bash
         run: |
-          if [[ -d "$RUNNER_TEMP/aspire-trusted-baseline" ]]; then
-            python3 .github/scripts/flaky_investigation/baseline.py cleanup \
-              --output "$RUNNER_TEMP/aspire-trusted-baseline"
-          else
-            echo 'No baseline output directory was created.'
-          fi
+          python3 -B - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          output = Path(os.environ["RUNNER_TEMP"]) / "aspire-baseline-interruption-v1"
+          if output.is_dir():
+              subprocess.run(
+                  [sys.executable, "-B", ".github/scripts/flaky_investigation/baseline.py",
+                   "cleanup", "--output", str(output)], check=True, timeout=180)
+          else:
+              print("No baseline output exists; no cleanup or interruption claim.")
+          PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: trusted-baseline-proof
+          name: trusted-baseline-owned-launcher-interruption-v1
           path: |
-            ${{ runner.temp }}/aspire-trusted-baseline/*.json
-            ${{ runner.temp }}/aspire-trusted-baseline/*.cid
-            ${{ runner.temp }}/aspire-trusted-baseline/imported/
+            ${{ runner.temp }}/aspire-baseline-interruption-proof-v1/
+            ${{ runner.temp }}/aspire-baseline-interruption-v1/*.json
+            ${{ runner.temp }}/aspire-baseline-interruption-v1/*.cid
+            ${{ runner.temp }}/aspire-baseline-interruption-v1/imported/
           if-no-files-found: warn
