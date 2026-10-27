@@ -118,6 +118,13 @@ REST and immutable Git checkpoints; `evidence.py` accounts for original test
 records; `worker.py` validates fixed-workflow activation; `runner.py` retains
 original test iterations; `controller.py` advances the state machine and publishes.
 
+Repeated worker executions bind `--results-directory` before the SDK's `--`
+separator because each iteration directory already exists when execution starts.
+The ten-minute MTP timeout, TRX reporting and selection filters follow `--`;
+the outer process timeout remains 720 seconds. This boundary must work with the
+SDK selected by the source checkout, independently of the trusted runner's own
+checkout. Original output, reports and execution receipts remain retained.
+
 The checkpoint is `state.json` on
 `ankj/flaky-test-<issue>-state`. Each transition creates a new commit and updates
 the ref without force. Concurrent writers cannot replace one another's state.

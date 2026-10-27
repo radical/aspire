@@ -125,8 +125,8 @@ def execute(root, config, run=run_streamed):
         directory = output / f"iteration-{iteration}"
         directory.mkdir()
         command = [dotnet, "test", "--project", target["project"], "--no-restore", "--no-build",
-                   "--no-launch-profile", "--",
-                   "--timeout", "10m", "--results-directory", str(directory.resolve()),
+                   "--no-launch-profile", "--results-directory", str(directory.resolve()), "--",
+                   "--timeout", "10m",
                    "--report-trx", "--filter-not-trait", "outerloop=true", *selector]
         print("flaky-test-iteration " + console_json({
             "iteration": iteration, "source_sha": actual_sha, "mode": config["mode"],
