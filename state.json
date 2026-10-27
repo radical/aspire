@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 155,
   "issue_url": "https://github.com/radical/aspire/issues/155",
-  "phase": "worker-intent",
+  "phase": "worker",
   "created_at": "2026-10-27T04:51:45.095818+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "5c2ee96d64fbe1b82047648253df2772a5a4dee4",
@@ -31,7 +31,7 @@
   },
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T04:52:57.088075+00:00",
+  "updated_at": "2026-10-27T04:53:01.352979+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -47,6 +47,11 @@
       "phase": "worker-intent",
       "reason": "One corrected-runner RC1 integration iteration, not a policy baseline round.",
       "at": "2026-10-27T04:52:57.088075+00:00"
+    },
+    {
+      "phase": "worker",
+      "reason": "Owned worker dispatched; original reports must pass independent validation.",
+      "at": "2026-10-27T04:53:01.352979+00:00"
     }
   ],
   "worker": {
@@ -58,6 +63,7 @@
     "iterations": 1,
     "mode": "single",
     "branch": "ankj/flaky-test-155-run-1",
-    "deadline_at": "2026-10-27T06:22:57.087906+00:00"
+    "deadline_at": "2026-10-27T06:22:57.087906+00:00",
+    "id": 40452171642
   }
 }
