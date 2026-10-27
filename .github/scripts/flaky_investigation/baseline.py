@@ -161,6 +161,10 @@ class Stage:
             "--workdir", "/work/source",
             "--env", "HOME=/work/home", "--env", "DOTNET_CLI_HOME=/work/home",
             "--env", "NUGET_PACKAGES=/work/packages",
+            # The SDK image inherits skip; schema generation needs adjacent package XML.
+            # Set normal extraction before the first restore into the fresh private cache.
+            # https://learn.microsoft.com/en-us/nuget/reference/cli-reference/cli-ref-environment-variables
+            "--env", "NUGET_XMLDOC_MODE=none",
             "--env", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "--env", "DOTNET_NOLOGO=1",
             "--env", "SkipDefaultTestFilters=true",
             "--env", "ASPIRE__TEST__DCPLOGBASEPATH=/work/dcp-logs",
@@ -202,6 +206,14 @@ class Stage:
         require(len(mounts) == 1 and mounts[0]["Type"] == "bind"
                 and mounts[0]["Source"] == str(self.work) and mounts[0]["Destination"] == "/work"
                 and mounts[0]["RW"] is True, "Unexpected container mount")
+        # Inspect the merged container Config.Env, not just the requested overrides.
+        # Docker reports entries such as "NUGET_XMLDOC_MODE=none"; duplicates or
+        # a bare "NUGET_XMLDOC_MODE" cannot establish an unambiguous extraction mode.
+        environment = record["Config"].get("Env")
+        require(isinstance(environment, list) and all(isinstance(item, str) for item in environment)
+                and [item for item in environment if item.split("=", 1)[0] == "NUGET_XMLDOC_MODE"]
+                == ["NUGET_XMLDOC_MODE=none"],
+                "Container XML documentation mode must be exactly NUGET_XMLDOC_MODE=none")
 
     def stop(self):
         record = self.inspect()
@@ -222,6 +234,7 @@ class Stage:
             self.create()
         record = self.inspect()
         self.boundary(record)
+        print(f"{self.name}: NUGET_XMLDOC_MODE=none", flush=True)
         require(record["State"]["Status"] == "created", "A started container cannot be executed again")
         require(not (self.root / f"{self.name}-start-intent.json").exists(),
                 "A start intent cannot be retried after interruption")

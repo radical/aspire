@@ -1,6 +1,8 @@
 """Behavioral checks for the deliberately unwired trusted-baseline experiment."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -25,6 +27,8 @@ class Docker:
         self.fail_stop = False
         self.fail_start = False
         self.fail_attach_after_exit = False
+        # Docker merges explicit container overrides over image Config.Env.
+        self.image_environment = {"NUGET_XMLDOC_MODE": "skip"}
 
     def __call__(self, arguments, timeout=30, limit=1048576):
         self.calls.append(arguments)
@@ -33,11 +37,15 @@ class Docker:
             self.name = Path(value("--cidfile")).stem
             cid = "a" * 64
             Path(value("--cidfile")).write_text(cid)
+            environment = dict(self.image_environment)
+            environment.update(item.split("=", 1) for index, item in enumerate(arguments)
+                               if index and arguments[index - 1] == "--env")
             self.record = {
                 "Id": cid, "Image": "sha256:" + "b" * 64,
                 "Config": {"Labels": dict(item.split("=", 1) for index, item in enumerate(arguments)
                                           if index and arguments[index - 1] == "--label"),
-                           "User": value("--user")},
+                           "User": value("--user"),
+                           "Env": [f"{key}={value}" for key, value in environment.items()]},
                 "State": {"Status": "created", "Running": False, "Pid": 0, "ExitCode": self.exit_code},
                 "HostConfig": {
                     "ReadonlyRootfs": True, "Privileged": False,
@@ -105,6 +113,56 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(create[create.index("--mount") + 1],
                          f"type=bind,src={self.work},dst=/work")
         self.assertEqual(create.count("--mount"), 1)
+
+    def test_inherited_xml_skip_is_overridden_and_observed_before_either_stage_starts(self):
+        for name, network in (("prepare", "bridge"), ("test", "none")):
+            with self.subTest(stage=name):
+                root = self.root / name
+                root.mkdir()
+                self.docker.root = root
+                stage = baseline.Stage(root, self.work, name, "sha256:" + "b" * 64,
+                                       ["true"], network=network, docker=self.docker)
+                stage.create()
+                environment = stage.inspect()["Config"]["Env"]
+                self.assertIn("NUGET_XMLDOC_MODE=none", environment)
+                self.assertIn("NUGET_PACKAGES=/work/packages", environment)
+                self.assertFalse((self.work / "packages").exists())
+                # Only the XML mode may be observed, never unrelated environment values.
+                self.docker.record["Config"]["Env"].append("UNRELATED_TOKEN=not-for-output")
+                output = io.StringIO()
+                real = self.docker
+                def observed_start(arguments, **kwargs):
+                    if arguments[0] == "start":
+                        self.assertEqual(output.getvalue(), f"{name}: NUGET_XMLDOC_MODE=none\n")
+                    return real(arguments, **kwargs)
+                stage.docker = observed_start
+                with contextlib.redirect_stdout(output):
+                    self.assertTrue(stage.execute(20)["stopped"])
+                self.assertEqual(output.getvalue(), f"{name}: NUGET_XMLDOC_MODE=none\n")
+
+    def test_missing_skip_or_malformed_inspected_xml_mode_prevents_start(self):
+        for name, network in (("prepare", "bridge"), ("test", "none")):
+            for index, environment in enumerate((
+                    None, [], ["NUGET_XMLDOC_MODE=skip"], ["NUGET_XMLDOC_MODE="],
+                    ["NUGET_XMLDOC_MODE=NONE"], ["NUGET_XMLDOC_MODE"],
+                    ["NUGET_XMLDOC_MODE=none", "NUGET_XMLDOC_MODE=skip"],
+                    ["NUGET_XMLDOC_MODE=none", "NUGET_XMLDOC_MODE=none"],
+                    "NUGET_XMLDOC_MODE=none", [None])):
+                with self.subTest(stage=name, environment=environment):
+                    root = self.root / f"{name}-{index}"
+                    root.mkdir()
+                    self.docker.root = root
+                    stage = baseline.Stage(root, self.work, name, "sha256:" + "b" * 64,
+                                           ["true"], network=network, docker=self.docker)
+                    stage.create()
+                    if environment is None:
+                        del self.docker.record["Config"]["Env"]
+                    else:
+                        self.docker.record["Config"]["Env"] = environment
+                    with self.assertRaisesRegex(ValueError, "XML"):
+                        stage.execute(20)
+                    self.assertFalse((root / f"{name}-start-intent.json").exists())
+                    self.assertEqual([call for call in self.docker.calls if call[0] == "start"], [])
 
     def test_container_uid_gid_match_checkout_owner_required_by_bootstrap_chmod(self):
         installer = self.work / "dotnet-install.sh"

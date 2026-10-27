@@ -277,6 +277,25 @@ actual guest-visible directory/installer ownership before bootstrap. Runtime
 UID/GID remapping that breaks that alignment fails closed, without a root
 preparer, added capabilities or namespace overrides.
 
+Both containers explicitly set `NUGET_XMLDOC_MODE=none` at creation, overriding
+the pinned SDK image's inherited `skip`. Before any container start (and thus
+before preparation bootstrap or restore), the host checks the exact owned
+container's merged `Config.Env` for one unambiguous `NUGET_XMLDOC_MODE=none`
+entry. Missing, duplicate or other modes fail closed. A bounded mode-only
+console observation, `prepare: NUGET_XMLDOC_MODE=none` or
+`test: NUGET_XMLDOC_MODE=none`, records that check without exposing other
+environment values.
+
+The fresh, isolated `/work/packages` cache is essential: changing the mode
+does not recover XML omitted during an earlier extraction. NuGet's
+[environment-variable reference](https://learn.microsoft.com/en-us/nuget/reference/cli-reference/cli-ref-environment-variables)
+defines `skip` as omitting assembly XML documentation and `none` as normal
+extraction. The enrolled schema generator consumes adjacent package XML
+metadata for descriptions, including Redis `ConfigurationOptions`. This
+environment correction preserves the normal build and schema-integrity
+validation; it does not update schemas or change enrollment, SDK/image pins,
+frameworks or candidate gates.
+
 1. **Preparation:** bridge networking, a copy of the image's SDK installation
    into the source's `.dotnet`, an exact SDK check, then
    `./build.sh -restore -build -projects "$PWD/tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj" /p:InstallBrowsersForPlaywright=false /p:RunQuarantinedTests=true`.
