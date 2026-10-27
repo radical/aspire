@@ -303,9 +303,16 @@ frameworks or candidate gates.
    Arcade consumes project items relative to its SDK's `tools/Build.proj`.
    This is the repository's local build path, not CI partition/archive generation.
 2. **Execution:** networking disabled, another exact SDK check, then
-   `./dotnet.sh test --project tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj --no-launch-profile --no-restore --no-build -- --timeout 8m --results-directory /work/results --report-trx --report-trx-filename original.trx --filter-method Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly --filter-not-trait outerloop=true`.
+   `./dotnet.sh test --project tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj --no-launch-profile --no-restore --no-build --results-directory /work/results -- --timeout 8m --report-trx --report-trx-filename original.trx --filter-method Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly --filter-not-trait outerloop=true`.
    Default quarantine filtering is disabled only inside these experimental
    containers so this explicitly selected quarantined test can execute.
+
+The SDK-owned `--results-directory` pair precedes `--`; the SDK forwards its
+bound value to the test application. The pinned RC1 SDK otherwise scans
+forwarded arguments for existing paths and rejects the pre-created results
+directory as an unexpected positional directory
+([SDK path validation](https://github.com/dotnet/sdk/blob/0eac0cf2f8e6e2b9db933ebf98fc1fae43e9b02f/src/Cli/dotnet/Commands/Test/MTP/MSBuildUtility.cs#L281-L356)).
+The eight-minute timeout and other MTP arguments remain after `--`.
 
 Each stage has a read-only root filesystem, dropped capabilities, no new
 privileges, two CPUs, 6 GiB memory including swap, 512 processes and a 512 MiB

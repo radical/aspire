@@ -385,6 +385,57 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(observed["untrusted_outcomes"], ["Passed"])
         self.assertIsNone(observed["accepted_test_counts"])
 
+    def test_test_stage_shell_binds_results_to_sdk_and_preserves_forwarded_mtp_arguments(self):
+        output = self.root / "argv-run"
+        recorded = self.root / "argv.bin"
+        def prepared_source(root):
+            work = root / "work"
+            source = work / "source"
+            installer = source / "eng" / "common" / "dotnet-install.sh"
+            installer.parent.mkdir(parents=True)
+            installer.write_text("#!/bin/sh\n")
+            results = work / "results"
+            results.mkdir()
+            (results / "original.trx").write_text(self.trx())
+            wrapper = source / "dotnet.sh"
+            # Record actual shell argv without substituting a local SDK parser:
+            # the installed RC2 parser does not reproduce the pinned RC1 failure.
+            wrapper.write_text(
+                '#!/bin/bash\nset -eu\n'
+                'if [[ "$1" == --version ]]; then\n'
+                "printf '%s\\n' '11.0.100-rc.1.26425.128'\n"
+                'else\nprintf \'%s\\0\' "$@" > "$RECORDED_ARGV"\nfi\n')
+            wrapper.chmod(0o700)
+            self.docker.root, self.docker.work = root, work
+            return work
+        real = self.docker
+        def docker(arguments, **kwargs):
+            if arguments[0] == "start" and real.name == "test":
+                self.assertTrue((real.work / "results").is_dir())
+                plan = json.loads((output / "test-plan.json").read_text())
+                subprocess.run(plan["command"], cwd=real.work / "source", check=True,
+                               capture_output=True, timeout=30,
+                               env={**os.environ, "RECORDED_ARGV": str(recorded)})
+            return real(arguments, **kwargs)
+        real_stage = baseline.Stage
+        def stage(*args, **kwargs):
+            return real_stage(*args, **kwargs, docker=docker)
+        with patch.object(baseline, "authorize"), \
+                patch.object(baseline, "source", side_effect=prepared_source), \
+                patch.object(baseline, "image", return_value="sha256:" + "b" * 64), \
+                patch.object(baseline, "Stage", side_effect=stage):
+            baseline.run(output, self.root / "sdk.tar.gz")
+        arguments = recorded.read_bytes().decode().rstrip("\0").split("\0")
+        separator = arguments.index("--")
+        self.assertEqual(arguments[:separator], [
+            "test", "--project", "tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj",
+            "--no-launch-profile", "--no-restore", "--no-build",
+            "--results-directory", "/work/results"])
+        self.assertEqual(arguments[separator + 1:], [
+            "--timeout", "8m", "--report-trx", "--report-trx-filename", "original.trx",
+            "--filter-method", "Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly",
+            "--filter-not-trait", "outerloop=true"])
+
     @unittest.skipUnless(
         (Path(__file__).resolve().parents[3] / ".dotnet" / "dotnet").is_file(),
         "Project operand regression requires an already provisioned repository .NET SDK")

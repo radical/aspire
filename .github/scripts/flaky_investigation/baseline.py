@@ -418,8 +418,8 @@ def run(root, archive):
     require(prepared["exit_code"] == 0, "Trusted-baseline restore/build failed; no test stage started")
     test = [
         "bash", "-euc", OWNERSHIP_CHECK + f'test "$(./dotnet.sh --version)" = "{SDK}"\n'
-        f"./dotnet.sh test --project {PROJECT} --no-launch-profile --no-restore --no-build -- "
-        "--timeout 8m --results-directory /work/results "
+        f"./dotnet.sh test --project {PROJECT} --no-launch-profile --no-restore --no-build "
+        "--results-directory /work/results -- --timeout 8m "
         "--report-trx --report-trx-filename original.trx "
         f"--filter-method {CLASS}.{METHOD} --filter-not-trait outerloop=true\n",
     ]
