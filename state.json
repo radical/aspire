@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "issue": 156,
+  "issue_url": "https://github.com/radical/aspire/issues/156",
+  "phase": "ready",
+  "created_at": "2026-10-27T19:37:02.859642+00:00",
+  "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+  "control_sha": "ec8110dac6075157f3c3df22fd5fe7c3392c4e52",
+  "agent_sha": "ec8110dac6075157f3c3df22fd5fe7c3392c4e52",
+  "worker_sha": "ec8110dac6075157f3c3df22fd5fe7c3392c4e52",
+  "agent_workflow": "flaky-issue-agent.lock.yml",
+  "used": {
+    "models": 0,
+    "workers": 0,
+    "fixes": 0,
+    "runner_iterations": 0
+  },
+  "history": [],
+  "notes": [],
+  "candidate": null,
+  "target": null,
+  "local_precheck": null,
+  "outcome": null,
+  "updated_at": "2026-10-27T19:37:02.859678+00:00",
+  "transitions": [
+    {
+      "phase": "ready",
+      "reason": "Validated inputs/evidence ready for the next decision.",
+      "at": "2026-10-27T19:37:02.859678+00:00"
+    }
+  ]
+}
