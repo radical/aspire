@@ -120,16 +120,109 @@ class GatewayStartupObservationTests(unittest.TestCase):
         self.assertEqual(records, [self.record(1, node="health")])
         self.assertIn(b"fixture-private-token", self.private.read_bytes())
 
-    def test_duplicate_or_competing_errors_are_unknown(self):
-        for second in (
-            ERRORS[3][0], ERRORS[4][0], "FATAL: fixture-private-detail",
+    def test_identical_or_competing_terminal_errors(self):
+        for second, reason in (
+            (ERRORS[3][0], "health_failed"),
+            (ERRORS[4][0], "unknown"),
+            ("FATAL: fixture-private-detail", "unknown"),
         ):
             with self.subTest(second=second):
                 code, records = self.logged(
                     "[error] " + ERRORS[3][0] + "\n[error] " + second + "\n"
                 )
                 self.assertEqual(code, 1)
-                self.assertEqual(records, [self.record(1)])
+                self.assertEqual(records, [self.record(1, reason=reason)])
+
+    def liveness_capture(self, terminal, diagnostic=""):
+        # Exact pinned launcher:939-945 / 955-961 and diagnostics:294-318.
+        # Diagnostic payloads below are synthetic; no gateway/Docker is run.
+        return (
+            "[info] Starting gateway container...\n"
+            "[error] " + terminal + "\n"
+            "[error] \n"
+            "[error] Gateway startup diagnostics:\n" +
+            (diagnostic + "\n" if diagnostic else "[error] Gateway stderr: (empty)\n") +
+            "[error] Gateway stdout was captured but is not displayed because it may contain credentials.\n"
+            "[error] " + terminal + "\n"
+        )
+
+    def test_pinned_liveness_framing_uses_fixed_reasons_through_exit(self):
+        for terminal, reason in (
+            (ERRORS[2][0], "process_exited_early"),
+            ("ERROR: Gateway process (PID: 424242) exited during initialization",
+             "process_exited_during_initialization"),
+        ):
+            with self.subTest(reason=reason):
+                capture = self.liveness_capture(terminal)
+                code, records = self.logged(capture)
+                self.assertEqual(code, 1)
+                self.assertEqual(records, [self.record(1, node="spawn", reason=reason)])
+                self.assertEqual(self.private.read_text(), capture)
+
+    def test_diagnostic_payload_and_trailing_blank_errors_stay_private(self):
+        for terminal, reason in (
+            (ERRORS[2][0], "process_exited_early"),
+            ("ERROR: Gateway process (PID: 424242) exited during initialization",
+             "process_exited_during_initialization"),
+        ):
+            with self.subTest(reason=reason):
+                capture = self.liveness_capture(
+                    terminal,
+                    "[error] fixture-secret account=fixture-account "
+                    "https://fixture.invalid/auth?token=fixture-only\n"
+                    "fixture-raw-catalog-and-stderr",
+                ) + "[error] \n[error] \t \nfixture-private-trailing-stdout\n"
+                code, records = self.logged(capture, 23)
+                self.assertEqual(code, 23)
+                self.assertEqual(records, [self.record(23, node="spawn", reason=reason)])
+                self.assertEqual(self.private.read_text(), capture)
+
+    def test_unknown_final_or_conflicting_liveness_terminal_is_unknown(self):
+        immediate = ERRORS[2][0]
+        initialization = "ERROR: Gateway process (PID: 424242) exited during initialization"
+        for first, final in (
+            (immediate, initialization),
+            (initialization, immediate),
+            (initialization, "ERROR: Gateway process (PID: 424243) exited during initialization"),
+            (immediate, "FATAL: fixture-private-final https://fixture.invalid/token"),
+            (initialization, "fixture-unknown-final-error"),
+        ):
+            with self.subTest(final=final):
+                code, records = self.logged(
+                    self.liveness_capture(first) + "[error] " + final + "\n", 7
+                )
+                self.assertEqual(code, 7)
+                self.assertEqual(records, [self.record(7, node="spawn")])
+
+    def test_initialization_pid_and_terminal_framing_require_full_ascii_match(self):
+        valid = "ERROR: Gateway process (PID: 424242) exited during initialization"
+        malformed = [
+            f"ERROR: Gateway process (PID: {pid}) exited during initialization"
+            for pid in ("", "0", "0424242", "-1", "+1", "1.5", "1e3",
+                        "abc", "１２３", "1 2", " 424242", "424242 ")
+        ] + ["prefix " + valid, valid + " suffix", " " + valid, valid + " ",
+             valid.lower(), valid + "."]
+        for terminal in malformed:
+            with self.subTest(terminal=terminal):
+                code, records = self.logged(self.liveness_capture(terminal))
+                self.assertEqual(code, 1)
+                self.assertEqual(records, [self.record(1, node="spawn")])
+
+    def test_zero_boundary_status_does_not_become_a_liveness_failure_claim(self):
+        for terminal in (
+            ERRORS[2][0],
+            "ERROR: Gateway process (PID: 424242) exited during initialization",
+        ):
+            with self.subTest(terminal=terminal):
+                capture = self.liveness_capture(terminal)
+                code, records = self.execute(
+                    "provider_gateway_stage=launcher_pipeline\n"
+                    f"printf '%s' {shlex.quote(capture)}"
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(records, [
+                    self.record(0, stage="complete", node="spawn", reason="exit_zero"),
+                ])
 
     def test_out_of_order_stages_are_unknown(self):
         code, records = self.logged(

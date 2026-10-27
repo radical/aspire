@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import stat
 
 
@@ -65,6 +66,16 @@ def read_capture(path):
         os.close(descriptor)
 
 
+def terminal_reason(message):
+    reason = REASONS.get(message)
+    if reason is not None:
+        return reason
+    # Pinned launcher:955-961 interpolates the child PID; discard that token.
+    if re.fullmatch(r"ERROR: Gateway process \(PID: [1-9][0-9]*\) exited during initialization", message):
+        return "process_exited_during_initialization"
+    return None
+
+
 def normalize(text, status):
     # shim.cjs:24-28 emits "[info] <message>\n" / "[error] <message>\n".
     # Match complete lines only. Captured data is mutable, not authenticated
@@ -81,10 +92,20 @@ def normalize(text, status):
                 ambiguous = True
             last, node_stage = index, stage
         elif line.startswith("[error] "):
-            errors.append(REASONS.get(line[8:], "unknown"))
+            message = line[8:]
+            if message.strip():
+                errors.append(message)
     if ambiguous:
         return "unknown", "unknown"
-    reason = "exit_zero" if status == 0 else errors[0] if len(errors) == 1 else "unknown"
+    reason = "exit_zero" if status == 0 else "unknown"
+    if status != 0 and errors:
+        # Launcher:939-945 / 955-961 repeats the same terminal around blank
+        # framing and diagnostics. Require it last; distinct recognized
+        # terminals (including different PID tokens) remain ambiguous.
+        final = terminal_reason(errors[-1])
+        recognized = {message for message in errors if terminal_reason(message) is not None}
+        if final is not None and len(recognized) == 1:
+            reason = final
     return node_stage, reason
 
 
