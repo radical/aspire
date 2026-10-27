@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 154,
   "issue_url": "https://github.com/radical/aspire/issues/154",
-  "phase": "cancelling",
+  "phase": "publication-intent",
   "created_at": "2026-10-27T02:07:08.467698+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "32e9f6a4156bf1eb40d43cd015edd4309b92f8d7",
@@ -20,8 +20,8 @@
   "candidate": null,
   "target": null,
   "local_precheck": null,
-  "outcome": null,
-  "updated_at": "2026-10-27T02:11:41.882494+00:00",
+  "outcome": "budget-exhausted",
+  "updated_at": "2026-10-27T02:14:01.819142+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -62,6 +62,11 @@
       "phase": "cancelling",
       "reason": "Wait for the exact owned run to finish; a cancellation request is not completion.",
       "at": "2026-10-27T02:11:41.882494+00:00"
+    },
+    {
+      "phase": "publication-intent",
+      "reason": "Terminal budget-exhausted decision; publication not yet confirmed.",
+      "at": "2026-10-27T02:14:01.819142+00:00"
     }
   ],
   "agent": {
@@ -89,6 +94,8 @@
     "outcome": "budget-exhausted",
     "reason": "Owned agent absolute deadline expired.",
     "requested_at": "2026-10-27T02:11:39.001753+00:00",
-    "confirmed": false
-  }
+    "confirmed": true
+  },
+  "explanation": "Owned agent absolute deadline expired. Exact owned run completion confirmed.",
+  "analysis": null
 }
