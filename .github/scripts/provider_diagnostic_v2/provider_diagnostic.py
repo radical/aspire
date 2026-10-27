@@ -416,7 +416,12 @@ def finish(args):
         raise Rejected("discovery-unobserved")
     version_path = args.version_file or args.state.with_suffix(".version")
     version_raw, _ = read_regular(version_path, state["uid"], 256)
-    if version_raw.strip() not in (b"1.0.85", b"GitHub Copilot CLI 1.0.85"):
+    # The pinned release prints a terminal period followed by an update hint.
+    if version_raw.strip() not in (
+        b"1.0.85",
+        b"GitHub Copilot CLI 1.0.85",
+        b"GitHub Copilot CLI 1.0.85.\nRun 'copilot update' to check for updates.",
+    ):
         raise Rejected("cli-version-unobserved")
     return {
         "selected_sol": {"model": MODEL, "configured_provider": "copilot",
