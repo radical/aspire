@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 155,
   "issue_url": "https://github.com/radical/aspire/issues/155",
-  "phase": "worker",
+  "phase": "ready",
   "created_at": "2026-10-27T04:51:45.095818+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "5c2ee96d64fbe1b82047648253df2772a5a4dee4",
@@ -15,7 +15,34 @@
     "fixes": 0,
     "runner_iterations": 1
   },
-  "history": [],
+  "history": [
+    {
+      "sha": "5c2ee96d64fbe1b82047648253df2772a5a4dee4",
+      "source_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
+      "workflow": "reproduce-flaky-tests.yml",
+      "phase": "reproduce",
+      "runners": 1,
+      "iterations": 1,
+      "mode": "single",
+      "branch": "ankj/flaky-test-155-run-1",
+      "deadline_at": "2026-10-27T06:22:57.087906+00:00",
+      "id": 40452171642,
+      "passed": 1,
+      "failed": 0,
+      "actual_tests": 1,
+      "runner_iterations": 1,
+      "errors": [],
+      "cases": [
+        {
+          "os": "ubuntu-latest",
+          "name": "Aspire.Hosting.Tests.SlimTestProgramTests.TestProjectStartsAndStopsCleanly",
+          "test_id": "1f23bcc9-e90a-631d-59bb-a7095ae6504a",
+          "passed": 1,
+          "failed": 0
+        }
+      ]
+    }
+  ],
   "notes": [],
   "candidate": null,
   "target": {
@@ -31,7 +58,7 @@
   },
   "local_precheck": null,
   "outcome": null,
-  "updated_at": "2026-10-27T04:53:01.352979+00:00",
+  "updated_at": "2026-10-27T04:58:47.716657+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -52,6 +79,11 @@
       "phase": "worker",
       "reason": "Owned worker dispatched; original reports must pass independent validation.",
       "at": "2026-10-27T04:53:01.352979+00:00"
+    },
+    {
+      "phase": "ready",
+      "reason": "Bounded worker-only integration collected; no automatic continuation or terminal flake conclusion.",
+      "at": "2026-10-27T04:58:47.716657+00:00"
     }
   ],
   "worker": {
