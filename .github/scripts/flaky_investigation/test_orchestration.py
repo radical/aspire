@@ -9,19 +9,21 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
 
 from contracts import (
     REPOSITORY, WORKER, issue_number, local_precheck, repair_scope, reserve,
-    selection, validate_candidate, validate_proposal,
+    selection, validate_candidate, validate_checkpoint, validate_proposal,
 )
 from controller import Controller, authorize, main, prepare, stage_source
-from evidence import summarize
+from evidence import flaky_cases, summarize
 from github import GitHub, GitHubAPIError, owned_run, state_branch
 from runner import execute, run_streamed
 from reporting import findings
+from preparation import prepare_inputs
 from worker import configuration, setup_outputs, validate_checkout
 
 
@@ -255,9 +257,11 @@ class OrchestrationTests(unittest.TestCase):
             }, item["selection"])
             self.assertEqual([
                 {"kind": "agent", "status": "checkpointed", "run_id": run_id,
-                 "url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}"},
+                 "url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}",
+                 "deadline_at": "2026-10-21T00:30:00+00:00"},
                 {"kind": "worker", "status": "current", "run_id": self.github.state["worker"]["id"],
                  "url": f"https://github.com/{REPOSITORY}/actions/runs/{self.github.state['worker']['id']}",
+                 "deadline_at": "2026-10-21T01:30:00+00:00",
                  "source_sha": BASE, "phase": "reproduce", "mode": "single", "runners": 3, "iterations": 3},
             ], item["children"])
         for index, mode in enumerate(("single", "single", "project"), 1):
@@ -288,7 +292,8 @@ class OrchestrationTests(unittest.TestCase):
         self.controller.advance(self.state, self.revision)
         state, _ = self.live()
         self.github.runs[state["agent"]["id"]].update(status="completed", conclusion="success")
-        self.github.state["notes"].append({"action": "reproduce", "explanation": payload})
+        self.github.state["notes"].append({
+            "action": "reproduce", "explanation": payload, "evidence_read": ["Original TRX"]})
         with patch.object(self.github, "artifact", side_effect=ValueError(payload)), \
                 patch("sys.stdout", io.StringIO()) as output:
             self.invoke_controller()
@@ -408,6 +413,9 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch("controller.ROOT", Path(temporary)), \
                 patch("controller.stage_source", return_value=Path(temporary) / "source"), \
                 patch.dict(os.environ, {"GITHUB_RUN_ID": str(state["agent"]["id"])}):
+            source = Path(temporary) / "source"
+            source.mkdir()
+            (source / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100"}}))
             prepare(self.github, URL, state["agent"]["revision"])
             context = json.loads((Path(temporary) / "context.json").read_text())
             self.assertEqual(BASE, context["source"]["sha"])
@@ -415,7 +423,8 @@ class OrchestrationTests(unittest.TestCase):
             self.assertFalse(context["historical_evidence"]["logs_collected"])
             self.assertIn("not current", context["historical_evidence"]["limitation"])
 
-    def test_substantive_local_work_survives_external_waits_into_fresh_agent_context(self):
+    @patch("controller.require_candidate_isolation")
+    def test_substantive_local_work_survives_external_waits_into_fresh_agent_context(self, isolation):
         local = {
             "status": "completed", "reason": "Matching environment; local results are preliminary.",
             "os": "Linux", "commands": ["./dotnet.sh test --project " + PROJECT],
@@ -440,6 +449,9 @@ class OrchestrationTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temporary, patch("controller.ROOT", Path(temporary)), \
                     patch("controller.stage_source", return_value=Path(temporary) / "source"), \
                     patch.dict(os.environ, {"GITHUB_RUN_ID": str(state["agent"]["id"])}):
+                source = Path(temporary) / "source"
+                source.mkdir()
+                (source / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100"}}))
                 prepare(self.github, URL, state["agent"]["revision"])
                 return json.loads((Path(temporary) / "context.json").read_text())
         self.controller.advance(self.state, self.revision)
@@ -760,12 +772,18 @@ class OrchestrationTests(unittest.TestCase):
         run_id = state["agent"]["id"]
         state["created_at"] = (NOW - timedelta(hours=12)).isoformat()
         self.controller.advance(state, revision)
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.assertEqual([], self.github.comments)
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        self.controller.advance(state, revision)
         body = self.github.comments[0]["body"]
         self.assertIn(f"https://github.com/{REPOSITORY}/actions/runs/{run_id}", body)
         self.assertIn("Latest checkpointed run identities (not test results)", body)
         self.assertIn("**Observed:** No accepted test executions.", body)
 
-    def test_lost_pr_response_never_posts_definite_no_pr_or_retries_publication(self):
+    @patch("controller.require_candidate_isolation")
+    def test_lost_pr_response_never_posts_definite_no_pr_or_retries_publication(self, isolation):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         self.complete_worker(True)
@@ -1019,7 +1037,288 @@ class OrchestrationTests(unittest.TestCase):
         self.controller.advance(state, revision, cancel=True)
         self.assertEqual([f"actions/runs/{run_id}/cancel"],
                          [call[0] for call in self.github.calls if call[0].endswith("/cancel")])
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.assertEqual([], self.github.comments)
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        self.controller.advance(state, revision)
         self.assertEqual("cancelled", self.github.state["outcome"])
+
+    def test_child_deadline_survives_resumes_and_waits_for_confirmed_cancellation(self):
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        run_id = state["agent"]["id"]
+        deadline = state["agent"].get("deadline_at")
+        self.assertIsNotNone(deadline, "child needs an absolute durable deadline")
+        self.assertEqual(revision, self.controller.advance(state, revision))
+        later = Controller(self.github, lambda: NOW + timedelta(minutes=31))
+        later.advance(state, revision)
+        state, revision = self.live()
+        self.assertEqual("cancelling", state["phase"])
+        self.assertEqual([], self.github.comments)
+        later.advance(state, revision)
+        self.assertEqual(1, len([call for call in self.github.calls if call[0].endswith("/cancel")]))
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        later.advance(state, revision)
+        self.assertEqual("budget-exhausted", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertTrue(self.github.state["cancellation"]["confirmed"])
+        state, revision = self.live()
+        later.advance(state, revision)
+        self.assertEqual(1, len(self.github.comments))
+
+    def test_uncertain_cancel_response_reconciles_exact_run_without_retry_or_false_success(self):
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        run_id = state["agent"]["id"]
+        api = self.github.api
+        def lose_response(endpoint, body=None, method=None):
+            result = api(endpoint, body, method)
+            if endpoint.endswith("/cancel"):
+                raise subprocess.TimeoutExpired(["gh", "api"], 120)
+            return result
+        with patch.object(self.github, "api", side_effect=lose_response):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.controller.advance(state, revision, cancel=True)
+            state, revision = self.live()
+            self.controller.advance(state, revision)
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.assertEqual([], self.github.comments)
+        self.assertEqual(1, len([call for call in self.github.calls if call[0].endswith("/cancel")]))
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        self.controller.advance(state, revision)
+        self.assertEqual("cancelled", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+
+    def test_worker_deadline_does_not_cancel_healthy_worker_and_unconfirmed_stop_is_honest(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        state, revision = self.live()
+        run_id = state["worker"]["id"]
+        earlier = Controller(self.github, lambda: NOW + timedelta(minutes=31))
+        self.assertEqual(revision, earlier.advance(state, revision))
+        self.assertFalse(any(call[0].endswith("/cancel") for call in self.github.calls))
+        expired = Controller(self.github, lambda: NOW + timedelta(minutes=91))
+        expired.advance(state, revision)
+        state, revision = self.live()
+        self.assertEqual("cancelling", state["phase"])
+        self.assertEqual(run_id, state["cancellation"]["run_id"])
+        late = Controller(self.github, lambda: NOW + timedelta(minutes=122))
+        late.advance(state, revision)
+        self.assertEqual("blocked", self.github.state["outcome"])
+        self.assertFalse(self.github.state["cancellation"]["confirmed"])
+        self.assertIn("may still be active", self.github.state["explanation"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual(1, len([call for call in self.github.calls if call[0].endswith("/cancel")]))
+        state, revision = self.live()
+        self.assertEqual("cleanup-pending", state["phase"])
+        self.assertEqual(revision, late.advance(state, revision))
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        state, revision = self.live()
+        late.advance(state, revision)
+        self.assertEqual("terminal", self.github.state["phase"])
+        self.assertTrue(self.github.state["cancellation"]["confirmed"])
+        self.assertEqual("budget-exhausted", self.github.state["cancellation"]["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertEqual(1, len(self.github.runs))
+
+    def test_recovery_continues_other_issues_when_one_checkpoint_is_tainted(self):
+        healthy = copy.deepcopy(self.state)
+        healthy.update(issue=124, issue_url=URL.replace("/123", "/124"))
+        load = self.github.load
+        def load_issue(issue, revision=None):
+            if issue == 123:
+                raise ValueError("Malformed checkpoint budgets")
+            return load(issue, revision)
+        self.github.state = healthy
+        with patch.dict(os.environ, {
+            "GITHUB_REPOSITORY": REPOSITORY, "ISSUE_URL": "", "OPERATION": "resume",
+            "GITHUB_EVENT_NAME": "workflow_run",
+        }), patch("sys.argv", ["controller.py", "advance"]), \
+                patch("controller.GitHub", return_value=self.github), \
+                patch("controller.Controller", return_value=self.controller), \
+                patch.object(self.github, "load", side_effect=load_issue), \
+                patch.object(self.github, "optional", return_value=[
+                    {"ref": "refs/heads/ankj/flaky-test-123-state"},
+                    {"ref": "refs/heads/ankj/flaky-test-124-state"}]), \
+                patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as errors:
+            with self.assertRaisesRegex(ValueError, r"issues \[123\]"):
+                main()
+        self.assertIn("Malformed checkpoint budgets", errors.getvalue())
+        self.assertEqual("agent", self.github.state["phase"])
+        self.assertEqual(124, self.github.state["issue"])
+        self.assertEqual([], self.github.comments)
+        self.assertEqual(1, len([call for call in self.github.calls if call[0] == "dispatch"]))
+
+    def test_malformed_present_objects_do_not_escape_or_starve_the_recovery_sweep(self):
+        for field, value in (
+            ("agent", []), ("worker", []), ("target", []), ("candidate", []),
+            ("cancellation", []), ("history", [[]]), ("notes", [[]]), ("transitions", [[]]),
+        ):
+            with self.subTest(field=field):
+                self.setUp()
+                malformed = {**copy.deepcopy(self.state), field: value}
+                healthy = copy.deepcopy(self.state)
+                healthy.update(issue=124, issue_url=URL.replace("/123", "/124"))
+                self.github.state = healthy
+                load = self.github.load
+                def load_issue(issue, revision=None):
+                    return (malformed, self.revision) if issue == 123 else load(issue, revision)
+                with patch.dict(os.environ, {
+                    "GITHUB_REPOSITORY": REPOSITORY, "ISSUE_URL": "", "OPERATION": "resume",
+                    "GITHUB_EVENT_NAME": "workflow_run",
+                }), patch("sys.argv", ["controller.py", "advance"]), \
+                        patch("controller.GitHub", return_value=self.github), \
+                        patch("controller.Controller", return_value=self.controller), \
+                        patch.object(self.github, "load", side_effect=load_issue), \
+                        patch.object(self.github, "optional", return_value=[
+                            {"ref": "refs/heads/ankj/flaky-test-123-state"},
+                            {"ref": "refs/heads/ankj/flaky-test-124-state"}]), \
+                        patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, r"issues \[123\]"):
+                        main()
+                self.assertEqual(124, self.github.state["issue"])
+                self.assertEqual("agent", self.github.state["phase"])
+                self.assertEqual(1, len(self.github.runs))
+
+    def test_completed_child_observed_late_uses_exact_attempt_job_completion_not_updated_at(self):
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        run_id = state["agent"]["id"]
+        self.github.runs[run_id].update(
+            status="completed", conclusion="success", updated_at=(NOW + timedelta(minutes=31)).isoformat())
+        self.github.artifacts[(run_id, "repo-memory-default")] = {
+            "proposal.json": json.dumps(proposal(
+                state, state["agent"]["revision"], "finish", outcome="not-flaky")).encode()}
+        jobs = [{
+            "id": 777, "run_id": run_id, "run_attempt": 1, "head_sha": CONTROL, "status": "completed",
+            "started_at": NOW.isoformat(), "completed_at": (NOW + timedelta(minutes=10)).isoformat(),
+        }]
+        later = Controller(self.github, lambda: NOW + timedelta(minutes=31))
+        original = self.github.pages
+        with patch.object(self.github, "pages", wraps=self.github.pages) as pages:
+            pages.side_effect = lambda endpoint, key=None: jobs if endpoint.endswith("/attempts/1/jobs") else original(
+                endpoint, key)
+            later.advance(state, revision)
+        self.assertEqual("not-flaky", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertFalse(any(call[0].endswith("/cancel") for call in self.github.calls))
+
+    def test_late_child_requires_all_exact_attempt_job_timestamps_and_cannot_extend_overall_budget(self):
+        for defect, outcome in (
+            ("late-job", "budget-exhausted"), ("at-deadline", "budget-exhausted"),
+            ("unknown-time", "blocked"), ("foreign-attempt", "blocked"), ("foreign-source", "blocked"),
+            ("unfinished-job", "blocked"), ("no-jobs", "blocked"), ("future-time", "blocked"),
+            ("overall-expired", "budget-exhausted"),
+        ):
+            with self.subTest(defect=defect):
+                self.setUp()
+                self.controller.advance(self.state, self.revision)
+                state, _ = self.live()
+                owned = state["agent"]
+                self.github.runs[owned["id"]].update(status="completed", conclusion="success")
+                jobs = [{
+                    "id": 777, "run_id": owned["id"], "run_attempt": 1, "head_sha": CONTROL,
+                    "status": "completed", "completed_at": (NOW + timedelta(minutes=10)).isoformat(),
+                }]
+                if defect in {"late-job", "at-deadline", "future-time"}:
+                    jobs.append({**jobs[0], "id": 778, "completed_at": (
+                        NOW + timedelta(minutes={
+                            "at-deadline": 30, "late-job": 32, "future-time": 34,
+                        }[defect])).isoformat()})
+                elif defect == "unknown-time":
+                    jobs[0]["completed_at"] = None
+                elif defect == "foreign-attempt":
+                    jobs[0]["run_attempt"] = 2
+                elif defect == "foreign-source":
+                    jobs[0]["head_sha"] = BASE
+                elif defect == "unfinished-job":
+                    jobs[0]["status"] = "in_progress"
+                elif defect == "no-jobs":
+                    jobs = []
+                original = self.github.pages
+                self.controller = Controller(self.github, lambda: NOW + timedelta(
+                    hours=13) if defect == "overall-expired" else NOW + timedelta(minutes=33))
+                with patch.object(self.github, "pages", side_effect=lambda endpoint, key=None:
+                                  jobs if endpoint.endswith("/attempts/1/jobs") else original(endpoint, key)), \
+                        patch("sys.stdout", io.StringIO()):
+                    self.invoke_controller()
+                self.assertEqual(outcome, self.github.state["outcome"])
+                self.assertEqual([], self.github.state["notes"])
+                self.assertEqual([], self.github.state["history"])
+                self.assertEqual(1, len(self.github.runs))
+
+    def test_timely_completed_worker_observed_late_is_counted_without_an_extra_model(self):
+        self.selected()
+        self.controller.advance(self.state, self.revision)
+        state, revision = self.live()
+        owned = state["worker"]
+        self.github.runs[owned["id"]].update(status="completed", conclusion="success")
+        for (os_name, index), files in evidence(owned, state["target"]).items():
+            self.github.artifacts[(owned["id"], f"flaky-evidence-{os_name}-{index}")] = files
+        jobs = [{
+            "id": 777, "run_id": owned["id"], "run_attempt": 1, "head_sha": CONTROL,
+            "status": "completed", "completed_at": (NOW + timedelta(minutes=10)).isoformat(),
+        }]
+        later = Controller(self.github, lambda: NOW + timedelta(minutes=91))
+        with patch.object(self.github, "pages", return_value=jobs):
+            later.advance(state, revision)
+        self.assertEqual(9, self.github.state["history"][0]["passed"])
+        self.assertEqual(0, self.github.state["used"]["models"])
+        self.assertEqual(2, self.github.state["used"]["workers"])
+        self.assertEqual("worker", self.github.state["phase"])
+
+    def test_complete_live_checkpoint_shapes_and_inactive_objects_are_validated(self):
+        self.controller.handle(self.state, self.revision, proposal(
+            self.state, self.revision, "select", selection=SELECT,
+            local_precheck={"status": "skipped", "reason": "Target OS unavailable."}))
+        self.complete_worker(True)
+        state, revision = self.live()
+        self.controller.advance(state, revision)
+        for snapshot in self.github.snapshots.values():
+            validate_checkpoint(snapshot, 123)
+        state, _ = self.live()
+        for keys, value in (
+            (("agent", "id"), []), (("worker", "mode"), []), (("target", "oses"), [[]]),
+            (("target", "method"), []), (("target", "project"), "tests/X\nEVIL=value/Y.csproj"),
+            (("history", 0, "cases"), [[]]), (("history", 0, "cases", 0, "test_id"), []),
+            (("history", 0, "passed"), []), (("history", 0, "errors"), [[]]),
+            (("notes", 0, "action"), []), (("notes", 0, "explanation"), []),
+            (("notes", 0, "evidence_read"), [[]]), (("local_precheck",), []),
+            (("transitions", 0, "at"), []), (("rejected_attempts",), [[]]), (("repair_scope",), [[]]),
+        ):
+            with self.subTest(keys=keys):
+                malformed = copy.deepcopy(state)
+                parent = malformed
+                for key in keys[:-1]:
+                    parent = parent[key]
+                parent[keys[-1]] = value
+                with self.assertRaises(ValueError):
+                    validate_checkpoint(malformed, 123)
+
+    def test_controller_read_failure_does_not_abandon_an_active_owned_child(self):
+        self.controller.advance(self.state, self.revision)
+        state, _ = self.live()
+        run_id = state["agent"]["id"]
+        api = self.github.api
+        failures = [True]
+        def fail_first_read(endpoint, body=None, method=None):
+            if endpoint == f"actions/runs/{run_id}" and failures:
+                failures.pop()
+                raise GitHubAPIError(1, ["gh"], stderr=b"HTTP 503")
+            return api(endpoint, body, method)
+        with patch.object(self.github, "api", side_effect=fail_first_read):
+            self.invoke_controller()
+        self.assertEqual("cancelling", self.github.state["phase"])
+        self.assertEqual([], self.github.comments)
+        self.github.runs[run_id].update(status="completed", conclusion="cancelled")
+        self.invoke_controller()
+        self.assertEqual("blocked", self.github.state["outcome"])
+        self.assertEqual(1, len(self.github.comments))
+        self.assertIn("HTTP 503", self.github.comments[0]["body"])
+        self.assertTrue(self.github.state["cancellation"]["confirmed"])
 
     def test_expired_and_model_budget_have_finite_terminal_findings(self):
         for exhausted in ("time", "models"):
@@ -1050,7 +1349,72 @@ class OrchestrationTests(unittest.TestCase):
             self.controller.handle(self.state, self.revision, request)
         self.assertEqual({}, self.github.commits)
 
-    def test_checkpointed_candidate_resumes_verification_without_republishing_source(self):
+    def test_repair_rejects_pooled_cases_oses_or_legacy_aggregate_evidence(self):
+        for defect in ("case", "os", "legacy", "source"):
+            with self.subTest(defect=defect):
+                self.setUp()
+                self.selected()
+                batch = {
+                    "phase": "reproduce", "source_sha": BASE, "passed": 1, "failed": 1,
+                    "id": 88, "sha": CONTROL, "runners": 3, "iterations": 3, "mode": "single",
+                    "actual_tests": 2, "runner_iterations": 2, "errors": ["Missing widget"],
+                    "cases": [
+                        {"os": "ubuntu-latest", "name": "row-a", "test_id": "test", "passed": 0, "failed": 1},
+                        {"os": "ubuntu-latest", "name": "row-a", "test_id": "test", "passed": 1, "failed": 0},
+                    ],
+                }
+                if defect == "case":
+                    batch["cases"][1]["name"] = "row-b"
+                elif defect == "os":
+                    batch["cases"][1]["os"] = "windows-latest"
+                elif defect == "legacy":
+                    del batch["cases"]
+                else:
+                    batch["source_sha"] = CONTROL
+                self.state["history"] = [batch]
+                request = proposal(self.state, self.revision, "repair", files={
+                    SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                    diagnosis="Unproven readiness hypothesis.")
+                with self.assertRaisesRegex(ValueError, "case.*OS"):
+                    self.controller.handle(self.state, self.revision, request)
+                self.assertEqual({}, self.github.commits)
+                self.assertEqual([], self.github.pulls)
+
+    def test_verification_requires_nine_passes_for_the_exact_reproduced_case_and_os(self):
+        for defect in ("case", "os", "count", "definition", "legacy", "legacy-id"):
+            with self.subTest(defect=defect), patch("controller.require_candidate_isolation") as isolation:
+                self.setUp()
+                self.selected()
+                self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+                self.complete_worker(True)
+                state, revision = self.live()
+                state["candidate"] = {"sha": "c" * 40, "paths": [SOURCE], "diagnosis": "Readiness race"}
+                verified = copy.deepcopy(state["history"][0])
+                verified.update(phase="verify", source_sha="c" * 40, passed=9, failed=0,
+                                cases=[{"os": "ubuntu-latest", "name": "WaitsForWidget", "test_id": "test",
+                                        "passed": 9, "failed": 0}])
+                if defect == "case":
+                    verified["cases"][0]["name"] = "Different theory row"
+                elif defect == "os":
+                    verified["cases"][0]["os"] = "windows-latest"
+                elif defect == "count":
+                    verified["cases"][0]["passed"] = 8
+                elif defect == "definition":
+                    verified["cases"][0]["test_id"] = "different-definition"
+                elif defect == "legacy-id":
+                    del verified["cases"][0]["test_id"]
+                else:
+                    del verified["cases"]
+                state["history"].append(verified)
+                with self.assertRaisesRegex(ValueError, "each reproduced case and OS"):
+                    self.controller.handle(state, revision, proposal(
+                        state, revision, "finish", outcome="verified", reviewed_candidate_sha="c" * 40))
+                isolation.assert_not_called()
+                self.assertEqual([], self.github.pulls)
+                self.assertEqual([], self.github.comments)
+
+    @patch("controller.require_candidate_isolation")
+    def test_checkpointed_candidate_resumes_verification_without_republishing_source(self, isolation):
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         self.complete_worker(True)
@@ -1069,7 +1433,10 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(candidate_sha, self.github.state["worker"]["source_sha"])
         self.assertEqual(1, self.github.state["used"]["fixes"])
 
-    def test_real_failed_candidate_then_verified_revision_produces_one_clean_draft(self):
+    @patch("controller.require_candidate_isolation")
+    def test_real_failed_candidate_then_verified_revision_produces_one_clean_draft(self, isolation):
+        # Exercise publication orchestration with a synthetic approved boundary.
+        # This is not evidence that production candidate execution is enabled.
         self.selected()
         self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
         self.complete_worker(True)
@@ -1100,6 +1467,25 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(1, len(self.github.comments))
         self.assertEqual(2, state["used"]["fixes"])
 
+    def test_production_repair_and_verification_are_blocked_without_execution_isolation(self):
+        self.selected()
+        self.controller.dispatch_worker(self.state, self.revision, "reproduce", 3, 3, "single")
+        self.complete_worker(True)
+        state, revision = self.live()
+        state["candidate"] = {"sha": "c" * 40, "paths": [SOURCE], "diagnosis": "Readiness hypothesis"}
+        runs = len(self.github.runs)
+        for action in ("repair", "verify"):
+            with self.subTest(action=action), self.assertRaisesRegex(ValueError, "execution.*boundary"):
+                if action == "repair":
+                    self.controller.handle(state, revision, proposal(state, revision, "repair", files={
+                        SOURCE: CODE.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                        diagnosis="Readiness hypothesis."))
+                else:
+                    self.controller.dispatch_worker(state, revision, "verify", 3, 3, "single")
+        self.assertEqual({}, self.github.commits)
+        self.assertEqual(runs, len(self.github.runs))
+        self.assertEqual([], self.github.pulls)
+
     def test_impersonated_comment_marker_does_not_suppress_bot_finding(self):
         self.github.comments.append({
             "body": f"<!-- aspire-flaky-investigation:123:{BASE} -->",
@@ -1129,6 +1515,99 @@ class OrchestrationTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_prepared_evidence_records_sdk_mismatch_exact_sources_and_real_linked_log_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            (source / Path(SOURCE).parent).mkdir(parents=True)
+            (source / SOURCE).write_text(CODE)
+            (source / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100-rc.2"}}))
+            issue = {**ISSUE, "body": "Missing widget\nhttps://github.com/" + REPOSITORY + "/actions/runs/50/job/51"}
+            github = GitHub()
+            logs = b"original historical failure bytes: Missing widget\n"
+            with patch("preparation.shutil.which", return_value="/installed/dotnet"), \
+                    patch("preparation.subprocess.run", return_value=subprocess.CompletedProcess(
+                        ["dotnet", "--list-sdks"], 0, stdout="10.0.401 [/sdk]\n", stderr="")), \
+                    patch.object(github, "api", side_effect=[{"run_id": 50, "conclusion": "failure"}, logs]) as api:
+                prepared = prepare_inputs(github, source, issue, [], root)
+            self.assertFalse(prepared["environment"]["exact_sdk_available"])
+            self.assertEqual("11.0.100-rc.2", prepared["environment"]["expected_sdk"])
+            self.assertFalse(prepared["environment"]["restore_attempted"])
+            self.assertIn("not the model sandbox", prepared["environment"]["scope"])
+            self.assertEqual(SOURCE, prepared["candidate_test_sources"][0]["path"])
+            self.assertEqual(CODE, prepared["candidate_test_sources"][0]["content"])
+            self.assertEqual(logs, (root / prepared["historical_jobs"][0]["path"]).read_bytes())
+            self.assertEqual(["actions/jobs/51", "actions/jobs/51/logs"],
+                             [call.args[0] for call in api.call_args_list])
+            self.assertEqual(prepared, json.loads((root / "preparation.json").read_text()))
+
+    def test_prepared_history_records_denial_and_never_fetches_foreign_repository_jobs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "global.json").write_text(json.dumps({"sdk": {"version": "11.0.100"}}))
+            issue = {**ISSUE, "body": (
+                "https://github.com/elsewhere/aspire/actions/runs/50/job/51\n"
+                f"https://github.com/{REPOSITORY}/actions/runs/60/job/61")}
+            github = GitHub()
+            with patch("preparation.shutil.which", return_value=None), patch.object(
+                    github, "api", side_effect=GitHubAPIError(1, ["gh"], stderr=b"HTTP 403")) as api:
+                prepared = prepare_inputs(github, root, issue, [], root)
+            self.assertEqual(1, api.call_count)
+            self.assertEqual("actions/jobs/61", api.call_args.args[0])
+            self.assertIn("HTTP 403", prepared["historical_jobs"][0]["unavailable"])
+            self.assertEqual([], prepared["candidate_test_sources"])
+            self.assertFalse(prepared["environment"]["exact_sdk_available"])
+
+    def test_tainted_checkpoint_identity_budgets_and_clock_fail_before_remote_writes(self):
+        state, revision = Controller(FakeGitHub(), lambda: NOW).start(URL, CONTROL)
+        for key, value in (
+            ("issue_url", URL.replace("microsoft", "elsewhere")),
+            ("base_sha", "main"), ("phase", "shell"), ("created_at", "2026-10-21"),
+            ("used", {**state["used"], "workers": -1}), ("history", None),
+        ):
+            tainted = {**state, key: value}
+            github = GitHub()
+            with self.subTest(key=key), patch.object(github, "file", return_value=json.dumps(tainted)), \
+                    patch.object(github, "api") as writes:
+                with self.assertRaises(ValueError):
+                    github.load(123, revision)
+                writes.assert_not_called()
+
+    def test_trusted_fork_context_cannot_authorize_upstream_issue_run_or_api(self):
+        code = """
+import json
+from unittest.mock import patch
+from contracts import REPOSITORY, issue_number
+from github import GitHub, owned_run
+assert REPOSITORY == "radical/aspire"
+assert issue_number("https://github.com/radical/aspire/issues/123") == 123
+try:
+    issue_number("https://github.com/microsoft/aspire/issues/123")
+except ValueError:
+    pass
+else:
+    raise AssertionError("upstream issue was authorized by a fork context")
+with patch("github.subprocess.run") as run:
+    run.return_value.stdout = b'{}'
+    GitHub().api("issues/123")
+    assert run.call_args.args[0][:3] == ["gh", "api", "repos/radical/aspire/issues/123"]
+expected = {"id": 1, "sha": "a" * 40, "workflow": "reproduce-flaky-tests.yml", "branch": "branch"}
+run = {"id": 1, "run_attempt": 1, "head_sha": "a" * 40, "head_branch": "branch",
+       "event": "workflow_dispatch", "path": ".github/workflows/reproduce-flaky-tests.yml",
+       "head_repository": {"full_name": "microsoft/aspire"}}
+try:
+    owned_run(run, expected)
+except ValueError:
+    pass
+else:
+    raise AssertionError("upstream run was authorized by a fork context")
+print("fork identity and exact authority verified")
+"""
+        result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).parent,
+                                env={**os.environ, "GITHUB_REPOSITORY": "radical/aspire"},
+                                capture_output=True, text=True, check=True, timeout=10)
+        self.assertEqual("fork identity and exact authority verified\n", result.stdout)
+
     def test_first_phase_source_and_fixture_are_materialized_from_base_not_wrapper_head(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "checkout"
@@ -1293,6 +1772,52 @@ class BoundaryTests(unittest.TestCase):
             with self.subTest(files=list(files)), self.assertRaises(ValueError):
                 validate_candidate(files, {SOURCE: CODE})
 
+    def test_candidate_preserves_active_complete_attributes_and_their_owners(self):
+        originals = [
+            CODE,
+            CODE.replace(f'[QuarantinedTest("{URL}")]', '[Theory]\n    [InlineData("[]", false)]'),
+            CODE.replace("public class", '[CollectionDefinition("serial", DisableParallelization = true)]\npublic class'),
+            CODE.replace("public async Task", '[Fact]\n    public async Task'),
+        ]
+        changes = [
+            lambda value: value.replace(f'[QuarantinedTest("{URL}")]', f'/*[QuarantinedTest("{URL}")]*/'),
+            lambda value: value.replace('InlineData("[]", false)', 'InlineData("[]", true)'),
+            lambda value: value.replace("DisableParallelization = true", "DisableParallelization = false"),
+            lambda value: value.replace("[Fact]\n    public async Task WaitsForWidget()",
+                                        "[Fact]\n    public async Task DifferentTest()"),
+        ]
+        for original, change in zip(originals, changes):
+            with self.subTest(original=original), self.assertRaisesRegex(ValueError, "attributes"):
+                validate_candidate({SOURCE: change(original)}, {SOURCE: original})
+        for changed in (
+            CODE.replace("class WidgetTests", "class ElsewhereTests"),
+            CODE.replace("namespace Sample.Tests", "namespace Other.Tests"),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "declarations"):
+                validate_candidate({SOURCE: changed}, {SOURCE: CODE})
+
+    def test_candidate_attribute_guard_accepts_body_fix_and_fails_closed_on_unsupported_syntax(self):
+        original = CODE.replace("await widget.WaitAsync();", 'var label = @"[not an attribute]";\n        await widget.WaitAsync();')
+        changed = original.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")
+        self.assertEqual({SOURCE: changed}, validate_candidate({SOURCE: changed}, {SOURCE: original}))
+        interpolated = CODE.replace("await widget.WaitAsync();", 'var label = $"value {widget.Ready}";\n        await widget.WaitAsync();')
+        with self.assertRaisesRegex(ValueError, "human candidate review"):
+            validate_candidate({SOURCE: interpolated.replace("widget.WaitAsync()", "widget.WaitReadyAsync()")},
+                               {SOURCE: interpolated})
+
+    def test_candidate_cannot_move_an_attributed_test_out_of_its_actual_nested_type(self):
+        for original, moved in (
+            ("class Outer { class Inner { [Fact] public void T() { Work(); } } }",
+             "class Outer { class Inner { } [Fact] public void T() { Work(); } }"),
+            ("namespace A { namespace B { class Test { [Fact] public void T() { Work(); } } } }",
+             "namespace A { namespace B { } class Test { [Fact] public void T() { Work(); } } }"),
+        ):
+            with self.subTest(original=original):
+                with self.assertRaisesRegex(ValueError, "attributes"):
+                    validate_candidate({SOURCE: moved}, {SOURCE: original})
+                fixed = original.replace("Work()", "ReadyWork()")
+                self.assertEqual({SOURCE: fixed}, validate_candidate({SOURCE: fixed}, {SOURCE: original}))
+
     def test_owned_run_rejects_rerun_foreign_repository_workflow_and_sha(self):
         expected = {"id": 1, "sha": BASE, "workflow": WORKER, "branch": "ankj/flaky-test-123-run-1"}
         run = {"id": 1, "head_sha": BASE, "run_attempt": 1, "event": "workflow_dispatch",
@@ -1351,6 +1876,84 @@ class EvidenceTests(unittest.TestCase):
         result = summarize(self.files, self.worker, self.target)
         self.assertEqual((1, 1, 2, 2),
                          (result["passed"], result["failed"], result["actual_tests"], result["runner_iterations"]))
+
+    def test_fully_qualified_mtp_method_names_count_the_exact_target(self):
+        for files in self.files.values():
+            for path in list(files):
+                if path.endswith(".trx"):
+                    files[path] = files[path].replace(
+                        b'name="WaitsForWidget"', b'name="Sample.Tests.WidgetTests.WaitsForWidget"')
+        result = summarize(self.files, self.worker, self.target)
+        self.assertEqual((1, 1), (result["passed"], result["failed"]))
+
+    def test_stdout_cannot_supply_the_failure_signature(self):
+        files = self.files[("ubuntu-latest", 1)]
+        files["iteration-1/original.trx"] = trx("Failed", error="Unrelated assertion").replace(
+            b"</Output>", b"<StdOut>Missing widget</StdOut></Output>")
+        with self.assertRaisesRegex(ValueError, "signature"):
+            summarize(self.files, self.worker, self.target)
+
+    def test_case_and_os_counts_do_not_pool_different_theory_rows(self):
+        files = self.files[("ubuntu-latest", 1)]
+        for iteration, name in ((1, "WaitsForWidget(value: 1)"), (2, "WaitsForWidget(value: 2)")):
+            path = f"iteration-{iteration}/original.trx"
+            files[path] = files[path].replace(
+                b'testName="WaitsForWidget"', f'testName="{name}"'.encode())
+        result = summarize(self.files, self.worker, self.target)
+        self.assertEqual([
+            {"os": "ubuntu-latest", "name": "WaitsForWidget(value: 1)", "test_id": "test", "passed": 0, "failed": 1},
+            {"os": "ubuntu-latest", "name": "WaitsForWidget(value: 2)", "test_id": "test", "passed": 1, "failed": 0},
+        ], result["cases"])
+
+    def test_distinct_test_ids_with_the_same_display_name_cannot_pool_deterministic_cases(self):
+        for iteration in (1, 2):
+            files = self.files[("ubuntu-latest", 1)]
+            prefix = f"iteration-{iteration}/"
+            files[prefix + "original.trx"] = trx("Failed", execution=f"fail-{iteration}").replace(
+                b'"test"', b'"always-fails"')
+            files[prefix + "passing.trx"] = trx("Passed", execution=f"pass-{iteration}").replace(
+                b'"test"', b'"always-passes"')
+            files[prefix + "result.json"] = b'{"exit_code":2}'
+        with self.assertRaisesRegex(ValueError, "case.*identit"):
+            summarize(self.files, self.worker, self.target)
+
+    def test_distinct_definition_ids_across_rounds_are_rejected_before_accepting_a_second_batch(self):
+        first = summarize(self.files, self.worker, self.target)
+        changed = copy.deepcopy(self.files)
+        for files in changed.values():
+            for path in files:
+                if path.endswith(".trx"):
+                    files[path] = files[path].replace(b'"test"', b'"different-definition"')
+        second = summarize(changed, self.worker, self.target)
+        with self.assertRaisesRegex(ValueError, "identit.*across rounds"):
+            flaky_cases([
+                {**self.worker, **first}, {**self.worker, **second},
+            ], BASE)
+        github = FakeGitHub()
+        github.runs[self.worker["id"]] = {
+            "id": self.worker["id"], "head_sha": CONTROL, "head_branch": "owned", "run_attempt": 1,
+            "event": "workflow_dispatch", "path": ".github/workflows/" + WORKER,
+            "head_repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "failure",
+        }
+        for (os_name, index), files in changed.items():
+            github.artifacts[(self.worker["id"], f"flaky-evidence-{os_name}-{index}")] = files
+        state = {"worker": {**self.worker, "workflow": WORKER, "branch": "owned"},
+                 "target": self.target, "base_sha": BASE, "history": [{**self.worker, **first}]}
+        with self.assertRaisesRegex(ValueError, "identit.*across rounds"):
+            Controller(github).collect_worker(state)
+        self.assertEqual([{**self.worker, **first}], state["history"])
+
+    def test_case_identity_is_os_scoped_and_legacy_name_only_counts_cannot_authorize_repair(self):
+        batch = {**self.worker, **summarize(self.files, self.worker, self.target)}
+        case = batch["cases"][0]
+        batch["cases"].append({**case, "os": "windows-latest", "test_id": "different-os-identity"})
+        self.assertEqual({
+            ("ubuntu-latest", "WaitsForWidget", "test"),
+            ("windows-latest", "WaitsForWidget", "different-os-identity"),
+        }, flaky_cases([batch], BASE))
+        for item in batch["cases"]:
+            del item["test_id"]
+        self.assertEqual(set(), flaky_cases([batch], BASE))
 
     def test_project_mode_actual_tests_are_not_runner_iterations(self):
         self.worker["mode"] = "project"
@@ -1490,6 +2093,41 @@ class EvidenceTests(unittest.TestCase):
                     run_streamed([sys.executable, "-c", "import os,time; os.write(1,b'started\\n'); time.sleep(30)"],
                                  cwd=root, stdout=log, stderr=subprocess.STDOUT, timeout=2, check=False)
             self.assertEqual(b"started\n", (root / "output.log").read_bytes())
+
+    def test_timeout_stops_exact_owned_descendants_not_an_unrelated_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            heartbeat = root / "heartbeat"
+            pid_path = root / "child.pid"
+            child_code = (
+                "import time,pathlib; "
+                f"p=pathlib.Path({str(heartbeat)!r})\n"
+                "while True:\n"
+                " with p.open('ab') as stream: stream.write(b'alive\\n')\n"
+                " time.sleep(.02)\n")
+            parent_code = (
+                "import subprocess,sys,time,pathlib; "
+                f"p=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
+                f"pathlib.Path({str(pid_path)!r}).write_text(str(p.pid)); time.sleep(30)")
+            unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            try:
+                with (root / "output.log").open("wb") as log, patch("sys.stdout", io.StringIO()):
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        run_streamed([sys.executable, "-c", parent_code], cwd=root, stdout=log,
+                                     stderr=subprocess.STDOUT, timeout=1, check=False)
+                self.assertTrue(heartbeat.is_file(), "descendant did not start")
+                size = heartbeat.stat().st_size
+                time.sleep(.2)
+                self.assertEqual(size, heartbeat.stat().st_size, "timed-out descendant is still running")
+                self.assertIsNone(unrelated.poll(), "unrelated process was terminated")
+            finally:
+                unrelated.kill()
+                unrelated.wait(timeout=5)
+                if pid_path.exists():
+                    try:
+                        os.kill(int(pid_path.read_text()), 9)
+                    except ProcessLookupError:
+                        pass
 
     def test_runner_surfaces_signals_and_timeouts(self):
         for code, expected in ((-9, 137), (124, 124)):

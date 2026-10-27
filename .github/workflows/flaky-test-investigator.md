@@ -48,6 +48,15 @@ pre-agent-steps:
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       STATE_REVISION: ${{ inputs.state_revision }}
     run: python3 .github/scripts/flaky_investigation/controller.py prepare
+  - name: Retain observed preparation inputs
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+    with:
+      name: flaky-investigation-inputs
+      path: |
+        /tmp/gh-aw/flaky-investigation/context.json
+        /tmp/gh-aw/flaky-investigation/preparation.json
+        /tmp/gh-aw/flaky-investigation/historical/
+      if-no-files-found: error
 tools:
   bash: true
   edit:
@@ -101,7 +110,7 @@ blocker and outstanding steps rather than claiming prerequisites were checked.
 The controller replaces the task skill's branch,
 dispatch, publication, cancellation, and cleanup commands. Never execute those
 commands, push, dispatch, post, open a PR, remove quarantine, skip tests, weaken
-assertions, close issues, or merge. Do not install new tools or credentials.
+assertions, close issues, or merge. Do not install unrelated tools or credentials.
 Use `git --no-pager` for all Git commands.
 
 When ready to yield, write exactly one `proposal.json` in the repo-memory
@@ -169,8 +178,13 @@ The staged archive has no `.git`; use `git --no-pager show` from the wrapper
 checkout for the frozen base object when necessary, never as a reason to
 silently substitute wrapper source.
 
-Read referenced historical failure logs when accessible. Preparation retains
-issue/comment dates but does not collect historical logs. Try the issue's
+Read `preparation.json` and its staged source matches and historical logs first.
+It records actual preparation-host SDK discovery against frozen `global.json`,
+not the model sandbox's toolchain. Recheck inside the model Bash tool: an
+installed SDK with a different major/version does not establish build readiness.
+Preparation fetches at most two explicitly linked same-repository historical jobs;
+it records missing/denied evidence, truncation and the history not collected.
+Read remaining referenced historical failure logs when accessible. Try the issue's
 specific run/job links rather than launching a broad history search. Record
 expired/missing/denied evidence and its exact diagnostic; counts alone do not
 establish an error or root cause. Report statistics as of the report's own date:
@@ -193,9 +207,13 @@ only after checking its cleanup behavior is appropriate for this environment;
 do not use broad cleanup against unrelated processes or resources. Keep local
 work within the phase budget, retain exact commands/output, and include
 quarantined targets without accidentally filtering them out. Keep unrelated
-outerloop tests excluded. Do not install tools/credentials, relax the network
+outerloop tests excluded. Do not install unrelated tools/credentials, relax the network
 policy, or change build configuration to manufacture a runnable environment.
-If a real command fails on a prerequisite, record that failure and continue
+The repository-pinned SDK/package restore via existing repository scripts is
+permitted within the current sandbox network policy and phase budget. Try it
+when the exact SDK/packages are missing; record the actual restore/download
+failure instead of assuming it is impossible. Do not change feeds, network
+policy or tool versions. If a real command fails on a prerequisite, record that failure and continue
 the useful analysis still available. Do not treat an unavailable prerequisite
 as a matching test failure or silently stop at checking tool names.
 
@@ -208,6 +226,10 @@ If the issue is not a flaky-test report, finish with `not-flaky`. If it does not
 uniquely identify a supported ordinary test declaration, finish with `ambiguous`.
 Do not guess a name, broad wildcard, project or failure. CLI E2E investigations
 finish `blocked`: their prebuilt runtime images are not candidate-aware.
+Automated candidate execution/publication is currently blocked until its
+execution-isolation boundary is independently validated. After a matching
+baseline, preserve the diagnosis and remaining work honestly; do not claim a
+safe hosted candidate run or a fix PR can already be produced.
 
 Only after this available investigation/local work, propose `select` for the
 first hosted reproduction:

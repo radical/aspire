@@ -1,7 +1,7 @@
 """Durable issue-driven orchestration; candidate code never runs in this process."""
 
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -11,10 +11,12 @@ import tarfile
 
 from contracts import (
     AGENT, LIMITS, REPOSITORY, TERMINAL, WORKER, BudgetExceeded, expired, integer, issue_number, local_precheck,
-    repair_scope, require, reserve, selection, sha, terminal_analysis, text, validate_candidate, validate_proposal,
+    repair_scope, require, require_candidate_isolation, reserve, selection, sha, terminal_analysis, text,
+    timestamp, validate_candidate, validate_checkpoint, validate_proposal,
 )
-from evidence import summarize
+from evidence import flaky_cases, summarize
 from github import GitHub, owned_run, state_branch
+from preparation import prepare_inputs
 from reporting import console_json, detail, diagnostic, findings
 
 
@@ -43,13 +45,21 @@ def observe(state, revision, event, reason=""):
     for kind in ("agent", "worker"):
         if child := state.get(kind, {}).get("id"):
             identity = {
-                "kind": kind, "status": "current" if state["phase"].removesuffix("-intent") == kind else "checkpointed",
+                "kind": kind, "status": "current" if (
+                    state["phase"].removesuffix("-intent") == kind
+                    or state["phase"] in {"cancelling", "cancellation-intent", "cleanup-pending"}
+                    and state.get("cancellation", {}).get("kind") == kind) else "checkpointed",
                 "run_id": child, "url": f"https://github.com/{REPOSITORY}/actions/runs/{child}",
+                "deadline_at": state[kind].get("deadline_at"),
             }
             if kind == "worker":
                 identity.update({key: state[kind][key]
                                  for key in ("source_sha", "phase", "mode", "runners", "iterations")})
             item["children"].append(identity)
+    if cancellation := state.get("cancellation"):
+        item["cancellation"] = {
+            key: cancellation[key] for key in ("run_id", "requested_at", "confirmed")
+        }
     if state["notes"]:
         note = state["notes"][-1]
         item["decision"] = note["action"]
@@ -84,6 +94,8 @@ class Controller:
             "terminal": "Publication unconfirmed; inspect manually." if state.get("publication_uncertain")
                         else "Original-issue finding confirmed; terminal resume is a no-op.",
             "cancellation-intent": "Cancellation of the exact owned run requested; response not yet confirmed.",
+            "cancelling": "Wait for the exact owned run to finish; a cancellation request is not completion.",
+            "cleanup-pending": "Blocked finding published; independent recovery still reconciles owned-run cleanup.",
         }
         reason = reason or reasons.get(state["phase"], "Checkpoint persisted.")
         state.setdefault("transitions", []).append({
@@ -123,7 +135,8 @@ class Controller:
         reserve(state, "models")
         state["phase"] = "agent-intent"
         branch = f"ankj/flaky-test-{state['issue']}-agent-{state['used']['models']}"
-        state["agent"] = {"sha": state["agent_sha"], "workflow": state["agent_workflow"], "branch": branch}
+        state["agent"] = {"sha": state["agent_sha"], "workflow": state["agent_workflow"], "branch": branch,
+                          "deadline_at": (self.now() + timedelta(minutes=30)).isoformat()}
         intent = self.save(state, revision)
         # Commit the intent before dispatch. If the response/save is lost, recovery
         # reports the ambiguity; it never guesses the newest matching run.
@@ -136,6 +149,9 @@ class Controller:
         return self.save(state, intent)
 
     def dispatch_worker(self, state, revision, phase, runners, iterations, mode, reason=None):
+        require(phase in {"reproduce", "verify"}, "Invalid worker phase")
+        if phase == "verify":
+            require_candidate_isolation()
         target = state["target"]
         validate_worker_target(target)
         integer(runners, 3)
@@ -149,6 +165,7 @@ class Controller:
         state["worker"] = {
             "sha": state["worker_sha"], "source_sha": source_sha, "workflow": WORKER,
             "phase": phase, "runners": runners, "iterations": iterations, "mode": mode, "branch": branch,
+            "deadline_at": (self.now() + timedelta(minutes=90)).isoformat(),
         }
         state["phase"] = "worker-intent"
         intent = self.save(state, revision, reason)
@@ -198,7 +215,10 @@ class Controller:
         result = summarize(artifacts, worker, state["target"])
         require(run["conclusion"] == ("failure" if result["failed"] else "success"),
                 "Workflow failure is not a target test failure")
-        return {**copy.deepcopy(worker), **result}
+        batch = {**copy.deepcopy(worker), **result}
+        if worker["phase"] == "reproduce":
+            flaky_cases([*state["history"], batch], state["base_sha"])
+        return batch
 
     def handle(self, state, revision, proposal):
         state["notes"].append({
@@ -226,13 +246,16 @@ class Controller:
                 baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
                 verified = [item for item in state["history"]
                             if item["phase"] == "verify" and item["source_sha"] == candidate["sha"]]
-                require(sum(item["passed"] for item in baseline) > 0
-                        and sum(item["failed"] for item in baseline) > 0,
-                        "A flaky baseline requires both target passes and matching target failures")
+                reproduced = flaky_cases(baseline, state["base_sha"])
+                require(reproduced, "A flaky baseline requires matching target case and OS passes and failures")
                 require(verified and verified[-1]["failed"] == 0
                         and verified[-1]["passed"] >= 9
                         and verified[-1]["mode"] == next(item["mode"] for item in reversed(baseline) if item["failed"]),
                         "Final candidate needs nine target passes in the reproduced mode")
+                covered = {(case["os"], case["name"], case["test_id"]) for case in verified[-1].get("cases", [])
+                           if "test_id" in case and case["passed"] >= 9 and case["failed"] == 0}
+                require(reproduced <= covered, "Final candidate needs nine passes for each reproduced case and OS")
+                require_candidate_isolation()
             analysis = terminal_analysis(proposal["analysis"]) if "analysis" in proposal else None
             return self.finish(state, revision, outcome, proposal["explanation"], analysis)
         if action == "select":
@@ -278,8 +301,8 @@ class Controller:
             return self.baseline(state, revision, "validated model request for further reproduction.")
         require(action == "repair", "Unsupported action")
         baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
-        require(sum(item["failed"] for item in baseline) > 0 and sum(item["passed"] for item in baseline) > 0,
-                "Do not repair deterministic failures or an unreproduced test")
+        require(flaky_cases(baseline, state["base_sha"]),
+                "Do not repair an unreproduced test: the same case and OS need passes and matching failures")
         text(proposal.get("diagnosis"), 12000)
         files = proposal.get("files")
         require(isinstance(files, dict), "Repair requires full proposed file contents")
@@ -294,6 +317,7 @@ class Controller:
             originals[path] = self.github.file(path, state["base_sha"])
         validate_candidate(files, originals)
         reserve(state, "fixes")
+        require_candidate_isolation()
         state["phase"] = "candidate-ready"
         state["candidate"] = {
             "sha": self.github.commit(state["base_sha"], files,
@@ -317,12 +341,14 @@ class Controller:
                     and comment.get("user", {}).get("type") == "Bot"]
         if not existing:
             if not first:
-                state.update(phase="terminal", outcome="blocked", publication_uncertain=True,
+                state.update(phase="cleanup-pending" if state.get("cancellation", {}).get("confirmed") is False
+                             else "terminal", outcome="blocked", publication_uncertain=True,
                              explanation="Uncertain findings publication; inspect manually before retrying.")
                 print(f"::error::{state['explanation']} Issue {issue}", file=sys.stderr)
                 return self.save(state, revision)
             pr_url = ""
             if state["outcome"] == "verified":
+                require_candidate_isolation()
                 candidate = state["candidate"]
                 branch = f"ankj/flaky-test-{issue}-fix"
                 current = self.github.optional(f"git/ref/heads/{branch}")
@@ -344,7 +370,7 @@ class Controller:
                 body = template.replace(placeholder, description).replace(
                     "Fixes # (issue)", f"Related issue: {state['issue_url']} (not closed)")
                 body = body.replace("- [ ] No. Follow-up changes expected.", "- [x] No. Follow-up changes expected.")
-                pulls = self.github.pages(f"pulls?state=all&head=microsoft:{branch}")
+                pulls = self.github.pages(f"pulls?state=all&head={REPOSITORY.split('/')[0]}:{branch}")
                 require(len(pulls) <= 1, "Ambiguous existing fix PR")
                 if pulls:
                     pr = pulls[0]
@@ -364,24 +390,94 @@ class Controller:
                 f"{state['issue_url']}#issuecomment-{receipt['id']}")
         elif existing[0].get("html_url"):
             state["finding_url"] = existing[0]["html_url"]
-        state["phase"] = "terminal"
+        state["phase"] = ("cleanup-pending" if state.get("cancellation", {}).get("confirmed") is False
+                          else "terminal")
         return self.save(state, revision)
 
+    def cancel_owned(self, state, revision, outcome, reason):
+        kind = state["phase"]
+        owned = state[kind]
+        run = owned_run(self.github.api(f"actions/runs/{owned['id']}"), owned)
+        if run["status"] == "completed":
+            return self.finish(state, revision, outcome, reason)
+        state["cancellation"] = {
+            "kind": kind, "run_id": owned["id"], "outcome": outcome, "reason": reason,
+            "requested_at": self.now().isoformat(), "confirmed": False,
+        }
+        state["phase"] = "cancellation-intent"
+        revision = self.save(state, revision)
+        self.github.api(f"actions/runs/{owned['id']}/cancel", {}, "POST")
+        state["phase"] = "cancelling"
+        return self.save(state, revision)
+
+    def reconcile_cancellation(self, state, revision):
+        cancellation = state["cancellation"]
+        owned = state[cancellation["kind"]]
+        require(owned["id"] == cancellation["run_id"], "Cancellation no longer matches the owned run")
+        run = owned_run(self.github.api(f"actions/runs/{owned['id']}"), owned)
+        if run["status"] == "completed":
+            cancellation["confirmed"] = True
+            return self.finish(state, revision, cancellation["outcome"],
+                               cancellation["reason"] + " Exact owned run completion confirmed.")
+        if self.now() >= datetime.fromisoformat(cancellation["requested_at"]) + timedelta(minutes=30):
+            return self.finish(
+                state, revision, "blocked",
+                cancellation["reason"] + " Cancellation completion remains unconfirmed after thirty minutes; "
+                f"owned run {owned['id']} may still be active. Inspect it manually; no cancellation was retried.")
+        if state["phase"] == "cancellation-intent":
+            # A lost response is not permission to repeat the cancellation write.
+            state["phase"] = "cancelling"
+            return self.save(state, revision, "Cancellation response uncertain; reconcile the exact owned run only.")
+        return revision
+
+    def completed_within_deadline(self, owned, deadline):
+        run = owned_run(self.github.api(f"actions/runs/{owned['id']}"), owned)
+        if run["status"] != "completed":
+            return False
+        # Workflow updated_at is not a completion timestamp. Require all jobs
+        # from the exact attempt to have completed before accepting late evidence.
+        # https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt
+        jobs = self.github.pages(f"actions/runs/{owned['id']}/attempts/1/jobs", "jobs")
+        require(jobs, "Completed child has no exact-attempt job completion evidence")
+        completed = []
+        seen = set()
+        for job in jobs:
+            require(isinstance(job, dict) and job.get("run_id") == owned["id"]
+                    and job.get("run_attempt") == 1 and job.get("head_sha") == owned["sha"]
+                    and job.get("status") == "completed", "Foreign or unfinished child job")
+            job_id = integer(job.get("id"), 10 ** 15)
+            require(job_id not in seen, "Duplicate child job completion evidence")
+            seen.add(job_id)
+            finish = timestamp(job.get("completed_at"))
+            require(finish <= self.now(), "Child job completion is in the future")
+            if job.get("started_at") is not None:
+                require(timestamp(job["started_at"]) <= finish, "Child job completion precedes its start")
+            completed.append(finish)
+        owned["jobs_completed_at"] = max(completed).isoformat()
+        return max(completed) < deadline
+
     def advance(self, state, revision, cancel=False):
+        if state["phase"] == "cleanup-pending":
+            cancellation = state["cancellation"]
+            owned = state[cancellation["kind"]]
+            require(owned["id"] == cancellation["run_id"], "Cleanup no longer matches the owned run")
+            run = owned_run(self.github.api(f"actions/runs/{owned['id']}"), owned)
+            if run["status"] != "completed":
+                return revision
+            cancellation["confirmed"] = True
+            state.update(phase="terminal", explanation=(
+                "Exact owned run completion confirmed after the blocked finding; no new work was started."))
+            return self.save(state, revision, "Owned-run cleanup confirmed; retained finding and budgets unchanged.")
         if state["phase"] == "terminal":
             return revision
         # Cancellation cannot establish whether an earlier publication succeeded.
         if state["phase"] == "publication-intent":
             return self.publish(state, revision)
+        if state["phase"] in {"cancellation-intent", "cancelling"} and state.get("cancellation"):
+            return self.reconcile_cancellation(state, revision)
         if cancel:
             if state["phase"] in {"agent", "worker"}:
-                owned = state[state["phase"]]
-                run = owned_run(self.github.api(f"actions/runs/{owned['id']}"), owned)
-                if run["status"] != "completed":
-                    # Record the cancellation before invoking the exact owned run.
-                    state["phase"] = "cancellation-intent"
-                    revision = self.save(state, revision)
-                    self.github.api(f"actions/runs/{owned['id']}/cancel", {}, "POST")
+                return self.cancel_owned(state, revision, "cancelled", "Maintainer cancelled this investigation.")
             return self.finish(state, revision, "cancelled", "Maintainer cancelled this investigation.")
         if state["phase"].endswith("-intent"):
             reason = ("Interrupted remote write has an uncertain outcome. Inspect the checkpoint intent; "
@@ -390,7 +486,21 @@ class Controller:
             return self.finish(state, revision, "blocked",
                                reason)
         if expired(state, self.now()):
+            if state["phase"] in {"agent", "worker"}:
+                return self.cancel_owned(
+                    state, revision, "budget-exhausted", "The twelve-hour investigation budget expired.")
             return self.finish(state, revision, "budget-exhausted", "The twelve-hour investigation budget expired.")
+        if state["phase"] in {"agent", "worker"}:
+            owned = state[state["phase"]]
+            # Older checkpoints have no explicit child deadline. Their last
+            # durable update is a conservative fallback, never a fresh budget.
+            deadline = owned.get("deadline_at") or (
+                datetime.fromisoformat(state["updated_at"])
+                + timedelta(minutes=30 if state["phase"] == "agent" else 90)).isoformat()
+            deadline = timestamp(deadline)
+            if self.now() >= deadline and not self.completed_within_deadline(owned, deadline):
+                return self.cancel_owned(
+                    state, revision, "budget-exhausted", f"Owned {state['phase']} absolute deadline expired.")
         if state["phase"] == "candidate-ready":
             baseline = [item for item in state["history"] if item["phase"] == "reproduce"]
             mode = next(item["mode"] for item in reversed(baseline) if item["failed"])
@@ -492,6 +602,13 @@ def prepare(github, url, revision):
                },
                "issue": github.api(f"issues/{issue}"),
                "comments": github.pages(f"issues/{issue}/comments")}
+    context["preparation"] = prepare_inputs(
+        github, source, context["issue"], context["comments"], ROOT)
+    context["historical_evidence"]["logs_collected"] = any(
+        "path" in job for job in context["preparation"]["historical_jobs"])
+    context["historical_evidence"]["limitation"] = (
+        "Issue/comment counts are not current unless their own dates establish that. "
+        + context["preparation"]["history_limit"])
     if state["target"]:
         context["test_source"] = github.file(state["target"]["source"], state["base_sha"])
     if state["candidate"]:
@@ -545,40 +662,61 @@ def main():
         import re
         issues = [int(match[1]) for ref in refs if (match := re.fullmatch(
             r"refs/heads/ankj/flaky-test-([1-9][0-9]*)-state", ref["ref"]))]
+    failures = []
     for issue in issues:
-        state, revision = github.load(issue)
-        if state is None:
-            require(operation == "start", "Issue is not enrolled")
-            state, revision = controller.start(
-                url, os.environ["GITHUB_SHA"], os.environ.get("FLAKY_AGENT_WORKFLOW", AGENT),
-                os.environ.get("FLAKY_AGENT_SHA") or None, os.environ.get("FLAKY_WORKER_SHA") or None)
-        # Serialize all controllers through workflow concurrency; Git CAS is the
-        # final guard against stale or independently resumed controllers.
-        observe(state, revision, operation)
         try:
-            current = controller.advance(state, revision, cancel=operation == "cancel")
-            if current != revision and state["phase"] == "ready":
-                current = controller.advance(state, current)
-        except (ValueError, KeyError, subprocess.CalledProcessError) as error:
-            live, current = github.load(issue)
-            if current != revision or live["phase"] == "publication-intent":
-                # A write may already have succeeded. Its persisted intent is the
-                # recovery authority, not an in-memory copy or an automatic retry.
-                print(f"::error::Investigation {issue} interrupted after checkpoint; resume required: "
-                      f"{console_json(diagnostic(error))}", file=sys.stderr)
+            advance_issue(github, controller, issue, url, operation)
+        except (ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            if url:
                 raise
-            action = state["notes"][-1]["action"] if len(state["notes"]) > len(live["notes"]) else None
-            record_rejection(live, error, action)
-            outcome = "budget-exhausted" if isinstance(error, BudgetExceeded) else "blocked"
-            current = controller.finish(live, current, outcome, "Validation/remote operation blocked: " + diagnostic(error))
-            state = live
-        event = "changed" if current != revision else "terminal-noop" if state["phase"] == "terminal" else "waiting"
-        reason = state.get("explanation") or state.get("transitions", [{}])[-1].get("reason", "")
-        if state.get("publication_uncertain"):
-            reason = "Publication unconfirmed; inspect remote objects and checkpoint before retrying."
-        elif state["notes"] and state["notes"][-1]["action"] == "finish":
-            reason = "Model finish accepted; its explanation is labelled as not independently established."
-        observe(state, current, event, reason)
+            # One tainted/interrupted issue cannot starve independent recovery.
+            # Do not publish from an invalid checkpoint or pretend the sweep passed.
+            failures.append(issue)
+            print("flaky-investigation-recovery " + console_json({
+                "issue": issue, "error": diagnostic(error), "action": "inspect checkpoint; other issues continue",
+            }), file=sys.stderr, flush=True)
+    require(not failures, f"Recovery failed for issues {failures}; other checkpoints were still reconciled")
+
+
+def advance_issue(github, controller, issue, url, operation):
+    state, revision = github.load(issue)
+    if state is None:
+        require(operation == "start", "Issue is not enrolled")
+        state, revision = controller.start(
+            url, os.environ["GITHUB_SHA"], os.environ.get("FLAKY_AGENT_WORKFLOW", AGENT),
+            os.environ.get("FLAKY_AGENT_SHA") or None, os.environ.get("FLAKY_WORKER_SHA") or None)
+    validate_checkpoint(state, issue)
+    # Serialize all controllers through workflow concurrency; Git CAS is the
+    # final guard against stale or independently resumed controllers.
+    observe(state, revision, operation)
+    try:
+        current = controller.advance(state, revision, cancel=operation == "cancel")
+        if current != revision and state["phase"] == "ready":
+            current = controller.advance(state, current)
+    except (ValueError, KeyError, subprocess.SubprocessError) as error:
+        live, current = github.load(issue)
+        if current != revision or live["phase"] == "publication-intent":
+            # A write may already have succeeded. Its persisted intent is the
+            # recovery authority, not an in-memory copy or an automatic retry.
+            print(f"::error::Investigation {issue} interrupted after checkpoint; resume required: "
+                  f"{console_json(diagnostic(error))}", file=sys.stderr)
+            raise
+        action = state["notes"][-1]["action"] if len(state["notes"]) > len(live["notes"]) else None
+        record_rejection(live, error, action)
+        outcome = "budget-exhausted" if isinstance(error, BudgetExceeded) else "blocked"
+        reason = "Validation/remote operation blocked: " + diagnostic(error)
+        if live["phase"] in {"agent", "worker"}:
+            current = controller.cancel_owned(live, current, outcome, reason)
+        else:
+            current = controller.finish(live, current, outcome, reason)
+        state = live
+    event = "changed" if current != revision else "terminal-noop" if state["phase"] == "terminal" else "waiting"
+    reason = state.get("explanation") or state.get("transitions", [{}])[-1].get("reason", "")
+    if state.get("publication_uncertain"):
+        reason = "Publication unconfirmed; inspect remote objects and checkpoint before retrying."
+    elif state["notes"] and state["notes"][-1]["action"] == "finish":
+        reason = "Model finish accepted; its explanation is labelled as not independently established."
+    observe(state, current, event, reason)
 
 
 if __name__ == "__main__":

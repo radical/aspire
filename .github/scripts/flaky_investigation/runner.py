@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -61,7 +62,38 @@ def run_streamed(command, *, cwd, stdout, stderr, timeout, check):
     with ThreadPoolExecutor(max_workers=1) as reader:
         future = reader.submit(console_tail, Path(stdout.name), done)
         try:
-            return subprocess.run(command, cwd=cwd, stdout=stdout, stderr=stderr, timeout=timeout, check=check)
+            with subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=stderr,
+                                  start_new_session=os.name != "nt") as process:
+                try:
+                    code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        # /T includes descendants of this exact still-owned PID.
+                        # https://learn.microsoft.com/windows-server/administration/windows-commands/taskkill
+                        try:
+                            stopped = subprocess.run(
+                                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                                capture_output=True, timeout=30, check=False)
+                        except (OSError, subprocess.SubprocessError) as error:
+                            process.kill()
+                            process.wait(timeout=10)
+                            raise RuntimeError("Owned Windows process-tree termination failed") from error
+                        if stopped.returncode:
+                            process.kill()
+                            process.wait(timeout=10)
+                            raise RuntimeError("Owned Windows process-tree termination could not be confirmed")
+                    else:
+                        # The new session confines timeout cleanup to this test's
+                        # inherited process group, never every dotnet/DCP process.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass  # The entire owned process group already exited.
+                    process.wait(timeout=10)
+                    raise
+                if check and code:
+                    raise subprocess.CalledProcessError(code, command)
+                return subprocess.CompletedProcess(command, code)
         finally:
             done.set()
             future.result()

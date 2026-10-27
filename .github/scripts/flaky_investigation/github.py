@@ -8,7 +8,7 @@ import re
 import subprocess
 import zipfile
 
-from contracts import REPOSITORY, require, sha
+from contracts import REPOSITORY, require, sha, validate_checkpoint
 
 
 TRAILER = "\n\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>\n"
@@ -27,7 +27,7 @@ class GitHubAPIError(subprocess.CalledProcessError):
 
 
 class GitHub:
-    def api(self, endpoint, body=None, method=None, binary=False):
+    def api(self, endpoint, body=None, method=None, binary=False, timeout=120):
         command = ["gh", "api", f"repos/{REPOSITORY}/{endpoint}"]
         if method:
             command += ["--method", method]
@@ -35,7 +35,7 @@ class GitHub:
             command += ["--input", "-"]
         try:
             result = subprocess.run(command, input=json.dumps(body).encode() if body is not None else None,
-                                    capture_output=True, check=True, timeout=120)
+                                    capture_output=True, check=True, timeout=timeout)
         except subprocess.CalledProcessError as error:
             raise GitHubAPIError(error.returncode, error.cmd, output=error.stdout, stderr=error.stderr) from error
         if binary:
@@ -108,8 +108,7 @@ class GitHub:
                 return None, None
             revision = ref["object"]["sha"]
         state = json.loads(self.file("state.json", revision))
-        require(state.get("version") == 1 and state.get("issue") == issue,
-                "Foreign checkpoint schema or issue")
+        validate_checkpoint(state, issue)
         return state, revision
 
     def dispatch(self, workflow, branch, inputs):

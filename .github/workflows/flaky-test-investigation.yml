@@ -15,6 +15,12 @@ on:
         options: [start, resume, cancel]
   schedule:
     - cron: "7,22,37,52 * * * *"
+  # Completion is a wakeup only. Never check out or trust the triggering run's
+  # branch, payload inputs or artifacts; reconcile owned checkpoint identities.
+  # The controller is deliberately absent, so it cannot recursively wake itself.
+  workflow_run:
+    workflows: ["Flaky Test Investigator", "Reproduce Flaky Tests"]
+    types: [completed]
 
 permissions: {}
 

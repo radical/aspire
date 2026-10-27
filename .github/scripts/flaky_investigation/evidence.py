@@ -9,6 +9,7 @@ from contracts import require
 def summarize(artifacts, owned, target):
     passed = failed = actual = iterations = 0
     errors = []
+    cases = {}
     seen = set()
     expected = {(os, index) for os in target["oses"] for index in range(1, owned["runners"] + 1)}
     require(set(artifacts) == expected, "Missing or unexpected runner evidence")
@@ -40,9 +41,18 @@ def summarize(artifacts, owned, target):
                 tag = lambda name: f"t:{name}" if ns else name
                 definitions = {}
                 for definition in root.findall(".//" + tag("UnitTest"), ns):
+                    definition_id = definition.get("id")
+                    require(isinstance(definition_id, str) and 0 < len(definition_id) <= 2000
+                            and definition_id not in definitions, "Missing or colliding TRX definition identity")
                     method = definition.find(tag("TestMethod"), ns)
                     if method is not None:
-                        definitions[definition.get("id")] = (method.get("className"), method.get("name"))
+                        name = method.get("name")
+                        # MTP TRX can encode name="Namespace.Type.Method" as well
+                        # as name="Method"; className must still match exactly.
+                        qualified = target["class_name"] + "." + target["method"]
+                        if name == qualified:
+                            name = target["method"]
+                        definitions[definition_id] = (method.get("className"), name)
                 results = root.findall(".//" + tag("UnitTestResult"), ns)
                 require(results, "Empty TRX is not a test execution")
                 for result in results:
@@ -56,8 +66,17 @@ def summarize(artifacts, owned, target):
                     if definitions.get(result.get("testId")) == (target["class_name"], target["method"]):
                         require(outcome != "NotExecuted", "Selected test was skipped")
                         target_outcomes.append(outcome)
+                        name = result.get("testName")
+                        require(isinstance(name, str) and 0 < len(name) <= 2000,
+                                "Selected test requires a bounded case display name")
+                        case = cases.setdefault((os, name), {
+                            "os": os, "name": name, "test_id": result.get("testId"), "passed": 0, "failed": 0})
+                        require(case["test_id"] == result.get("testId"),
+                                "Selected case display name has colliding TRX definition identities")
+                        case["passed" if outcome == "Passed" else "failed"] += 1
                         if outcome == "Failed":
-                            error = "\n".join(result.itertext())
+                            info = result.find(tag("Output") + "/" + tag("ErrorInfo"), ns)
+                            error = "\n".join(info.itertext()) if info is not None else ""
                             if len(errors) < 3:
                                 errors.append(error[:4000])
                             if owned["phase"] == "reproduce":
@@ -72,4 +91,27 @@ def summarize(artifacts, owned, target):
             failed += target_outcomes.count("Failed")
             iterations += 1
     return {"passed": passed, "failed": failed, "actual_tests": actual,
-            "runner_iterations": iterations, "errors": errors}
+            "runner_iterations": iterations, "errors": errors,
+            "cases": [cases[key] for key in sorted(cases)]}
+
+
+def flaky_cases(history, source_sha):
+    """Only one exact case on one OS can establish a mixed baseline."""
+    counts = {}
+    definitions = {}
+    for batch in history:
+        if batch["phase"] != "reproduce" or batch["source_sha"] != source_sha:
+            continue
+        # Older aggregate-only checkpoints are not case-level repair authority.
+        for case in batch.get("cases", []):
+            if "test_id" not in case:
+                continue
+            display = (case["os"], case["name"])
+            identity = definitions.setdefault(display, case["test_id"])
+            # MTP definition IDs can differ by OS. Stability across iterations,
+            # rounds or candidate source is checked, never presumed from a name.
+            require(identity == case["test_id"], "Selected case has colliding TRX identities across rounds")
+            key = (*display, identity)
+            passed, failed = counts.get(key, (0, 0))
+            counts[key] = (passed + case["passed"], failed + case["failed"])
+    return {key for key, (passed, failed) in counts.items() if passed and failed}

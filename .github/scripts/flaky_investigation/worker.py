@@ -6,7 +6,9 @@ from pathlib import Path
 import subprocess
 import sys
 
-from contracts import OSES, REPOSITORY, WORKER, integer, issue_number, require, sha, source_path
+from contracts import (
+    OSES, REPOSITORY, WORKER, integer, issue_number, require, require_candidate_isolation, sha, source_path,
+)
 from github import GitHub, owned_run
 
 
@@ -17,6 +19,11 @@ def configuration(github, issue_url, revision, run_id, trusted_sha):
     require(snapshot["phase"] == "worker-intent" and live["phase"] in {"worker-intent", "worker"},
             "Stale reproduction activation")
     worker = snapshot["worker"]
+    require(worker["phase"] in {"reproduce", "verify"}, "Invalid checkpoint worker phase")
+    if worker["phase"] == "verify":
+        require_candidate_isolation()
+    else:
+        require(worker["source_sha"] == snapshot["base_sha"], "Baseline source differs from the frozen base")
     require(snapshot["worker_sha"] == trusted_sha == worker["sha"] and worker["workflow"] == WORKER,
             "Worker trusted source does not match the checkpoint")
     expected = {**worker, "id": run_id} if live["phase"] == "worker" else worker

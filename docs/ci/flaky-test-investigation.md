@@ -3,8 +3,11 @@
 A maintainer can enroll an open Aspire issue by URL alone. Fresh, bounded
 agent phases follow the `fix-flaky-test` skill, discover the test from source,
 reproduce it, diagnose matching failures, and verify a source-scoped candidate.
-The result is a clean **draft** fix PR or finite, evidence-backed findings.
-Nothing merges, closes the issue, or removes quarantine.
+The current production path ends with finite, evidence-backed findings.
+**Automated candidate execution and fix-PR publication are blocked** until an
+independently validated execution boundary protects the trusted supervisor,
+configuration and evidence. Separate directories under one host user do not
+provide that boundary. Nothing merges, closes the issue, or removes quarantine.
 
 ## Start, resume, cancel
 
@@ -33,7 +36,12 @@ single, single, then project contention (or single for non-quarantined targets)
 without a fresh model just to request another run. Diagnosis/repair, final
 no-reproduction analysis, and exact-candidate review still use fresh phases.
 A scheduled
-controller reconciles checkpoints every 15 minutes. Manual resume can advance
+controller reconciles checkpoints every 15 minutes. Child completion notifications
+also wake reconciliation; the triggering payload is never authority for source,
+state, artifact or run identity. The controller does not listen to its own
+completion, avoiding a recursive wakeup chain. Token-generated completion
+notifications and scheduled wakeups are best-effort, not a delivery guarantee.
+Manual resume can advance
 completed work before the next scheduled check. Progress does not depend on
 completion events from token-dispatched workflows. Scheduled recovery can also
 resume a completed worker after an interrupted controller.
@@ -54,6 +62,13 @@ accepted verification → final source review → draft PR/findings
    A header excerpt or assumed missing tool is not enough: the prompt requires
    test/fixture analysis, available linked historical evidence, actual
    prerequisite probes and bounded local execution when feasible.
+   The `flaky-investigation-inputs` artifact retains `context.json`,
+   `preparation.json` and any staged historical logs before the model runs.
+   Preparation records the host SDK list against the frozen `global.json`,
+   likely test-source contents and at most two explicitly linked same-repository
+   historical job logs. Missing/denied evidence is explicit. Preparation-host
+   SDK discovery does not establish the model sandbox's toolchain or restore
+   feasibility; the model must recheck and record its actual bounded attempt.
 2. Open the controller's console and step summary. `flaky-investigation` JSON
    lines identify the issue, phase, checkpoint, base/control SHA, selected
    test/project/OSes, and current versus checkpointed child URLs. Worker
@@ -109,6 +124,11 @@ the ref without force. Concurrent writers cannot replace one another's state.
 The checkpoint records immutable source/control revisions, exact owned run IDs
 and attempts, proposals, counts, candidate identity, and terminal outcome.
 Model repo-memory is proposal transport, **not** orchestration authority.
+The Python runtime derives repository authority only from the trusted runner's
+`GITHUB_REPOSITORY`; issue URLs, APIs and run ownership must match that exact
+repository. This permits fork-only validation wrappers without authorizing
+upstream writes from a fork. Production workflow activation remains restricted
+to `microsoft/aspire`.
 
 The controller records a dispatch intent before calling the API and captures
 `return_run_details.workflow_run_id` from the response. It never finds a run by
@@ -123,6 +143,13 @@ project, and literal issue error. Ambiguous/generated/nested cases stop for a
 human. Repair paths are existing regular C# files in the selected project's
 explicit project-reference graph; dynamic references do not grant broader scope.
 Scheduling, data, and quarantine attributes cannot change.
+The conservative lexical guard removes comments, preserves complete attribute
+arguments, declaration ownership, imports and conditional directives, and
+includes custom collection/parallelism attributes. Ownership follows actual
+namespace/type scopes and closing braces, so a test cannot move out of a nested
+type while retaining identical opening declarations. Unsupported interpolated
+strings and some array/indexer edits require human review rather than relying
+on a partial parser as full C# semantic validation.
 
 Candidates run through the fixed `reproduce-flaky-tests.yml`. Its optional
 `investigation_issue_url` and `investigation_revision` inputs select an immutable
@@ -137,6 +164,11 @@ workflow/runner stay in the root checkout; candidate source is checked out
 separately under `candidate/`. Neither checkout persists credentials, and the
 job has read-only repository permissions. No candidate process runs in a
 publication job or receives write credentials.
+This token boundary alone does not protect the root checkout, configuration or
+evidence from candidate code running as the same host user. The trusted
+controller and worker reject candidate execution and fix publication by default.
+Orchestration tests using a synthetic approved isolation boundary do not prove
+that a production candidate run is safe.
 
 The agent job is read-only. Compiler-generated proposal-memory persistence has
 `contents: write` to its scoped proposal branch; the generated conclusion job
@@ -162,6 +194,17 @@ the project. The controller permits `not-reproduced` only after three complete,
 clean policy rounds at the frozen base. A flaky baseline requires both target passes and target failures
 matching the issue's error. Unrelated failures, build/runner errors, missing or
 skipped tests, and missing TRX cannot authorize a candidate.
+The mixed pass/failure must concern the same case display name and TRX
+definition ID on the same OS at the frozen source, including across baseline
+rounds. Colliding IDs for one display name are rejected before accepting a
+batch; OS-specific IDs are not pooled. ID stability is checked, not assumed
+for every theory or candidate revision. Failure
+signatures are matched only against TRX `ErrorInfo`, never `StdOut`. Both short
+and class-qualified MTP method names resolve to the exact selected method.
+Older aggregate-only or display-name-only records cannot authorize repair.
+Verification must
+cover each reproduced case/OS with at least nine passes and no failures;
+passing other rows, definition IDs or OSes cannot substitute.
 
 Every runner retains each iteration's original TRX, output, process exit and
 checkout receipt, including passing iterations. The controller validates exact
@@ -169,9 +212,11 @@ run/attempt/source/filter identity and counts original result records, not
 summary counters or merged reports. Findings report **requested
 runner-iterations** separately from **actual tests**: project-mode iterations
 can execute many tests and are not an aggregate test-count cap.
-The console tee preserves raw artifact bytes and the existing process timeout
-semantics. Descendant-process cleanup after wrapper timeout remains a separate
-unresolved review concern; console visibility is not a fix for that boundary.
+The console tee preserves raw artifact bytes. A process timeout stops the
+test's own POSIX process group, or requests exact-PID Windows tree termination
+with `taskkill /T /F`. A cleanup-command failure rejects the round; it is not
+a passing timeout receipt. These mechanisms do not isolate adversarial candidate
+code, and Windows behavior still needs native hosted validation.
 
 Each issue has eight model phases, five worker rounds, two repair attempts,
 180 runner-iterations, and twelve hours. Each model has 15 minutes; the existing
@@ -180,6 +225,32 @@ existing files and 800 changed lines. Final verification requires at least nine
 target passes, no failures, and the mode that reproduced the failure. The final
 fresh agent phase must review the exact verified candidate SHA and its files.
 Nine passes are finite evidence, not proof that a low-frequency flake is gone.
+
+Child dispatches checkpoint absolute deadlines: thirty minutes for a complete
+agent workflow and ninety minutes for a worker, including queue/setup time.
+Resumes never reset these or the overall twelve-hour budget. A short controller
+exiting or timing out does not itself cancel a healthy worker.
+Late observation does not expire work whose exact-attempt jobs all completed
+before the child deadline. The controller checks every job's `completed_at`,
+not the workflow's mutable `updated_at`; missing, foreign or unfinished job
+records cannot establish timely completion. The overall twelve-hour cap still
+prevents starting more work.
+
+Cancellation persists its exact owned-run identity before the write, then
+reconciles completion without repeating an uncertain request. No results or
+new iterations are accepted during cancellation. After thirty minutes without
+confirmed completion, the controller posts one explicit blocked finding that
+the child may still be active and retains `cleanup-pending`. Independent
+recovery continues checking that exact run until it is completed, then records
+cleanup and becomes terminal without a second finding or new work.
+
+A malformed checkpoint fails closed before observation or advancement,
+including present inactive child, target, cancellation, history and note
+records; it is not repaired from model memory. One failed issue does not
+prevent other recovery issues from advancing, but the sweep still fails visibly. If Actions ownership
+cannot be read, recovery cannot safely cancel the run; restore access or inspect
+the exact checkpointed run manually. Missing evidence alone is not a trusted
+runner-loss diagnosis and does not trigger an automatic infrastructure retry.
 
 CLI E2E selections stop before dispatch with an actionable blocker because their
 prebuilt runtime images are not candidate-aware. Existing manual CLI E2E
