@@ -26,6 +26,8 @@ SOCKET = Path("/var/run/docker.sock")
 CURL = "/usr/bin/curl"
 LIMIT = 16384
 VERSION_SECONDS = 60
+VERSION_SUFFIX_BYTES = 8192
+VERSION_READ_LIMIT = 64 * 1024 * 1024
 COMMAND = ["-i", "PATH=/usr/bin:/bin", "HOME=/home/awfuser", "TMPDIR=/tmp",
            "LANG=C.UTF-8", "/package/copilot", "--version"]
 TMPFS = {"/tmp": "rw,nosuid,nodev,size=32m,mode=1777",
@@ -47,13 +49,19 @@ def directory(path):
     path.mkdir(mode=0o700)
 
 
-def capture(argv, environment, seconds=15, limit=LIMIT):
+def capture(argv, environment, seconds=15, limit=LIMIT, suffix_bytes=None, read_limit=None,
+            cancellation=None):
     """Bound both pipes together; kill only this command's owned process group."""
+    if cancellation is not None and cancellation():
+        raise Failure("controller-terminated")
     process = subprocess.Popen(argv, env=environment, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                start_new_session=True)
     selector = selectors.DefaultSelector()
     buffers = [bytearray(), bytearray()]
+    observed = [0, 0]
+    if suffix_bytes is not None:
+        assert suffix_bytes > 0 and read_limit is not None and read_limit > 0
     for index, stream in enumerate([process.stdout, process.stderr]):
         selector.register(stream, selectors.EVENT_READ, index)
     deadline = time.monotonic() + seconds
@@ -61,24 +69,42 @@ def capture(argv, environment, seconds=15, limit=LIMIT):
     normal_completion = False
     try:
         while selector.get_map() or process.poll() is None:
+            if cancellation is not None and cancellation():
+                termination = "cancelled"
+                break
             if time.monotonic() >= deadline:
                 termination = "timeout"
                 break
             for key, _ in selector.select(0.02):
-                block = os.read(key.fileobj.fileno(), 65536)
+                size = min(65536, read_limit - sum(observed) + 1) if suffix_bytes is not None else 65536
+                block = os.read(key.fileobj.fileno(), size)
                 if not block:
                     selector.unregister(key.fileobj)
                     continue
-                remaining = limit - sum(map(len, buffers))
-                buffers[key.data].extend(block[:remaining])
-                if len(block) > remaining:
-                    termination = "output-cap"
-                    break
+                observed[key.data] += len(block)
+                if suffix_bytes is not None:
+                    # Long single-line diagnostics can put the actual error at the end.
+                    # Retain only each stream's suffix; never accumulate the full output.
+                    buffers[key.data].extend(block)
+                    del buffers[key.data][:-suffix_bytes]
+                    if sum(observed) > read_limit:
+                        termination = "read-cap"
+                        break
+                else:
+                    remaining = limit - sum(map(len, buffers))
+                    buffers[key.data].extend(block[:remaining])
+                    if len(block) > remaining:
+                        termination = "output-cap"
+                        break
             if termination != "completed":
                 break
+        if cancellation is not None and cancellation():
+            termination = "cancelled"
         normal_completion = termination == "completed"
     finally:
-        if not normal_completion:
+        # Reaping releases the PID even if a signal interrupts completion bookkeeping.
+        # Do not signal a numeric group ID after it can have been reused.
+        if not normal_completion and process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -88,11 +114,18 @@ def capture(argv, environment, seconds=15, limit=LIMIT):
         process.stdout.close()
         process.stderr.close()
     return {"termination": termination, "exit": process.returncode,
-            "stdout": bytes(buffers[0]), "stderr": bytes(buffers[1])}
+            "stdout": bytes(buffers[0]), "stderr": bytes(buffers[1]),
+            "observed_bytes": dict(zip(["stdout", "stderr"], observed)),
+            "suffix_offsets": dict(zip(["stdout", "stderr"],
+                                      [seen - len(value) for seen, value in zip(observed, buffers)]))
+            if suffix_bytes is not None else None,
+            "truncated": any(seen > len(value) for seen, value in zip(observed, buffers))}
 
 
-def checked(argv, environment, seconds=15):
-    result = capture(argv, environment, seconds, 262144)
+def checked(argv, environment, seconds=15, cancellation=None):
+    result = capture(argv, environment, seconds, 262144, cancellation=cancellation)
+    if result["termination"] == "cancelled":
+        raise Failure("controller-terminated")
     if result["termination"] != "completed":
         raise Failure("control-" + result["termination"])
     if result["exit"] != 0:
@@ -130,7 +163,7 @@ def package(archive, payload):
 
 
 class Docker:
-    def __init__(self, executable, state, environment):
+    def __init__(self, executable, state, environment, cancellation):
         self.command = [str(executable), "--host", "unix://" + str(SOCKET),
                         "--config", str(state / "docker-config")]
         self.environment = environment
@@ -139,9 +172,12 @@ class Docker:
         self.cid = None
         self.image_id = None
         self.attempted = False
+        self.cancellation = cancellation
+        self.cleaning = False
 
     def call(self, *args, seconds=15):
-        return checked([*self.command, *args], self.environment, seconds)
+        return checked([*self.command, *args], self.environment, seconds,
+                       cancellation=None if self.cleaning else self.cancellation)
 
     def matches(self):
         raw = self.call("container", "ls", "--all", "--no-trunc", "--filter",
@@ -164,6 +200,7 @@ class Docker:
         return item
 
     def cleanup(self):
+        self.cleaning = True
         if not self.attempted:
             return "not-created-no-create-attempt"
         ids = self.matches()
@@ -238,7 +275,7 @@ def main(argv=None):
             or stat.S_IMODE(ready_info.st_mode) != 0o700 or args.ready_file.exists()):
         raise Failure("unsafe-ready-boundary")
     directory(args.output)
-    receipt = {"profile": "credential-free-linux-cli-version-only-v1",
+    receipt = {"profile": "credential-free-linux-cli-version-tail-v3",
                "status": "rejected", "stage": "setup", "reason": "not-completed",
                "controller_exit_status": 70, "literal_command_exit_status": None,
                "capture_transport_exit_status": None, "capture_termination": "not-started",
@@ -250,12 +287,24 @@ def main(argv=None):
                "verified_package": None, "required_platform": "linux/amd64",
                "verified_image_platform": None, "image_ref": IMAGE, "image_id": None,
                "command": ["/usr/bin/env", *COMMAND],
-               "stream_scope": "credential-free Docker attach stdout/stderr, including possible client diagnostics",
-               "output_byte_limit_combined": LIMIT, "command_seconds": VERSION_SECONDS}
+               "stream_scope": "last bounded suffix of each credential-free Docker attach stream, including possible client diagnostics; not necessarily complete CLI output",
+               "output_byte_limit_combined": 2 * VERSION_SUFFIX_BYTES,
+               "suffix_byte_limit_per_stream": VERSION_SUFFIX_BYTES,
+               "observed_read_limit": VERSION_READ_LIMIT,
+               "capture_truncated": None,
+               "command_seconds": VERSION_SECONDS}
     docker = None
     captured = None
+    cancellation_pending = False
+
     def interrupted(signum, frame):
-        raise Failure("controller-terminated")
+        # Raising here can interrupt waitpid after reaping but before status bookkeeping.
+        nonlocal cancellation_pending
+        cancellation_pending = True
+
+    def cancellation_requested():
+        return cancellation_pending
+
     previous_signals = {value: signal.signal(value, interrupted) for value in [signal.SIGTERM, signal.SIGINT]}
     try:
         directory(args.state)
@@ -269,7 +318,7 @@ def main(argv=None):
             raise Failure("unix-socket-required") from None
         if not stat.S_ISSOCK(socket_mode):
             raise Failure("unix-socket-required")
-        docker = Docker(args.docker, args.state, environment)
+        docker = Docker(args.docker, args.state, environment, cancellation_requested)
         receipt["stage"] = "ownership-preflight"
         if docker.matches():
             raise Failure("container-name-preexists")
@@ -279,7 +328,8 @@ def main(argv=None):
             checked([CURL, "--disable", "--fail", "--location", "--silent", "--show-error",
                      "--proto", "=https", "--proto-redir", "=https",
                      "--max-time", "170", "--max-filesize", str(ASSET_BYTES),
-                     "--output", str(archive), ASSET_URL], environment, 180)
+                     "--output", str(archive), ASSET_URL], environment, 180,
+                    cancellation=cancellation_requested)
         payload = args.state / "payload"
         receipt["verified_package"] = package(archive, payload)
         receipt["stage"] = "image"
@@ -299,11 +349,17 @@ def main(argv=None):
         receipt["stage"] = "literal-version-command"
         receipt["capture_termination"] = "unobserved-after-interruption"
         captured = capture([*docker.command, "container", "start", "--attach", docker.cid],
-                           environment, VERSION_SECONDS)
+                           environment, VERSION_SECONDS, suffix_bytes=VERSION_SUFFIX_BYTES,
+                           read_limit=VERSION_READ_LIMIT, cancellation=cancellation_requested)
         receipt.update(capture_termination=captured["termination"],
                        capture_transport_exit_status=captured["exit"],
-                       captured_bytes={name: len(captured[name]) for name in ["stdout", "stderr"]})
+                       captured_bytes={name: len(captured[name]) for name in ["stdout", "stderr"]},
+                       observed_bytes=captured["observed_bytes"],
+                       suffix_offsets=captured["suffix_offsets"],
+                       capture_truncated=captured["truncated"])
         if captured["termination"] != "completed":
+            if captured["termination"] == "cancelled":
+                raise Failure("controller-terminated")
             receipt["controller_exit_status"] = 124 if captured["termination"] == "timeout" else 125
             raise Failure(captured["termination"])
         # Docker attach status is not substituted for the container command status.
@@ -331,13 +387,16 @@ def main(argv=None):
             except (Failure, OSError, ValueError, KeyError):
                 receipt["cleanup"] = "failed-or-unconfirmed"
                 receipt["controller_exit_status"] = 70
+        if cancellation_pending:
+            receipt.update(status="rejected", reason="controller-terminated",
+                           controller_exit_status=70)
         eligible = (receipt["status"] == "version-command-completed"
                     and receipt["cleanup"] == "owned-container-removed-absence-confirmed")
         if not eligible and receipt["status"] == "version-command-completed":
             receipt.update(status="rejected", reason="cleanup-not-confirmed", controller_exit_status=70)
         if eligible:
             for name in ["stdout", "stderr"]:
-                path = args.output / (name + ".log")
+                path = args.output / (name + ".tail.log")
                 with path.open("xb") as stream:
                     stream.write(captured[name])
             receipt["output_eligible"] = True

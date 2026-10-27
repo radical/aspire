@@ -1,4 +1,4 @@
-name: Credential-free CLI version format
+name: Credential-free CLI terminal diagnostic
 on:
   workflow_dispatch: {}
 permissions:
@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   version_format:
-    if: github.repository == 'radical/aspire' && startsWith(github.ref_name, 'ankj/cli-version-format-')
+    if: github.repository == 'radical/aspire' && startsWith(github.ref_name, 'ankj/cli-version-tail-')
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
@@ -38,10 +38,10 @@ jobs:
         if: always() && steps.version.outputs.artifact_ready == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: credential-free-linux-cli-version
+          name: credential-free-linux-cli-version-tail
           path: |
             cli-version-format-evidence/receipt.json
-            cli-version-format-evidence/stdout.log
-            cli-version-format-evidence/stderr.log
+            cli-version-format-evidence/stdout.tail.log
+            cli-version-format-evidence/stderr.tail.log
           if-no-files-found: error
           retention-days: 7
