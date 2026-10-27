@@ -2,7 +2,7 @@
   "version": 1,
   "issue": 151,
   "issue_url": "https://github.com/radical/aspire/issues/151",
-  "phase": "publication-intent",
+  "phase": "terminal",
   "created_at": "2026-10-27T01:18:38.631854+00:00",
   "base_sha": "934fbbbe0942da5025abdfefa93edca1ad9ec633",
   "control_sha": "7fd3f582034882094f05510774b0b5dda1d13b0b",
@@ -47,7 +47,7 @@
     "reason": "Controlled lifecycle fault fixture; no test ran"
   },
   "outcome": "blocked",
-  "updated_at": "2026-10-27T01:20:40.402004+00:00",
+  "updated_at": "2026-10-27T01:20:43.666683+00:00",
   "transitions": [
     {
       "phase": "ready",
@@ -68,6 +68,11 @@
       "phase": "publication-intent",
       "reason": "Terminal blocked decision; publication not yet confirmed.",
       "at": "2026-10-27T01:20:40.402004+00:00"
+    },
+    {
+      "phase": "terminal",
+      "reason": "Original-issue finding confirmed; terminal resume is a no-op.",
+      "at": "2026-10-27T01:20:43.666683+00:00"
     }
   ],
   "repair_scope": [
@@ -119,5 +124,6 @@
     }
   ],
   "explanation": "Interrupted remote write has an uncertain outcome. Inspect the checkpoint intent; no dispatch, candidate, cancellation, or publication was blindly retried.",
-  "analysis": null
+  "analysis": null,
+  "finding_url": "https://github.com/radical/aspire/issues/151#issuecomment-6431349560"
 }
