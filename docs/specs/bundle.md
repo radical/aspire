@@ -372,7 +372,7 @@ The bundling process is:
 3. For signed distributions, sign the component binaries. The macOS tray app
    also requires whole-app signing and notarization.
 4. Create any requested Dashboard and DCP distribution packages, then assemble
-   and validate the payload archive from the prepared components.
+   the payload archive from the prepared components.
 5. Publish the CLI with the payload embedded and sign it when requested.
    Distribution builds also create CLI archives, .NET tool packages, and npm packages.
 
@@ -406,9 +406,9 @@ and its packages. Repository build wrappers translate the legacy
 `/p:SkipNativeBuild=true` argument into CLI omission; use the direct MSBuild
 entry point above for advanced bundle controls.
 
-CI validates the assembled archive and, on compatible runners, the bundle
-extracted by the final CLI. Official signing lanes additionally verify
-signatures and macOS notarization. CLI symbols are staged independently; see
+Windows and macOS archive checks validate tray payloads before CLI embedding.
+Official macOS tray signing includes notarization. CLI symbols are staged
+independently; see
 [CLI native symbols](../ci/cli-native-symbols.md).
 
 ### CreateLayout

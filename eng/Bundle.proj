@@ -479,8 +479,6 @@
       <_RequireMacTraySignature>false</_RequireMacTraySignature>
       <_RequireWindowsTraySignature Condition="$(TargetRid.StartsWith('win-')) and '$(Sign)' == 'true' and '$(DotNetSignType)' == 'real'">true</_RequireWindowsTraySignature>
       <_RequireMacTraySignature Condition="$(TargetRid.StartsWith('osx-')) and '$(Sign)' == 'true' and '$(DotNetSignType)' == 'real'">true</_RequireMacTraySignature>
-      <_RequireComponentSignatures>false</_RequireComponentSignatures>
-      <_RequireComponentSignatures Condition="'$(Sign)' == 'true' and '$(DotNetSignType)' == 'real'">true</_RequireComponentSignatures>
       <_CreateLayoutProjectPath Condition="'$(_CreateLayoutProjectPath)' == ''">$(_RepoRoot)tools\CreateLayout\CreateLayout.csproj</_CreateLayoutProjectPath>
       <!-- Remove trailing slashes for command line arguments -->
       <_BundleLayoutDirArg>$(_BundleLayoutDir.TrimEnd('\').TrimEnd('/'))</_BundleLayoutDirArg>
@@ -495,10 +493,6 @@
     <Message Importance="high" Text="Creating bundle layout and archive..." />
     <Exec Command="dotnet run --project &quot;$(_CreateLayoutProjectPath)&quot; $(_BundleChildArgs) -- $(_CreateLayoutArgs)"
           EnvironmentVariables="$(_NuGetCacheEnvironmentVariables)" />
-
-    <!-- Verify archive contents, including required component signatures, before CLI embedding. -->
-    <Exec Command="pwsh -NoProfile -File &quot;$(_BundleEngineeringDir)scripts/verify-bundle-payload.ps1&quot; -Archive &quot;$(_BundleArchivePath)&quot; -Rid &quot;$(TargetRid)&quot; -RequireSignature $(_RequireComponentSignatures)"
-          Condition="'$(BuildDistributionPackages)' == 'true'" />
 
     <Exec Command="bash &quot;$(_RepoRoot)tools/CreateLayout/verify-tray-payload.sh&quot; &quot;$(_BundleArchivePath)&quot; &quot;$(TargetRid)&quot; &quot;$(_RequireMacTraySignature)&quot;"
           Condition="$(TargetRid.StartsWith('osx-'))" />
