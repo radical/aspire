@@ -1288,6 +1288,44 @@ type TestVaultResource interface {
 }
 
 // ============================================================================
+// Accepting interfaces (handle types with derived types)
+// ============================================================================
+// Go has no return-type covariance, so the interface of a derived handle type does not
+// satisfy the interface of its base type. Each Any<Type> below accepts <Type> or a handle
+// of any type derived from it, and is used wherever a method, options struct, or DTO takes
+// a <Type> as input. The unexported marker methods restrict it to that family of types.
+//
+// The set of Any<Type> interfaces depends on the integrations of the AppHost this SDK is
+// generated for: an Any<Type> exists only while some handle type in the SDK derives from <Type>.
+// Adding or removing an integration can add or remove an Any<Type> and change a method parameter
+// from <Type> to Any<Type>, so code that names an Any<Type> or such a parameter's type depends
+// on the integrations the AppHost includes.
+
+// AnyContainerResource accepts ContainerResource or a handle of any type derived from it.
+type AnyContainerResource interface {
+	handleReference
+	isContainerResource()
+}
+
+// AnyDistributedApplicationEventSubscription accepts DistributedApplicationEventSubscription or a handle of any type derived from it.
+type AnyDistributedApplicationEventSubscription interface {
+	handleReference
+	isDistributedApplicationEventSubscription()
+}
+
+// AnyExecutableResource accepts ExecutableResource or a handle of any type derived from it.
+type AnyExecutableResource interface {
+	handleReference
+	isExecutableResource()
+}
+
+// AnyProjectResource accepts ProjectResource or a handle of any type derived from it.
+type AnyProjectResource interface {
+	handleReference
+	isProjectResource()
+}
+
+// ============================================================================
 // Handle wrappers
 // ============================================================================
 
@@ -1456,6 +1494,7 @@ func (s *aspireStore) GetFileNameWithContent(filenameTemplate string, sourceFile
 // Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource is the public interface for handle type Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource.
 type Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource interface {
 	handleReference
+	isContainerResource()
 	AsHttp2Service() Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	ExcludeFromManifest() Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
@@ -1589,6 +1628,9 @@ type aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource struct {
 func newAspire_Hosting_CodeGeneration_Go_TestsTestVaultResourceFromHandle(h *handle, c *client) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
 	return &aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource implements the marker of each accepting interface for its own type and its base types.
+func (*aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) isContainerResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) AsHttp2Service() Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
@@ -3782,6 +3824,7 @@ func (s *beforeStartEvent) Services() ServiceProvider {
 // CSharpAppResource is the public interface for handle type CSharpAppResource.
 type CSharpAppResource interface {
 	handleReference
+	isProjectResource()
 	AsHttp2Service() CSharpAppResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	DisableForwardedHeaders() CSharpAppResource
@@ -3898,6 +3941,9 @@ type cSharpAppResource struct {
 func newCSharpAppResourceFromHandle(h *handle, c *client) CSharpAppResource {
 	return &cSharpAppResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// cSharpAppResource implements the marker of each accepting interface for its own type and its base types.
+func (*cSharpAppResource) isProjectResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *cSharpAppResource) AsHttp2Service() CSharpAppResource {
@@ -7858,6 +7904,7 @@ func (s *containerRegistryResource) WithValidator(validator func(arg TestResourc
 // ContainerResource is the public interface for handle type ContainerResource.
 type ContainerResource interface {
 	handleReference
+	isContainerResource()
 	AsHttp2Service() ContainerResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	ExcludeFromManifest() ContainerResource
@@ -7990,6 +8037,9 @@ type containerResource struct {
 func newContainerResourceFromHandle(h *handle, c *client) ContainerResource {
 	return &containerResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// containerResource implements the marker of each accepting interface for its own type and its base types.
+func (*containerResource) isContainerResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *containerResource) AsHttp2Service() ContainerResource {
@@ -10830,6 +10880,7 @@ func (s *distributedApplicationBuilder) UserSecretsManager() UserSecretsManager 
 // DistributedApplicationEventSubscription is the public interface for handle type DistributedApplicationEventSubscription.
 type DistributedApplicationEventSubscription interface {
 	handleReference
+	isDistributedApplicationEventSubscription()
 	Err() error
 }
 
@@ -10843,10 +10894,13 @@ func newDistributedApplicationEventSubscriptionFromHandle(h *handle, c *client) 
 	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
 
+// distributedApplicationEventSubscription implements the marker of each accepting interface for its own type and its base types.
+func (*distributedApplicationEventSubscription) isDistributedApplicationEventSubscription() {}
+
 // DistributedApplicationEventing is the public interface for handle type DistributedApplicationEventing.
 type DistributedApplicationEventing interface {
 	handleReference
-	Unsubscribe(subscription DistributedApplicationEventSubscription) error
+	Unsubscribe(subscription AnyDistributedApplicationEventSubscription) error
 	Err() error
 }
 
@@ -10861,7 +10915,7 @@ func newDistributedApplicationEventingFromHandle(h *handle, c *client) Distribut
 }
 
 // Unsubscribe unsubscribe from an event.
-func (s *distributedApplicationEventing) Unsubscribe(subscription DistributedApplicationEventSubscription) error {
+func (s *distributedApplicationEventing) Unsubscribe(subscription AnyDistributedApplicationEventSubscription) error {
 	if s.err != nil { return s.err }
 	if subscription != nil { if err := subscription.Err(); err != nil { return err } }
 	ctx := context.Background()
@@ -11168,6 +11222,7 @@ func (s *distributedApplicationPipeline) DisableBuildOnlyContainerValidation() D
 // DistributedApplicationResourceEventSubscription is the public interface for handle type DistributedApplicationResourceEventSubscription.
 type DistributedApplicationResourceEventSubscription interface {
 	handleReference
+	isDistributedApplicationEventSubscription()
 	Err() error
 }
 
@@ -11180,6 +11235,9 @@ type distributedApplicationResourceEventSubscription struct {
 func newDistributedApplicationResourceEventSubscriptionFromHandle(h *handle, c *client) DistributedApplicationResourceEventSubscription {
 	return &distributedApplicationResourceEventSubscription{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// distributedApplicationResourceEventSubscription implements the marker of each accepting interface for its own type and its base types.
+func (*distributedApplicationResourceEventSubscription) isDistributedApplicationEventSubscription() {}
 
 // DockerfileBuilder is the public interface for handle type DockerfileBuilder.
 type DockerfileBuilder interface {
@@ -11625,6 +11683,7 @@ func (s *dockerfileStage) WorkDir(path string) DockerfileStage {
 // DotnetToolResource is the public interface for handle type DotnetToolResource.
 type DotnetToolResource interface {
 	handleReference
+	isExecutableResource()
 	AsHttp2Service() DotnetToolResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	ExcludeFromManifest() DotnetToolResource
@@ -11746,6 +11805,9 @@ type dotnetToolResource struct {
 func newDotnetToolResourceFromHandle(h *handle, c *client) DotnetToolResource {
 	return &dotnetToolResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// dotnetToolResource implements the marker of each accepting interface for its own type and its base types.
+func (*dotnetToolResource) isExecutableResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *dotnetToolResource) AsHttp2Service() DotnetToolResource {
@@ -14569,6 +14631,7 @@ func (s *eventingSubscriberRegistrationContext) OnBeforeStart(callback func(arg 
 // ExecutableResource is the public interface for handle type ExecutableResource.
 type ExecutableResource interface {
 	handleReference
+	isExecutableResource()
 	AsHttp2Service() ExecutableResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	ExcludeFromManifest() ExecutableResource
@@ -14684,6 +14747,9 @@ type executableResource struct {
 func newExecutableResourceFromHandle(h *handle, c *client) ExecutableResource {
 	return &executableResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// executableResource implements the marker of each accepting interface for its own type and its base types.
+func (*executableResource) isExecutableResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *executableResource) AsHttp2Service() ExecutableResource {
@@ -21315,6 +21381,7 @@ func (s *progressContext) CancellationToken() (*CancellationToken, error) {
 // ProjectResource is the public interface for handle type ProjectResource.
 type ProjectResource interface {
 	handleReference
+	isProjectResource()
 	AsHttp2Service() ProjectResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	DisableForwardedHeaders() ProjectResource
@@ -21431,6 +21498,9 @@ type projectResource struct {
 func newProjectResourceFromHandle(h *handle, c *client) ProjectResource {
 	return &projectResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// projectResource implements the marker of each accepting interface for its own type and its base types.
+func (*projectResource) isProjectResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *projectResource) AsHttp2Service() ProjectResource {
@@ -24806,6 +24876,7 @@ func (s *testCollectionContext) Metadata() *Dict[string, string] {
 // TestDatabaseResource is the public interface for handle type TestDatabaseResource.
 type TestDatabaseResource interface {
 	handleReference
+	isContainerResource()
 	AsHttp2Service() TestDatabaseResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
 	ExcludeFromManifest() TestDatabaseResource
@@ -24938,6 +25009,9 @@ type testDatabaseResource struct {
 func newTestDatabaseResourceFromHandle(h *handle, c *client) TestDatabaseResource {
 	return &testDatabaseResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// testDatabaseResource implements the marker of each accepting interface for its own type and its base types.
+func (*testDatabaseResource) isContainerResource() {}
 
 // AsHttp2Service configures a resource to mark all endpoints' transport as HTTP/2. This is useful for HTTP/2 services that need prior knowledge.
 func (s *testDatabaseResource) AsHttp2Service() TestDatabaseResource {
@@ -27163,6 +27237,7 @@ func (s *testMutablePromiseCollisionResource) Value() (string, error) {
 // TestRedisResource is the public interface for handle type TestRedisResource.
 type TestRedisResource interface {
 	handleReference
+	isContainerResource()
 	AddTestChildDatabase(name string, options ...*AddTestChildDatabaseOptions) TestDatabaseResource
 	AsHttp2Service() TestRedisResource
 	CreateExecutionConfiguration() ExecutionConfigurationBuilder
@@ -27316,6 +27391,9 @@ type testRedisResource struct {
 func newTestRedisResourceFromHandle(h *handle, c *client) TestRedisResource {
 	return &testRedisResource{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
+
+// testRedisResource implements the marker of each accepting interface for its own type and its base types.
+func (*testRedisResource) isContainerResource() {}
 
 // AddTestChildDatabase adds a child database to a test Redis resource
 func (s *testRedisResource) AddTestChildDatabase(name string, options ...*AddTestChildDatabaseOptions) TestDatabaseResource {
