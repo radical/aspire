@@ -437,6 +437,11 @@ path_rules:
     targets: [test:Aspire.Cli.Tests]
     reason: CLI tests instantiate template sources and verify frontend package inputs.
   - paths:
+      - src/Aspire.Hosting.CodeGeneration.Go/AtsGoCodeGenerator.cs
+      - src/Aspire.Hosting.CodeGeneration.Go/GoLanguageSupport.cs
+    targets: [test:Aspire.Cli.Tests]
+    reason: GoAppHostToolingCheckTests reads the go.mod templates to guard the minimum Go version.
+  - paths:
       - .github/workflows/update-nix-cli-flake.yml
       - flake.nix
       - flake.lock
