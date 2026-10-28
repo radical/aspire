@@ -598,6 +598,17 @@ public sealed class TestTriggerMapTests
     }
 
     [Theory]
+    [InlineData("eng/scripts/verify-bundle-payload.ps1")]
+    public void BundleValidationInputsSelectTheirInfrastructureTests(string path)
+    {
+        var result = SelectWithRealMap(path);
+
+        Assert.False(result.SelectsAll);
+        Assert.Empty(result.UnmatchedFiles);
+        Assert.Contains("Infrastructure.Tests", result.TestProjects);
+    }
+
+    [Theory]
     [InlineData("src/Aspire.Cli/Commands/RunCommand.cs", "Aspire.Cli")]
     [InlineData("src/Aspire.Managed/Program.cs", "Aspire.Managed")]
     [InlineData("src/Aspire.AppHost.Sdk/Aspire.AppHost.Sdk.csproj", "Aspire.AppHost.Sdk")]

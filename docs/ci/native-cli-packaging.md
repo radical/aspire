@@ -37,10 +37,12 @@ The tool packaging flow therefore extracts the signed `aspire` binary from the s
 
 Linux native jobs do not sign ELF binaries in `build_sign_native`. For Linux, extracting from the native archive gives the same unsigned ELF payload, and the resulting NuGet packages are signed later as packages by the main Windows build.
 
-The official Assemble job signs Linux Dashboard packages and verifies their
-final Shipping signatures before publishing. Preserve signed packages when
-staging producer outputs; see the Assemble job in
-[`azure-pipelines.yml`](../../eng/pipelines/azure-pipelines.yml).
+The official Assemble job signs Linux Dashboard packages and verifies shipping
+NuGet signatures before publishing. Preserve signed packages when staging
+producer outputs; see the Assemble job in
+[`azure-pipelines.yml`](../../eng/pipelines/azure-pipelines.yml) and
+[`verify-shipping-nuget-signatures.ps1`](../../eng/scripts/verify-shipping-nuget-signatures.ps1)
+for the implementation and verification scope.
 
 ## Nix flake packaging
 

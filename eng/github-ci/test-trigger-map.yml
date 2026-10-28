@@ -114,6 +114,7 @@ ignore:
   - eng/scripts/debug-*.ps1                             # debug-aspire-channel/stable/staging: local channel-switch helpers
   - eng/scripts/debug-*.sh
   - eng/scripts/validate-cli-symbols.ps1                # AzDO native-AOT symbol publish validation; no GH-CI consumer
+  - eng/scripts/verify-shipping-nuget-signatures.ps1     # official Assemble validates final NuGet artifacts; no GH-CI consumer
   - eng/scripts/validate-mac-platform-sso.sh            # manual managed-Mac validation; no GH-CI consumer
   - eng/generate-catalog.ps1                            # Windows/AzDO template catalog generation; no GH-CI consumer
   - eng/scripts/update-aspire-skills-bundle.ps1         # schedule/dispatch-only bundle updater
@@ -507,6 +508,10 @@ path_rules:
       - src/Aspire.Tray/Windows/publish.ps1
     targets: [CLI_BUNDLE, test:Infrastructure.Tests]
     reason: native CLI bundle assembly and publishing inputs
+  - paths:
+      - eng/scripts/verify-bundle-payload.ps1
+    targets: [test:Infrastructure.Tests]
+    reason: exercises malformed native payload archives through the verifier
   - paths:
       - eng/Bundle.proj
     targets: [test:Aspire.Templates.Tests, job:native-dashboard-validation, job:polyglot]

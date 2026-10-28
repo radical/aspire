@@ -558,19 +558,9 @@ extends:
                 displayName: 🟣Stage Native AOT Dashboard packages
 
               - pwsh: |
-                  $ErrorActionPreference = 'Stop'
-                  $shipping = "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)/Shipping"
-                  $packages = @(Get-ChildItem -LiteralPath $shipping -Filter 'Aspire.Dashboard.Sdk.linux-*.nupkg' -File)
-                  if ($packages.Count -ne 3) {
-                    throw "Expected 3 final Linux Dashboard packages, found $($packages.Count): $($packages.FullName -join ', ')"
-                  }
-                  foreach ($package in $packages) {
-                    & dotnet nuget verify $package.FullName --all
-                    if ($LASTEXITCODE -ne 0) {
-                      throw "Linux Dashboard package signature verification failed: $($package.FullName)"
-                    }
-                  }
-                displayName: 🟣Verify final Linux Dashboard package signatures
+                  & "$(Build.SourcesDirectory)/eng/scripts/verify-shipping-nuget-signatures.ps1" `
+                    -ShippingDir "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)/Shipping"
+                displayName: 🟣Verify all shipping NuGet package signatures
                 condition: and(succeeded(), eq(variables['_SignType'], 'real'))
 
               - pwsh: |
