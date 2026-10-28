@@ -44,6 +44,14 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
         "any", "true", "false", "nil", "iota",
     };
 
+    // byte and rune are aliases of uint8 and int32; listing them too would be a duplicate case in a type switch.
+    private static readonly string[] s_goNumericTypes =
+    [
+        "int", "int8", "int16", "int32", "int64",
+        "uint", "uint8", "uint16", "uint32", "uint64",
+        "float32",
+    ];
+
     private TextWriter _writer = null!;
 
     // typeId → exported Go interface name (e.g., "Aspire.Hosting/...IResource" → "Resource")
@@ -1867,7 +1875,7 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
             var paramName = GetLocalIdentifier(p.Name);
             var allowed = GetUnionAllowedTypes(p.Type!);
             WriteLine($"{indent}switch {paramName}.(type) {{");
-            WriteLine($"{indent}case {allowed}:");
+            WriteLine($"{indent}case {GetUnionTypeSwitchCases(p.Type!)}:");
             WriteLine($"{indent}default:");
             WriteLine($"{indent}\terr := fmt.Errorf(\"aspire: {methodName}: parameter %q must be one of [{allowed}], got %T\", \"{p.Name}\", {paramName})");
             foreach (var line in errorActionLines)
@@ -1883,15 +1891,35 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
         foreach (var p in GetUnionParameters(capability))
         {
             var allowed = GetUnionAllowedTypes(p.Type!);
-            WriteLine($"// Allowed types for parameter {p.Name}: {allowed}.");
+            var numericNote = AllowsGoNumericTypes(GetUnionMemberTypes(p.Type!)) ? " (float64 accepts any built-in Go numeric type)" : "";
+            WriteLine($"// Allowed types for parameter {p.Name}: {allowed}{numericNote}.");
         }
     }
 
-    private string GetUnionAllowedTypes(AtsTypeRef typeRef)
+    private string GetUnionAllowedTypes(AtsTypeRef typeRef) => string.Join(", ", GetUnionMemberTypes(typeRef));
+
+    // float64 is how an ATS number maps to Go. A union that contains it also accepts the other
+    // Go numeric types (see GetUnionTypeSwitchCases), and the generated godoc says so.
+    private static bool AllowsGoNumericTypes(string[] memberTypes) => memberTypes.Contains("float64", StringComparer.Ordinal);
+
+    // Go boxes an untyped constant such as 3 as int, so a union that allows an ATS number
+    // (float64) has to accept the other Go numeric types too. They all serialize as JSON numbers.
+    private string GetUnionTypeSwitchCases(AtsTypeRef typeRef)
+    {
+        var memberTypes = GetUnionMemberTypes(typeRef);
+        if (!AllowsGoNumericTypes(memberTypes))
+        {
+            return string.Join(", ", memberTypes);
+        }
+
+        return string.Join(", ", memberTypes.Concat(s_goNumericTypes).Distinct(StringComparer.Ordinal));
+    }
+
+    private string[] GetUnionMemberTypes(AtsTypeRef typeRef)
     {
         if (typeRef.UnionTypes is not { Count: > 0 } types)
         {
-            return "any";
+            return ["any"];
         }
 
         var allowedTypes = types
@@ -1899,7 +1927,7 @@ internal sealed class AtsGoCodeGenerator : ICodeGenerator
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-        return allowedTypes.Length > 0 ? string.Join(", ", allowedTypes) : "any";
+        return allowedTypes.Length > 0 ? allowedTypes : ["any"];
     }
 
     /// <summary>
