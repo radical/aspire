@@ -22,7 +22,10 @@ on:
       extraTestArgs:
         required: false
         type: string
-      versionOverrideArg:
+      versionSuffix:
+        required: false
+        type: string
+      dotNetFinalVersionKind:
         required: false
         type: string
       # JSON object of test properties (e.g. {"requiresNugets": true})
@@ -342,7 +345,8 @@ jobs:
           -build
           -projects ${{ env.TEST_PROJECT_PATH }}
           ${{ fromJson(inputs.properties).enablePlaywrightInstall != true && '/p:InstallBrowsersForPlaywright=false' || '' }}
-          ${{ inputs.versionOverrideArg }}
+          ${{ inputs.versionSuffix != '' && format('/p:VersionSuffix={0}', inputs.versionSuffix) || '' }}
+          ${{ inputs.dotNetFinalVersionKind != '' && format('/p:DotNetFinalVersionKind={0}', inputs.dotNetFinalVersionKind) || '' }}
 
       - name: Build and archive test project
         if: ${{ fromJson(inputs.properties).requiresNugets == true }}
@@ -352,7 +356,8 @@ jobs:
           /p:ArchiveTests=true
           /bl:${{ github.workspace }}/artifacts/log/Debug/BuildAndArchive.binlog
           ${{ fromJson(inputs.properties).enablePlaywrightInstall != true && '/p:InstallBrowsersForPlaywright=false' || '' }}
-          ${{ inputs.versionOverrideArg }}
+          ${{ inputs.versionSuffix != '' && format('/p:VersionSuffix={0}', inputs.versionSuffix) || '' }}
+          ${{ inputs.dotNetFinalVersionKind != '' && format('/p:DotNetFinalVersionKind={0}', inputs.dotNetFinalVersionKind) || '' }}
 
       # Workaround for bug in Azure Functions Worker SDK. See https://github.com/Azure/azure-functions-dotnet-worker/issues/2969.
       - name: Rebuild for Azure Functions project

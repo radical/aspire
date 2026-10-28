@@ -3,7 +3,10 @@ name: Build Packages (Reusable)
 on:
   workflow_call:
     inputs:
-      versionOverrideArg:
+      versionSuffix:
+        required: false
+        type: string
+      dotNetFinalVersionKind:
         required: false
         type: string
 
@@ -19,11 +22,16 @@ jobs:
       - name: Build with packages
         shell: bash
         env:
-          VERSION_OVERRIDE_ARG: ${{ inputs.versionOverrideArg }}
+          VERSION_SUFFIX: ${{ inputs.versionSuffix }}
+          DOTNET_FINAL_VERSION_KIND: ${{ inputs.dotNetFinalVersionKind }}
         run: |
-          # Overrides contain whitespace-separated MSBuild switches, such as /p:VersionSuffix=pr.123.gabcdef12.
-          # Split them as arguments without evaluating caller-supplied values as shell code.
-          read -r -a versionOverrideArgs <<< "$VERSION_OVERRIDE_ARG"
+          versionArgs=()
+          if [[ -n "$VERSION_SUFFIX" ]]; then
+            versionArgs+=("/p:VersionSuffix=$VERSION_SUFFIX")
+          fi
+          if [[ -n "$DOTNET_FINAL_VERSION_KIND" ]]; then
+            versionArgs+=("/p:DotNetFinalVersionKind=$DOTNET_FINAL_VERSION_KIND")
+          fi
           ./build.sh \
             -restore \
             -build \
@@ -35,7 +43,7 @@ jobs:
             -p:SkipPlaygroundProjects=true \
             -p:SkipBundleDeps=true \
             -p:SkipNativeBuild=true \
-            "${versionOverrideArgs[@]}"
+            "${versionArgs[@]}"
 
       - name: Generate template component manifest
         shell: pwsh
