@@ -57,8 +57,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     outputs:
       skip_workflow: ${{ (steps.check_for_changes.outputs.no_changes == 'true' || steps.check_for_changes.outputs.only_changed == 'true') && 'true' || 'false' }}
-      VERSION_SUFFIX: ${{ steps.compute_version_suffix.outputs.VERSION_SUFFIX }}
-      DOTNET_FINAL_VERSION_KIND: ${{ steps.compute_version_suffix.outputs.DOTNET_FINAL_VERSION_KIND }}
+      VERSION_SUFFIX_OVERRIDE: ${{ steps.compute_version_suffix.outputs.VERSION_SUFFIX_OVERRIDE }}
       EXTENSION_VERSION_OVERRIDE: ${{ steps.compute_version_suffix.outputs.EXTENSION_VERSION_OVERRIDE }}
       # Re-enable once the .NET 11 dependencies are GA. Export the switch so Final
       # Results can distinguish intentionally disabled PRs from unexpected skips.
@@ -87,16 +86,15 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.number }}
         run: |
-          Write-Host "Determining VERSION_SUFFIX (PR only step)..."
+          Write-Host "Determining VERSION_SUFFIX_OVERRIDE (PR only step)..."
           if ([string]::IsNullOrWhiteSpace($Env:PR_HEAD_SHA)) {
             Write-Error "PR_HEAD_SHA not set; cannot compute version suffix."
             exit 1
           }
           $SHORT_SHA = $Env:PR_HEAD_SHA.Substring(0,8)
-          $VERSION_SUFFIX = "pr.$($Env:PR_NUMBER).g$SHORT_SHA"
-          Write-Host "Computed VERSION_SUFFIX=$VERSION_SUFFIX"
-          "VERSION_SUFFIX=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
-          "DOTNET_FINAL_VERSION_KIND=prerelease" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
+          $VERSION_SUFFIX = "/p:VersionSuffix=pr.$($Env:PR_NUMBER).g$SHORT_SHA /p:DotNetFinalVersionKind=prerelease"
+          Write-Host "Computed VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX"
+          "VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
           $EXTENSION_VERSION = "99.0.$($Env:PR_NUMBER)"
           Write-Host "Computed EXTENSION_VERSION_OVERRIDE=$EXTENSION_VERSION"
@@ -118,8 +116,7 @@ jobs:
       pull-requests: write
     if: ${{ github.repository == 'microsoft/aspire' && needs.prepare_for_ci.outputs.skip_workflow != 'true' }}
     with:
-      versionSuffix: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX }}
-      dotNetFinalVersionKind: ${{ needs.prepare_for_ci.outputs.DOTNET_FINAL_VERSION_KIND }}
+      versionOverrideArg: ${{ needs.prepare_for_ci.outputs.VERSION_SUFFIX_OVERRIDE }}
       extensionVersionOverride: ${{ needs.prepare_for_ci.outputs.EXTENSION_VERSION_OVERRIDE }}
 
   # Stabilization gate.

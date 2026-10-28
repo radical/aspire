@@ -3,10 +3,7 @@ name: Build native CLI archives
 on:
   workflow_call:
     inputs:
-      versionSuffix:
-        required: false
-        type: string
-      dotNetFinalVersionKind:
+      versionOverrideArg:
         required: false
         type: string
       configuration:
@@ -57,6 +54,7 @@ jobs:
       # Keep caller-supplied values out of script source; consume them as data in PowerShell.
       BUILD_CONFIGURATION: ${{ inputs.configuration }}
       TARGET_RIDS: ${{ matrix.targets.rids }}
+      VERSION_OVERRIDE_ARG: ${{ inputs.versionOverrideArg }}
       ASPIRE_CLI_CHANNEL: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/internal/release/')) && 'staging' || github.ref == 'refs/heads/main' && 'local' || 'daily' }}
 
     steps:
@@ -85,8 +83,6 @@ jobs:
         env:
           BUNDLE_CONFIGURATION: ${{ inputs.configuration }}
           BUNDLE_TARGET_RID: ${{ matrix.targets.rids }}
-          VERSION_SUFFIX: ${{ inputs.versionSuffix }}
-          DOTNET_FINAL_VERSION_KIND: ${{ inputs.dotNetFinalVersionKind }}
         run: |
           $dotnetScript = if ($IsWindows) { "./dotnet.cmd" } else { "./dotnet.sh" }
           $arguments = @(
@@ -102,11 +98,10 @@ jobs:
             "/p:AspireCliChannel=$env:ASPIRE_CLI_CHANNEL",
             "/bl:$env:GITHUB_WORKSPACE/artifacts/log/$env:BUNDLE_CONFIGURATION/BuildNativeBundle.binlog"
           )
-          if (-not [string]::IsNullOrWhiteSpace($env:VERSION_SUFFIX)) {
-            $arguments += "/p:VersionSuffix=$env:VERSION_SUFFIX"
-          }
-          if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_FINAL_VERSION_KIND)) {
-            $arguments += "/p:DotNetFinalVersionKind=$env:DOTNET_FINAL_VERSION_KIND"
+          if (-not [string]::IsNullOrWhiteSpace($env:VERSION_OVERRIDE_ARG)) {
+            # The caller supplies whitespace-separated switches without spaces in values,
+            # e.g. /p:VersionSuffix=pr.123.gabcdef12 /p:DotNetFinalVersionKind=prerelease.
+            $arguments += $env:VERSION_OVERRIDE_ARG.Trim() -split '\s+'
           }
 
           & $dotnetScript @arguments

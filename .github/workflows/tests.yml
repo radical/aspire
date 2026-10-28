@@ -4,10 +4,7 @@ name: Tests
 on:
   workflow_call:
     inputs:
-      versionSuffix:
-        required: false
-        type: string
-      dotNetFinalVersionKind:
+      versionOverrideArg:
         required: false
         type: string
       extensionVersionOverride:
@@ -261,16 +258,14 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-packages.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
 
   build_cli_archive_linux:
     name: Build native CLI archive (Linux)
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       targets: '[{"os": "ubuntu-latest", "runner": "8-core-ubuntu-latest", "rids": "linux-x64"}]'
 
   build_cli_archive_linux_arm64:
@@ -278,8 +273,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       targets: '[{"os": "ubuntu-latest", "runner": "ubuntu-24.04-arm", "rids": "linux-arm64"}]'
 
   # Per-OS CLI archive builds produce RID-specific DCP and Dashboard NuGets.
@@ -291,8 +285,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       targets: '[{"os": "windows-latest", "runner": "windows-latest", "rids": "win-x64"}]'
 
   build_cli_archive_windows_arm64:
@@ -300,8 +293,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       # Use the newer VS 2026 ARM linker; the VS 2022 image fails on Aspire.Dashboard.obj with LNK1322.
       targets: '[{"os": "windows-latest", "runner": "windows-11-vs2026-arm", "rids": "win-arm64"}]'
 
@@ -310,8 +302,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       targets: '[{"os": "macos-latest", "runner": "macos-latest", "rids": "osx-arm64"}]'
 
   build_cli_archive_macos_x64:
@@ -319,8 +310,7 @@ jobs:
     if: ${{ github.repository == 'microsoft/aspire' }}
     uses: ./.github/workflows/build-cli-native-archives.yml
     with:
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       # Cross-compile osx-x64 on the Apple Silicon (arm64) macos-latest runner
       # instead of the Intel macos-15-intel runner. The Intel runner is ~2.5x
       # slower per core and made this the long pole of the CLI build (~18m vs
@@ -407,8 +397,7 @@ jobs:
       testProjectPath: ${{ matrix.testProjectPath }}
       mtpBaseArgs: ${{ matrix.mtpBaseArgs }}
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
       ignoreTestFailures: ${{ matrix.properties.nonBlockingTestFailures }}
 
@@ -428,8 +417,7 @@ jobs:
       testProjectPath: ${{ matrix.testProjectPath }}
       mtpBaseArgs: ${{ matrix.mtpBaseArgs }}
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
       ignoreTestFailures: ${{ matrix.properties.nonBlockingTestFailures }}
 
@@ -447,8 +435,7 @@ jobs:
       testProjectPath: ${{ matrix.testProjectPath }}
       mtpBaseArgs: ${{ matrix.mtpBaseArgs }}
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
       ignoreTestFailures: ${{ matrix.properties.nonBlockingTestFailures }}
 
@@ -466,8 +453,7 @@ jobs:
       testProjectPath: ${{ matrix.testProjectPath }}
       mtpBaseArgs: ${{ matrix.mtpBaseArgs }}
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
       ignoreTestFailures: ${{ matrix.properties.nonBlockingTestFailures }}
 
@@ -485,8 +471,7 @@ jobs:
       testProjectPath: ${{ matrix.testProjectPath }}
       mtpBaseArgs: ${{ matrix.mtpBaseArgs }}
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
-      versionSuffix: ${{ inputs.versionSuffix }}
-      dotNetFinalVersionKind: ${{ inputs.dotNetFinalVersionKind }}
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
       ignoreTestFailures: ${{ matrix.properties.nonBlockingTestFailures }}
 
@@ -498,6 +483,8 @@ jobs:
     if: ${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && (needs.setup_for_tests.outputs.run_polyglot == 'true') }}
     uses: ./.github/workflows/polyglot-validation.yml
     needs: [setup_for_tests, build_packages, build_cli_archive_linux]
+    with:
+      versionOverrideArg: ${{ inputs.versionOverrideArg }}
 
   cli_starter_validation_linux_x64:
     name: Aspire CLI Starter Validation (Ubuntu x64)
