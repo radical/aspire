@@ -704,9 +704,10 @@ public sealed class RadiusDeployTests(ITestOutputHelper output)
             await auto.EnterAsync();
             await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(6));
 
-            // MongoDB follows the legacy recipe path. Its Deployment and pods are labeled
-            // `resource=<name>`, unlike the Radius v2 recipes that use `radapp.io/resource`.
-            await auto.TypeAsync($"kubectl wait --for=condition=Available deployment -n {radiusNamespace} -l resource=docs --timeout=300s");
+            // The legacy MongoDB recipe labels only its pods with `resource=<name>`, not the
+            // Deployment metadata, so a Deployment label selector never matches this workload.
+            // https://github.com/radius-project/recipes/blob/main/local-dev/mongodatabases.bicep
+            await auto.TypeAsync($"kubectl wait --for=condition=Ready pod -n {radiusNamespace} -l resource=docs --timeout=300s");
             await auto.EnterAsync();
             await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(6));
 
