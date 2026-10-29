@@ -23,7 +23,125 @@ namespace Aspire.Cli.Resources {
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     internal class NewCommandStrings {
-        
+
+        internal static string ConfiguredTemplateConflictingOptions {
+            get {
+                return ResourceManager.GetString("ConfiguredTemplateConflictingOptions", resourceCulture);
+            }
+        }
+
+        internal static string SearchForMoreTemplates {
+            get {
+                return ResourceManager.GetString("SearchForMoreTemplates", resourceCulture);
+            }
+        }
+
+        internal static string TemplateSearchPrompt {
+            get {
+                return ResourceManager.GetString("TemplateSearchPrompt", resourceCulture);
+            }
+        }
+
+        internal static string SearchingTemplateSource {
+            get {
+                return ResourceManager.GetString("SearchingTemplateSource", resourceCulture);
+            }
+        }
+
+        internal static string SearchTemplatesAgain {
+            get {
+                return ResourceManager.GetString("SearchTemplatesAgain", resourceCulture);
+            }
+        }
+
+        internal static string BackToDefaultTemplates {
+            get {
+                return ResourceManager.GetString("BackToDefaultTemplates", resourceCulture);
+            }
+        }
+
+        internal static string NoMatchingConfiguredTemplates {
+            get {
+                return ResourceManager.GetString("NoMatchingConfiguredTemplates", resourceCulture);
+            }
+        }
+
+        internal static string NoConfiguredTemplateSources {
+            get {
+                return ResourceManager.GetString("NoConfiguredTemplateSources", resourceCulture);
+            }
+        }
+
+        internal static string TemplateSourceSearchFailed {
+            get {
+                return ResourceManager.GetString("TemplateSourceSearchFailed", resourceCulture);
+            }
+        }
+
+        internal static string TemplateSourcesMustBeObject {
+            get {
+                return ResourceManager.GetString("TemplateSourcesMustBeObject", resourceCulture);
+            }
+        }
+
+        internal static string InvalidConfiguredTemplateSource {
+            get {
+                return ResourceManager.GetString("InvalidConfiguredTemplateSource", resourceCulture);
+            }
+        }
+
+        internal static string TemplateSourceSettingInvalid => ResourceManager.GetString("TemplateSourceSettingInvalid", resourceCulture);
+
+        internal static string TemplateSourceUnknownField => ResourceManager.GetString("TemplateSourceUnknownField", resourceCulture);
+
+        internal static string TemplateSourceStringRequired => ResourceManager.GetString("TemplateSourceStringRequired", resourceCulture);
+
+        internal static string TemplateSourceInvalidRepository => ResourceManager.GetString("TemplateSourceInvalidRepository", resourceCulture);
+
+        internal static string TemplateSourceMissingLocation => ResourceManager.GetString("TemplateSourceMissingLocation", resourceCulture);
+
+        internal static string TemplateSourceNameRequired => ResourceManager.GetString("TemplateSourceNameRequired", resourceCulture);
+
+        internal static string TemplateSourceCannotExtendString => ResourceManager.GetString("TemplateSourceCannotExtendString", resourceCulture);
+
+        internal static string TemplateCommandDescription => ResourceManager.GetString("TemplateCommandDescription", resourceCulture);
+
+        internal static string TemplateSourceCommandDescription => ResourceManager.GetString("TemplateSourceCommandDescription", resourceCulture);
+
+        internal static string TemplateSourceAddDescription => ResourceManager.GetString("TemplateSourceAddDescription", resourceCulture);
+
+        internal static string TemplateSourceRemoveDescription => ResourceManager.GetString("TemplateSourceRemoveDescription", resourceCulture);
+
+        internal static string TemplateSourceNameDescription => ResourceManager.GetString("TemplateSourceNameDescription", resourceCulture);
+
+        internal static string TemplateSourcePathDescription => ResourceManager.GetString("TemplateSourcePathDescription", resourceCulture);
+
+        internal static string TemplateSourceRepositoryDescription => ResourceManager.GetString("TemplateSourceRepositoryDescription", resourceCulture);
+
+        internal static string TemplateSourceRefDescription => ResourceManager.GetString("TemplateSourceRefDescription", resourceCulture);
+
+        internal static string TemplateSourceAdded => ResourceManager.GetString("TemplateSourceAdded", resourceCulture);
+
+        internal static string TemplateSourceRemoved => ResourceManager.GetString("TemplateSourceRemoved", resourceCulture);
+
+        internal static string TemplateSourceAlreadyExists => ResourceManager.GetString("TemplateSourceAlreadyExists", resourceCulture);
+
+        internal static string TemplateSourceNotFound => ResourceManager.GetString("TemplateSourceNotFound", resourceCulture);
+
+        internal static string TemplateSourceWriteFailed => ResourceManager.GetString("TemplateSourceWriteFailed", resourceCulture);
+
+        internal static string TemplateSourceListDescription => ResourceManager.GetString("TemplateSourceListDescription", resourceCulture);
+
+        internal static string TemplateSourceListEmpty => ResourceManager.GetString("TemplateSourceListEmpty", resourceCulture);
+
+        internal static string TemplateSourceNameHeader => ResourceManager.GetString("TemplateSourceNameHeader", resourceCulture);
+
+        internal static string TemplateSourceConfigurationHeader => ResourceManager.GetString("TemplateSourceConfigurationHeader", resourceCulture);
+
+        internal static string TemplateSourceReadFailed => ResourceManager.GetString("TemplateSourceReadFailed", resourceCulture);
+
+        internal static string TemplateSourceLegacyConfiguration => ResourceManager.GetString("TemplateSourceLegacyConfiguration", resourceCulture);
+
         private static global::System.Resources.ResourceManager resourceMan;
         
         private static global::System.Globalization.CultureInfo resourceCulture;
