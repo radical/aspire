@@ -1,0 +1,123 @@
+name: PR 21304 standalone bundle validation
+
+on:
+  push:
+    branches:
+      - ankj/pr21304-standalone-validation-20261029
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 5ec60390392d2bca6b2103895d97add92fd880a7
+  ASPIRE_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  build:
+    if: github.repository == 'radical/aspire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Confirm exact source and runner
+        run: |
+          test "$(git --no-pager rev-parse HEAD)" = "$SOURCE_SHA"
+          uname -a
+          df -h .
+          command -v clang
+          clang --version
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: ./restore.sh
+
+      - name: Build solution and packages
+        run: ./build.sh --build --pack -c Release
+        env:
+          SkipNativeBuild: 'true'
+
+      - name: Build native CLI with embedded bundle
+        run: |
+          ./dotnet.sh msbuild eng/Bundle.proj /restore \
+            /p:Configuration=Release \
+            /p:TargetRid=linux-x64
+
+      - name: Prepare and verify standalone products
+        env:
+          VALIDATION_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p cli-artifacts/bin cli-artifacts/packages cli-artifacts/evidence
+          source_binary=$(find artifacts/bin/Aspire.Cli -type f -name aspire -path '*linux-x64*publish*' | head -1)
+          test -n "$source_binary"
+          test -s "$source_binary"
+          cp "$source_binary" cli-artifacts/bin/aspire
+          chmod +x cli-artifacts/bin/aspire
+          find artifacts/packages/Release/Shipping -name '*.nupkg' -exec cp {} cli-artifacts/packages/ \;
+          ./dotnet.sh msbuild eng/Bundle.proj /p:Configuration=Release /p:TargetRid=linux-x64 \
+            /getProperty:BundleVersion,BuildDistributionPackages,Sign \
+            > cli-artifacts/evidence/bundle-properties.json
+          cli-artifacts/bin/aspire --version | tee cli-artifacts/evidence/cli-version.txt
+          ASPIRE_HOME="$RUNNER_TEMP/standalone-home" cli-artifacts/bin/aspire setup \
+            --install-path "$PWD/cli-artifacts" | tee cli-artifacts/evidence/setup.log
+          ASPIRE_HOME="$RUNNER_TEMP/standalone-home" cli-artifacts/bin/aspire setup \
+            --install-path "$PWD/cli-artifacts" | tee cli-artifacts/evidence/setup-repeat.log
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/radical/aspire/$VALIDATION_COMMIT/.github/validation/verify-bundle-payload.ps1" \
+            --output "$RUNNER_TEMP/verify-bundle-payload.ps1"
+          pwsh -NoLogo -NoProfile -File "$RUNNER_TEMP/verify-bundle-payload.ps1" \
+            -LayoutDirectory "$PWD/cli-artifacts/bundle" -Rid linux-x64 \
+            | tee cli-artifacts/evidence/payload-verification.log
+          python3 - <<'PY' | tee cli-artifacts/evidence/package-verification.json
+          import json, pathlib, struct, xml.etree.ElementTree as ET, zipfile
+          root = pathlib.Path('cli-artifacts')
+          properties = json.loads((root / 'evidence/bundle-properties.json').read_text())['Properties']
+          assert properties['BuildDistributionPackages'] == 'false', properties
+          assert properties['Sign'] == 'false', properties
+          expected = properties['BundleVersion']
+          version = (root / 'evidence/cli-version.txt').read_text().strip()
+          assert version.startswith(expected), (version, expected)
+          header = (root / 'bin/aspire').read_bytes()[:20]
+          assert header[:6] == b'\x7fELF\x02\x01' and struct.unpack_from('<H', header, 18)[0] == 62
+          packages = sorted((root / 'packages').glob('*.nupkg'))
+          assert packages, 'No Shipping packages produced'
+          records = []
+          for path in packages:
+              with zipfile.ZipFile(path) as archive:
+                  assert archive.testzip() is None, path.name
+                  specs = [name for name in archive.namelist() if name.endswith('.nuspec')]
+                  assert len(specs) == 1, (path.name, specs)
+                  metadata = ET.fromstring(archive.read(specs[0]))
+                  package_id = next(item.text for item in metadata.iter() if item.tag.split('}')[-1] == 'id')
+                  package_version = next(item.text for item in metadata.iter() if item.tag.split('}')[-1] == 'version')
+                  assert package_version == expected, (package_id, package_version, expected)
+                  records.append({'file': path.name, 'id': package_id, 'version': package_version})
+          print(json.dumps({'cli_version': version, 'package_count': len(records), 'packages': records}, indent=2))
+          PY
+          pwsh -NoLogo -NoProfile -File eng/scripts/test-native-dashboard.ps1 \
+            -DashboardPath "$PWD/cli-artifacts/bundle/dashboard/Aspire.Dashboard" \
+            | tee cli-artifacts/evidence/dashboard-smoke.log
+          pwsh -NoLogo -NoProfile -File eng/scripts/test-native-terminalhost.ps1 \
+            -TerminalHostPath "$PWD/cli-artifacts/bundle/terminalhost/Aspire.TerminalHost" \
+            | tee cli-artifacts/evidence/terminalhost-smoke.log
+
+      - name: Upload standalone products and build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: standalone-linux-bundle
+          path: |
+            cli-artifacts/bin/
+            cli-artifacts/packages/
+            cli-artifacts/evidence/
+            artifacts/log/
+          retention-days: 3
