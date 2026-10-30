@@ -22,6 +22,7 @@ concurrency:
 engine:
   id: copilot
   version: "1.0.85"
+  copilot-sdk: true
   model: gpt-6.1-sol
   args: ["--reasoning-effort", "high"]
 timeout-minutes: 15
