@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "pr": 21428,
+  "state_revision": "pr21428-validation-20261030-phase1",
+  "mode": "validation-only",
+  "before": {
+    "repository": "microsoft/aspire",
+    "branch": "ankj/pr21428-before-20261030",
+    "sha": "66ba807c333643b9f79bcbefea9288e8cddfc0d2",
+    "source_parent": "63c361dd3b0b32d55ab7c2276a660a8fd02dd127",
+    "runners": 3,
+    "iterations": 10
+  },
+  "after": {
+    "repository": "microsoft/aspire",
+    "branch": "ankj/pr21428-after-20261030",
+    "sha": "b5585072cbbb9910b11f253e0dd9b6ae679bf793",
+    "source_parent": "e55b08e1e19541d6a1777967e9f8ce6df2665925",
+    "runners": 5,
+    "iterations": 20
+  },
+  "runs": [{"id": 41126953381, "case": "before", "operator_reference": true}],
+  "limits": {"new_dispatches": 6, "suite_iterations": 500, "model_phases": 8},
+  "historical_diagnostic_runs": [41005742142, 41008788824],
+  "historical_limitation": "Instrumented source differs from the exact PR and is not fresh exact-source validation."
+}
