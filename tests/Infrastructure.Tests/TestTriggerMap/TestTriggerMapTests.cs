@@ -453,6 +453,26 @@ public sealed class TestTriggerMapTests
     }
 
     [Theory]
+    [InlineData("testCert.pfx", true)]
+    [InlineData("eku.client.pfx", false)]
+    public void SharedCertificateSelectionPreservesRuntimeHostingDependency(string certificate, bool usedByHosting)
+    {
+        var result = SelectWithRealMap($"tests/Shared/TestCertificates/{certificate}");
+
+        Assert.False(result.SelectsAll);
+        Assert.Empty(result.UnmatchedFiles);
+        Assert.Empty(result.Jobs);
+
+        List<string> expectedConsumers = ["Aspire.Dashboard.Tests", "Aspire.Dashboard.Playwright.Tests"];
+        if (usedByHosting)
+        {
+            expectedConsumers.Add("Aspire.Hosting.Tests");
+        }
+
+        Assert.Equal(expectedConsumers.Order(StringComparer.Ordinal), result.TestProjects.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
     [InlineData("src/Aspire.Hosting.CodeGeneration.TypeScript/Resources/integration-host.mts")]
     [InlineData("src/Aspire.Hosting.CodeGeneration.TypeScript/Resources/transport.mts")]
     [InlineData("src/Aspire.Hosting.CodeGeneration.TypeScript/Resources/base.mts")]
