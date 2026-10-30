@@ -189,6 +189,9 @@ public partial class AspireProject : IAsyncDisposable
             WorkingDirectory = AppHostProjectDirectory
         };
 
+        // Coordinated project builds must use the isolated test SDK, just like restore and build commands.
+        ToolCommand.RemoveInheritedMSBuildPaths(AppHostProcess.StartInfo.Environment);
+
         foreach (var item in _buildEnv.EnvVars)
         {
             AppHostProcess.StartInfo.Environment[item.Key] = item.Value;
