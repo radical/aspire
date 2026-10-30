@@ -1,7 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics;
+extern alias testtools;
+
 using Xunit;
 
 namespace Infrastructure.Tests;
@@ -15,28 +16,13 @@ internal static class ProcessRunner
         string workingDirectory,
         IReadOnlyDictionary<string, string>? environment = null)
     {
-        using var process = new Process();
-        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
-        {
-            process.StartInfo.Environment[name] = value;
-        }
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.WorkingDirectory = workingDirectory;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.UseShellExecute = false;
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
         output.WriteLine($"Executing: {fileName} {string.Join(' ', arguments)} in {workingDirectory}");
-        process.Start();
-        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        var result = new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
+        var execution = await testtools::Aspire.TestTools.ProcessRunner.RunAsync(
+            fileName,
+            arguments,
+            workingDirectory,
+            environment);
+        var result = new ProcessResult(execution.ExitCode, execution.Output, execution.Error);
         if (result.Output.Length > 0)
         {
             output.WriteLine(result.Output);
