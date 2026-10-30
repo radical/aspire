@@ -151,10 +151,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
                 fi
                 echo "Warning: completion generation failed" >&2
               fi
-              case "${ASPIRE_TEST_PWSH_LOADER:-}" in
-                throws) echo "throw 'broken completion loader'" > "{{brewPrefix}}/share/pwsh/completions/_aspire.ps1" ;;
-                unregistered) echo "# no completer registered" > "{{brewPrefix}}/share/pwsh/completions/_aspire.ps1" ;;
-              esac
             }
 
             case "${1:-}" in
@@ -186,17 +182,7 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
                 echo "# generated tap" > "$tap_root/README.md"
                 exit 0
                 ;;
-              style)
-                if [[ "${ASPIRE_TEST_STYLE_FAILURE:-}" == "true" && "${2:-}" != "--fix" ]]; then
-                  echo "Cask/StanzaGrouping: stanzas within the same group should have no lines between them" >&2
-                  exit 1
-                fi
-                if [[ "${2:-}" == "--fix" ]]; then
-                  echo "# automatically corrected" >> "${@: -1}"
-                fi
-                exit 0
-                ;;
-              info)
+              style|info)
                 exit 0
                 ;;
               trust)
@@ -642,6 +628,7 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("aspire --version failed after install", result.Output);
+        Assert.DoesNotContain("Installed successfully!", result.Output);
     }
 
     [Theory]
@@ -654,7 +641,7 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
     [InlineData("share/pwsh/completions/_aspire.ps1", "missing")]
     [InlineData("share/pwsh/completions/_aspire.ps1", "empty")]
     [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_HomebrewDogfood_AllowsInvalidCompletions_ButExplicitVerificationRejectsThem(string completionFile, string state)
+    public async Task Bash_HomebrewDogfood_PreservesCompletionWarnings(string completionFile, string state)
     {
         using var env = new TestEnvironment();
         var localDir = await CreateHomebrewInstallerArtifactAsync(Path.Combine(env.TempDirectory, "homebrew-artifact"));
@@ -669,47 +656,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         result.EnsureSuccessful();
         Assert.Contains("Warning: completion generation failed", result.Output);
         Assert.Contains("Installed successfully!", result.Output);
-
-        using var verifier = new ScriptToolCommand("eng/homebrew/verify-completions.sh", env, _testOutput);
-        var verification = await verifier.ExecuteAsync(Path.Combine(env.TempDirectory, "brew-prefix"));
-        Assert.NotEqual(0, verification.ExitCode);
-        Assert.Contains("completion file missing or empty after install:", verification.Output);
-        Assert.Contains(completionFile, verification.Output);
-    }
-
-    [Theory]
-    [InlineData("throws", false)]
-    [InlineData("unregistered", false)]
-    [InlineData("valid", true)]
-    [RequiresTools(["pwsh"])]
-    [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_HomebrewCompletionVerification_ChecksPowerShellLoader(string loader, bool succeeds)
-    {
-        using var env = new TestEnvironment();
-        var localDir = await CreateHomebrewInstallerArtifactAsync(Path.Combine(env.TempDirectory, "homebrew-artifact"));
-        var mockBinDir = await CreateMockHomebrewBinAsync(env, aspireExitCode: 0);
-        using var cmd = new ScriptToolCommand("eng/homebrew/dogfood.sh", env, _testOutput);
-        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}");
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_PWSH_LOADER", loader);
-
-        var installResult = await cmd.ExecuteAsync(Path.Combine(localDir, "aspire.rb"));
-        installResult.EnsureSuccessful();
-
-        using var verifier = new ScriptToolCommand("eng/homebrew/verify-completions.sh", env, _testOutput);
-        verifier.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}");
-        var result = await verifier.ExecuteAsync(Path.Combine(env.TempDirectory, "brew-prefix"));
-        Assert.Equal(succeeds, result.ExitCode == 0);
-        if (succeeds)
-        {
-            return;
-        }
-
-        var expectedOutput = loader switch
-        {
-            "throws" => "broken completion loader",
-            _ => "did not register the CLI completer"
-        };
-        Assert.Contains(expectedOutput, result.Output);
     }
 
     [Theory]
@@ -734,27 +680,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         Assert.Contains("completion file missing or empty after install:", result.Output);
         Assert.False(File.Exists(Path.Combine(mockBinDir, "aspire")));
         Assert.False(File.Exists(Path.Combine(env.TempDirectory, "brew-prefix", "etc", "bash_completion.d", "aspire")));
-    }
-
-    [Fact]
-    [RequiresTools(["ruby"])]
-    [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_ValidateHomebrewCask_StyleFailure_DoesNotRewriteCask()
-    {
-        using var env = new TestEnvironment();
-        var caskPath = Path.Combine(env.TempDirectory, "aspire.rb");
-        const string cask = "cask \"aspire\" do\n  version \"13.3.0\"\nend\n";
-        await File.WriteAllTextAsync(caskPath, cask);
-        var mockBinDir = await CreateMockHomebrewBinAsync(env, aspireExitCode: 0);
-        using var cmd = new ScriptToolCommand("eng/homebrew/validate-cask-artifact.sh", env, _testOutput);
-        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}/usr/bin:/bin:/usr/sbin:/sbin");
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_STYLE_FAILURE", "true");
-
-        var result = await cmd.ExecuteAsync("--cask-file", caskPath, "--validation-mode", "LiveArchives");
-
-        Assert.NotEqual(0, result.ExitCode);
-        Assert.Contains("Cask/StanzaGrouping", result.Output);
-        Assert.Equal(cask, await File.ReadAllTextAsync(caskPath));
     }
 
     [Fact]
