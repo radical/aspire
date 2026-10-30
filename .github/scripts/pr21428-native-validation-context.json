@@ -1,0 +1,97 @@
+{
+  "state_revision": "pr21428-controlled-validation-20261030-final",
+  "sources": {
+    "before": "63c361dd3b0b32d55ab7c2276a660a8fd02dd127",
+    "after": "e55b08e1e19541d6a1777967e9f8ce6df2665925"
+  },
+  "publications": {
+    "before": {
+      "case": "before",
+      "branch": "ankj/pr21428-controlled-before-20261030",
+      "sha": "6b5909848398fa053d82720a0ab1ff7b7d22f327",
+      "source_parent": "63c361dd3b0b32d55ab7c2276a660a8fd02dd127",
+      "runners": 10,
+      "iterations": 1
+    },
+    "after": {
+      "case": "after",
+      "branch": "ankj/pr21428-controlled-after-20261030",
+      "sha": "0c675bcbb9a6d18b7839197ecc1a3757fc2434a0",
+      "source_parent": "e55b08e1e19541d6a1777967e9f8ce6df2665925",
+      "runners": 10,
+      "iterations": 1
+    }
+  },
+  "runs": [
+    {
+      "case": "before",
+      "run_id": 41137940756
+    },
+    {
+      "case": "after",
+      "run_id": 41138453047
+    },
+    {
+      "case": "after",
+      "run_id": 41138987547
+    },
+    {
+      "case": "after",
+      "run_id": 41139510485
+    }
+  ],
+  "expected_counts": {
+    "before": {
+      "executions": 10,
+      "passed": 5,
+      "original_timeouts": 4,
+      "different_target_failures": 1,
+      "other_test_failures": 0
+    },
+    "after": {
+      "executions": 30,
+      "passed": 30,
+      "original_timeouts": 0,
+      "different_target_failures": 0,
+      "other_test_failures": 0
+    }
+  },
+  "expected_images": {
+    "20261021.278.1": {
+      "before": {
+        "executions": 7,
+        "passed": 3,
+        "original_timeouts": 4,
+        "different_target_failures": 0,
+        "other_test_failures": 0
+      },
+      "after": {
+        "executions": 19,
+        "passed": 19,
+        "original_timeouts": 0,
+        "different_target_failures": 0,
+        "other_test_failures": 0
+      }
+    },
+    "20261030.294.1": {
+      "before": {
+        "executions": 3,
+        "passed": 2,
+        "original_timeouts": 0,
+        "different_target_failures": 1,
+        "other_test_failures": 0
+      },
+      "after": {
+        "executions": 11,
+        "passed": 11,
+        "original_timeouts": 0,
+        "different_target_failures": 0,
+        "other_test_failures": 0
+      }
+    }
+  },
+  "expected_outcome": "clean-sample",
+  "agent_directed_test_dispatches": false,
+  "remaining_test_dispatches": 0,
+  "remaining_model_phases_after_this": 0
+}
