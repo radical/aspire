@@ -26,6 +26,9 @@ engine:
   model: gpt-6.1-sol
   args: ["--reasoning-effort", "high"]
 timeout-minutes: 15
+# Bootstrap public automation tools independently of the repository package feed.
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
 permissions:
   contents: read
   actions: read
