@@ -1,14 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-extern alias testtools;
-
 using System.Net;
 using System.Text.Json.Nodes;
+using Aspire.TestTools;
 using Infrastructure.Tests.TestServices;
 using Xunit;
-using GitHubApiClient = testtools::Aspire.TestTools.GitHubApiClient;
-using GitHubApiException = testtools::Aspire.TestTools.GitHubApiException;
 
 namespace Infrastructure.Tests;
 

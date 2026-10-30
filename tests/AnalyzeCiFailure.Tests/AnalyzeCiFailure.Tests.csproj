@@ -19,10 +19,10 @@
     <PackageReference Include="xunit.v3.extensibility.core" />
     <PackageReference Include="xunit.v3.assert" />
     <PackageReference Include="Verify.XunitV3" />
-    <ProjectReference Include="../../tools/AnalyzeCiFailure/AnalyzeCiFailure.csproj" Aliases="global,analyzer" />
+    <!-- The analyzer includes its shared helpers; a separate helper assembly would expose duplicate types. -->
+    <ProjectReference Include="../../tools/AnalyzeCiFailure/AnalyzeCiFailure.csproj" />
     <ProjectReference Include="../AnalyzeCiFailure.TestHost/AnalyzeCiFailure.TestHost.csproj" />
     <ProjectReference Include="../Aspire.TestUtilities/Aspire.TestUtilities.csproj" />
-    <ProjectReference Include="../../tools/Aspire.TestTools/Aspire.TestTools.csproj" Aliases="global,testtools" />
   </ItemGroup>
 
   <ItemGroup>

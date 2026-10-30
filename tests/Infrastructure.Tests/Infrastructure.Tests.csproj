@@ -38,7 +38,7 @@
     <ProjectReference Include="..\..\tools\TypeScriptApiCompat\TypeScriptApiCompat.csproj" />
     <ProjectReference Include="..\..\tools\SelectTests\SelectTests.csproj" />
     <!-- Generic process and report-reader tests target the shared tooling assembly explicitly. -->
-    <ProjectReference Include="..\..\tools\Aspire.TestTools\Aspire.TestTools.csproj" Aliases="global,testtools" />
+    <ProjectReference Include="..\..\tools\Aspire.TestTools\Aspire.TestTools.csproj" />
     <ProjectReference Include="..\..\tools\CreateLayout\CreateLayout.csproj" />
     <ProjectReference Include="..\..\tools\GenerateTemplateManifest\GenerateTemplateManifest.csproj" />
   </ItemGroup>

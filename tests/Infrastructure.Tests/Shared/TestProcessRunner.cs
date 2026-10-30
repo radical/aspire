@@ -1,13 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-extern alias testtools;
-
+using Aspire.TestTools;
 using Xunit;
 
 namespace Infrastructure.Tests;
 
-internal static class ProcessRunner
+internal static class TestProcessRunner
 {
     public static async Task<ProcessResult> RunAsync(
         ITestOutputHelper output,
@@ -17,7 +16,7 @@ internal static class ProcessRunner
         IReadOnlyDictionary<string, string>? environment = null)
     {
         output.WriteLine($"Executing: {fileName} {string.Join(' ', arguments)} in {workingDirectory}");
-        var execution = await testtools::Aspire.TestTools.ProcessRunner.RunAsync(
+        var execution = await ProcessRunner.RunAsync(
             fileName,
             arguments,
             workingDirectory,

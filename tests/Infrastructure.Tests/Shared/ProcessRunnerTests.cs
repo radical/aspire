@@ -1,8 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-extern alias testtools;
-
+using Aspire.TestTools;
 using Aspire.TestUtilities;
 using Xunit;
 
@@ -18,7 +17,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
         using var workspace = TemporaryWorkspace.Create(output);
         File.WriteAllText(Path.Combine(workspace.Path, "marker.txt"), "working directory");
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await TestProcessRunner.RunAsync(
             output,
             "bash",
             ["-c", """printf '%s\n' "$1" "$(cat marker.txt)"; printf 'error' >&2; exit 7""", "test", "argument with spaces"],
@@ -36,7 +35,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
     {
         using var workspace = TemporaryWorkspace.Create(output);
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await TestProcessRunner.RunAsync(
             output,
             "bash",
             // HOME is never synthesized by bash itself, so it is only set when the
@@ -56,7 +55,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
     {
         using var workspace = TemporaryWorkspace.Create(output);
 
-        var result = await ProcessRunner.RunAsync(
+        var result = await TestProcessRunner.RunAsync(
             output,
             "bash",
             ["-c", """printf '%262144s' ''; printf '%262144s' '' >&2"""],
@@ -73,7 +72,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
     {
         using var workspace = TemporaryWorkspace.Create(output);
         var file = Path.Combine(workspace.Path, "artifact.zip");
-        var result = await testtools::Aspire.TestTools.ProcessRunner.RunAsync(
+        var result = await ProcessRunner.RunAsync(
             "bash",
             ["-c", """printf '\000\377\200PK'; printf 'diagnostic' >&2; exit 7"""],
             workspace.Path,
@@ -95,7 +94,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
         var directory = originalPath!.Split(Path.PathSeparator)
             .First(path => File.Exists(Path.Combine(path, executable)));
 
-        var result = await testtools::Aspire.TestTools.ProcessRunner.RunAsync(
+        var result = await ProcessRunner.RunAsync(
             executable,
             ["-c", "printf override"],
             workspace.Path,
@@ -116,7 +115,7 @@ public sealed class ProcessRunnerTests(ITestOutputHelper output)
         var directory = originalPath!.Split(Path.PathSeparator)
             .First(path => File.Exists(Path.Combine(path, executable)));
 
-        var result = await testtools::Aspire.TestTools.ProcessRunner.RunAsync(
+        var result = await ProcessRunner.RunAsync(
             "dotnet",
             ["--version"],
             workspace.Path,

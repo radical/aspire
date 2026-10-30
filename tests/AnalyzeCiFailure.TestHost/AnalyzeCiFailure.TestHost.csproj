@@ -8,7 +8,7 @@
     <IsTestUtilityProject>true</IsTestUtilityProject>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../tools/AnalyzeCiFailure/AnalyzeCiFailure.csproj" Aliases="global,analyzer" />
+    <ProjectReference Include="../../tools/AnalyzeCiFailure/AnalyzeCiFailure.csproj" />
     <Compile Include="../AnalyzeCiFailure.Tests/TestServices/GitHubFixtureHandler.cs" Link="GitHubFixtureHandler.cs" />
   </ItemGroup>
 </Project>

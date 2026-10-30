@@ -1,13 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-extern alias analyzer;
-
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using SharedProcessRunner = analyzer::Aspire.TestTools.ProcessRunner;
+using SharedProcessRunner = Aspire.TestTools.ProcessRunner;
 
 namespace AnalyzeCiFailure.TestServices;
 

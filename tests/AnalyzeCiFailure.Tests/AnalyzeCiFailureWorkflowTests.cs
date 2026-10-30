@@ -1,12 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-extern alias analyzer;
-
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
+using Aspire.TestTools;
 using Aspire.TestUtilities;
 using VerifyXunit;
 using Xunit;
@@ -5279,11 +5278,11 @@ public sealed partial class AnalyzeCiFailureWorkflowTests(ITestOutputHelper outp
         => new((await File.ReadAllLinesAsync(Path.Combine(_workspace.Path, "http-requests.jsonl")))
             .Select(text => System.Text.Json.Nodes.JsonNode.Parse(text)).ToArray());
 
-    private analyzer::Aspire.TestTools.GitHubApiClient CreateGitHubClient(IReadOnlyDictionary<string, string>? environment = null)
+    private GitHubApiClient CreateGitHubClient(IReadOnlyDictionary<string, string>? environment = null)
     {
         var http = new HttpClient(new AnalyzeCiFailure.TestServices.GitHubFixtureHandler(_workspace.Path, environment));
         _httpClients.Add(http);
-        return new analyzer::Aspire.TestTools.GitHubApiClient(
+        return new GitHubApiClient(
             http,
             _ => Task.FromResult("fixture-token"),
             new Uri("https://api.github.com/"));
