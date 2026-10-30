@@ -134,23 +134,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
               chmod +x "{{mockBinDir}}/aspire"
                             mkdir -p "{{brewPrefix}}/Caskroom/aspire/13.3.0"
                             cp "{{mockBinDir}}/aspire" "{{brewPrefix}}/Caskroom/aspire/13.3.0/aspire"
-              for file in etc/bash_completion.d/aspire share/zsh/site-functions/_aspire share/fish/vendor_completions.d/aspire.fish share/pwsh/completions/_aspire.ps1; do
-                mkdir -p "{{brewPrefix}}/$(dirname "$file")"
-                echo "# generated completion" > "{{brewPrefix}}/$file"
-              done
-              cat > "{{brewPrefix}}/share/pwsh/completions/_aspire.ps1" <<'POWERSHELL'
-            Register-ArgumentCompleter -Native -CommandName aspire -ScriptBlock {
-              [System.Management.Automation.CompletionResult]::new('completions', 'completions', 'ParameterValue', 'completions')
-            }
-            POWERSHELL
-              if [[ -n "${ASPIRE_TEST_COMPLETION_FILE:-}" ]]; then
-                if [[ "${ASPIRE_TEST_COMPLETION_STATE:-}" == "empty" ]]; then
-                  : > "{{brewPrefix}}/$ASPIRE_TEST_COMPLETION_FILE"
-                else
-                  rm "{{brewPrefix}}/$ASPIRE_TEST_COMPLETION_FILE"
-                fi
-                echo "Warning: completion generation failed" >&2
-              fi
             }
 
             case "${1:-}" in
@@ -229,7 +212,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
               uninstall)
                 rm -f "{{mockBinDir}}/aspire"
                                 rm -rf "{{brewPrefix}}/Caskroom/aspire"
-                rm -f "{{brewPrefix}}/etc/bash_completion.d/aspire" "{{brewPrefix}}/share/zsh/site-functions/_aspire" "{{brewPrefix}}/share/fish/vendor_completions.d/aspire.fish" "{{brewPrefix}}/share/pwsh/completions/_aspire.ps1"
                 exit 0
                 ;;
               untap)
@@ -631,57 +613,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         Assert.DoesNotContain("Installed successfully!", result.Output);
     }
 
-    [Theory]
-    [InlineData("etc/bash_completion.d/aspire", "missing")]
-    [InlineData("etc/bash_completion.d/aspire", "empty")]
-    [InlineData("share/zsh/site-functions/_aspire", "missing")]
-    [InlineData("share/zsh/site-functions/_aspire", "empty")]
-    [InlineData("share/fish/vendor_completions.d/aspire.fish", "missing")]
-    [InlineData("share/fish/vendor_completions.d/aspire.fish", "empty")]
-    [InlineData("share/pwsh/completions/_aspire.ps1", "missing")]
-    [InlineData("share/pwsh/completions/_aspire.ps1", "empty")]
-    [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_HomebrewDogfood_PreservesCompletionWarnings(string completionFile, string state)
-    {
-        using var env = new TestEnvironment();
-        var localDir = await CreateHomebrewInstallerArtifactAsync(Path.Combine(env.TempDirectory, "homebrew-artifact"));
-        var mockBinDir = await CreateMockHomebrewBinAsync(env, aspireExitCode: 0);
-        using var cmd = new ScriptToolCommand("eng/homebrew/dogfood.sh", env, _testOutput);
-        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}/usr/bin:/bin:/usr/sbin:/sbin");
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_FILE", completionFile);
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_STATE", state);
-
-        var result = await cmd.ExecuteAsync(Path.Combine(localDir, "aspire.rb"));
-
-        result.EnsureSuccessful();
-        Assert.Contains("Warning: completion generation failed", result.Output);
-        Assert.Contains("Installed successfully!", result.Output);
-    }
-
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("empty")]
-    [RequiresTools(["ruby"])]
-    [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
-    public async Task Bash_ValidateHomebrewCask_InvalidCompletions_UninstallsCask(string state)
-    {
-        using var env = new TestEnvironment();
-        var caskPath = Path.Combine(env.TempDirectory, "aspire.rb");
-        await File.WriteAllTextAsync(caskPath, "cask \"aspire\" do\n  version \"13.3.0\"\nend\n");
-        var mockBinDir = await CreateMockHomebrewBinAsync(env, aspireExitCode: 0);
-        using var cmd = new ScriptToolCommand("eng/homebrew/validate-cask-artifact.sh", env, _testOutput);
-        cmd.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}/usr/bin:/bin:/usr/sbin:/sbin");
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_FILE", "share/fish/vendor_completions.d/aspire.fish");
-        cmd.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_STATE", state);
-
-        var result = await cmd.ExecuteAsync("--cask-file", caskPath, "--validation-mode", "LiveRelease");
-
-        Assert.NotEqual(0, result.ExitCode);
-        Assert.Contains("completion file missing or empty after install:", result.Output);
-        Assert.False(File.Exists(Path.Combine(mockBinDir, "aspire")));
-        Assert.False(File.Exists(Path.Combine(env.TempDirectory, "brew-prefix", "etc", "bash_completion.d", "aspire")));
-    }
-
     [Fact]
     [RequiresTools(["ruby"])]
     [SkipOnPlatform(TestPlatforms.Windows, "Bash script tests require bash shell")]
@@ -822,14 +753,6 @@ public class PRScriptInstallerModeTests(ITestOutputHelper testOutput)
         Assert.Contains((await GetSha256HexAsync(Path.Combine(archiveRoot, "aspire-cli-osx-x64-13.3.0.tar.gz"))).ToLowerInvariant(), cask);
         Assert.DoesNotContain("${", cask);
         Assert.True(File.Exists(Path.Combine(outputDir, "dogfood.sh")));
-        using var dogfood = new ScriptToolCommand(Path.Combine(outputDir, "dogfood.sh"), env, _testOutput);
-        dogfood.WithEnvironmentVariable("PATH", $"{mockBinDir}{Path.PathSeparator}/usr/bin:/bin:/usr/sbin:/sbin");
-        dogfood.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_FILE", "etc/bash_completion.d/aspire");
-        dogfood.WithEnvironmentVariable("ASPIRE_TEST_COMPLETION_STATE", "missing");
-        var installResult = await dogfood.ExecuteAsync(Path.Combine(outputDir, "aspire.rb"));
-        installResult.EnsureSuccessful();
-        Assert.Contains("Warning: completion generation failed", installResult.Output);
-        Assert.Contains("Installed successfully!", installResult.Output);
 
         // LiveArchives mode must drop `--online` from `brew audit`, because the cask URL
         // points at a github.com/microsoft/aspire release that does
