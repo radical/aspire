@@ -16,9 +16,6 @@ The cask uses Homebrew's native
 [`generate_completions_from_executable`](https://docs.brew.sh/Cask-Cookbook#stanza-generate_completions_from_executable)
 artifact for Bash, Zsh, and Fish. Use a current Homebrew version with
 this cask DSL. Generation is offline and does not depend on the postflight sidecar.
-Declarative preflight steps create their standard completion directories first:
-the generator's sandbox can write the final directory but cannot create missing
-ancestors such as `share/fish` on a fresh prefix.
 
 PowerShell uses a `generated_script` plus a managed `artifact` instead. The loader
 at `share/pwsh/completions/_aspire.ps1` asks the active CLI for its completion script
@@ -32,10 +29,17 @@ It does not edit user profiles; PowerShell in particular needs explicit dot-sour
 See the [CLI shell completion guide](../../src/Aspire.Cli/README.md#shell-completion)
 for activation, conventional locations, and removal. There is no completion-specific
 Homebrew opt-out; `--no-binaries` does not disable generated completion artifacts.
-Both dogfood installation and LiveRelease validation reject missing or empty
-completion files after install, even when Homebrew only warns and returns success.
-They also exercise the PowerShell loader when `pwsh` is available. LiveRelease
-validation additionally checks that all four files are removed on uninstall.
+Homebrew treats completion-generation failures as warnings; the CLI can still
+install and run successfully. Local dogfood installs preserve that behavior:
+missing completions do not turn a working CLI installation into a failure.
+There is no extra directory precreation in the cask or dogfood script.
+
+Installer CI runs `verify-completions.sh` explicitly after dogfood installation.
+CI and LiveRelease validation reject missing or empty completion files, even when
+Homebrew returns success, and exercise the PowerShell loader when `pwsh` is
+available. LiveRelease validation additionally checks that all four files are
+removed on uninstall. These are artifact quality checks, not prerequisites for
+using the CLI or installing a particular shell.
 
 Changing this template does not update an already-submitted upstream cask:
 the initial/upstream cask change must include the generation stanza, not just a version bump.
@@ -49,7 +53,7 @@ the initial/upstream cask change must include the generation stanza, not just a 
 | `prepare-cask-artifact.sh` | Prepares CI artifacts by generating, validating, and adding dogfood helpers |
 | `validate-cask-artifact.sh` | Runs shared cask syntax, style, audit, and install validation used by GitHub Actions and Azure DevOps |
 | `dogfood.sh` | Installs a generated cask locally, optionally using downloaded native archive artifacts |
-| `verify-completions.sh` | Checks installed completion files and PowerShell registration; included beside the dogfood script in installer artifacts |
+| `verify-completions.sh` | Checks installed completion files and PowerShell registration in installer CI and release validation |
 
 ### Pipeline templates
 

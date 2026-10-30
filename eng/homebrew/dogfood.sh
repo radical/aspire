@@ -298,9 +298,9 @@ fi
 # the equivalent check via Find-AspireBinaryOnPath -ExpectedVersion.
 # Skipped under ASPIRE_TEST_MODE because the test mock brew puts its fake
 # aspire alongside the mock brew binary, not under $(brew --prefix)/bin/.
-brewPrefix="$(brew --prefix)"
 if [[ "${ASPIRE_TEST_MODE:-}" != "true" ]]; then
   aspirePath="$(command -v aspire)"
+  brewPrefix="$(brew --prefix)"
   if [[ "$aspirePath" != "$brewPrefix"/* ]]; then
     echo "Error: 'aspire' resolved to '$aspirePath', not under the Homebrew prefix '$brewPrefix'." >&2
     echo "An older aspire earlier on PATH is shadowing the Homebrew cask install." >&2
@@ -314,8 +314,6 @@ if ! aspireVersion="$(aspire --version 2>&1)"; then
   echo "$aspireVersion" >&2
   exit 1
 fi
-bash "$SCRIPT_DIR/verify-completions.sh" "$brewPrefix"
-
 echo "Installed successfully!"
 echo "  Path:    $(command -v aspire)"
 echo "  Version: $aspireVersion"

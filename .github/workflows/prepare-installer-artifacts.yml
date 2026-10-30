@@ -89,6 +89,15 @@ jobs:
             --archive-root "${GITHUB_WORKSPACE}/native-archives" \
             "${GITHUB_WORKSPACE}/artifacts/installers/homebrew-cask/aspire.rb"
 
+      - name: Verify installed Homebrew completions
+        if: ${{ inputs.installer == 'homebrew' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Completion failures are optional for local installs, but must not
+          # silently pass installer CI when Homebrew returns success.
+          bash eng/homebrew/verify-completions.sh "$(brew --prefix)"
+
       - name: Smoke test installed CLI (aspire new + restore)
         if: ${{ inputs.installer == 'winget' }}
         shell: pwsh

@@ -46,15 +46,6 @@ cask "aspire" do
                                        shells: [:bash, :zsh, :fish]
   artifact "aspire-completion.ps1", target: "#{HOMEBREW_PREFIX}/share/pwsh/completions/_aspire.ps1"
 
-  # Completion generation can write its final directory, but cannot create
-  # missing ancestors such as share/fish inside its restricted sandbox.
-  # https://github.com/Homebrew/brew/blob/main/Library/Homebrew/cask/artifact/generated_completion.rb
-  preflight_steps do
-    mkdir_p "etc/bash_completion.d", base: :homebrew_prefix
-    mkdir_p "share/zsh/site-functions", base: :homebrew_prefix
-    mkdir_p "share/fish/vendor_completions.d", base: :homebrew_prefix
-  end
-
   # The sidecar tells the CLI which install channel placed this binary, so
   # behaviors like self-update can route through `brew` instead of overwriting
   # the cask payload. See docs/specs/install-routes.md.

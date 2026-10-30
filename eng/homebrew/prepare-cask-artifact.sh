@@ -143,7 +143,6 @@ validation_args=(
 "$SCRIPT_DIR/validate-cask-artifact.sh" "${validation_args[@]}"
 
 cp "$SCRIPT_DIR/dogfood.sh" "$OUTPUT_DIR/dogfood.sh"
-cp "$SCRIPT_DIR/verify-completions.sh" "$OUTPUT_DIR/verify-completions.sh"
 chmod +x "$OUTPUT_DIR/dogfood.sh"
 
 echo "Homebrew cask artifact prepared at: $OUTPUT_DIR"
