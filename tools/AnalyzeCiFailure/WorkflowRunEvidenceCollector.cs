@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -222,6 +223,8 @@ internal sealed partial class WorkflowRunEvidenceCollector
         ImmutableArray<CollectedTestFailure> failures = [];
         if (_selectedArtifacts.Count > 0)
         {
+            const int maximumMochaDiagnosticCharacters = 65536;
+            var mochaDiagnostics = new Dictionary<string, (StringBuilder Text, int Characters, int Omitted)>(StringComparer.Ordinal);
             try
             {
                 var raw = TestFailureReader.ReadAvailable(
@@ -235,19 +238,32 @@ internal sealed partial class WorkflowRunEvidenceCollector
                     },
                     (artifact, diagnostic) =>
                     {
-                        var job = jobs.Single(job => job.Name == artifact.JobName);
-                        var name = $"diagnostics/job-{job.Id.ToString(CultureInfo.InvariantCulture)}-mocha.log";
-                        var previous = _attachments.TryGetValue(name, out var attachment) ? attachment.Text : "";
-                        var entry = "Mocha hook/harness diagnostic: not a completed test failure.\n" +
-                            DiagnosticTextSanitizer.Sanitize(diagnostic, limit: 2000, multiline: true) + "\n";
-                        var combined = previous + entry;
-                        var bounded = DiagnosticTextSanitizer.Sanitize(combined, limit: 65536, multiline: true);
-                        if (bounded.Length < combined.Length)
+                        if (!mochaDiagnostics.TryGetValue(artifact.JobName, out var log))
                         {
-                            bounded += "\n[Further Mocha hook/harness diagnostic text truncated.]\n";
+                            log = (new StringBuilder(), 0, 0);
                         }
-                        _attachments[name] = CollectedAttachment.FromText(bounded);
-                        _progress.Diagnostics.Record("mocha-non-test-failure", "retained", new { job = job.Id, artifact = GetValueText(artifact.Artifact.Id) });
+                        // Keep complete, independently redacted entries. After filling the buffer,
+                        // count omissions without rescanning old text or sanitizing discarded entries.
+                        if (log.Omitted > 0 || log.Characters == maximumMochaDiagnosticCharacters)
+                        {
+                            log.Omitted++;
+                        }
+                        else
+                        {
+                            var entry = "Mocha hook/harness diagnostic: not a completed test failure.\n" +
+                                DiagnosticTextSanitizer.Sanitize(diagnostic, limit: 2000, multiline: true) + "\n";
+                            var characters = entry.EnumerateRunes().Count();
+                            if (log.Characters + characters > maximumMochaDiagnosticCharacters)
+                            {
+                                log.Omitted++;
+                            }
+                            else
+                            {
+                                log.Text.Append(entry);
+                                log.Characters += characters;
+                            }
+                        }
+                        mochaDiagnostics[artifact.JobName] = log;
                     });
                 var conflicts = raw.Where(test => !string.IsNullOrEmpty(test.Source.ExecutionId))
                     .GroupBy(test => (test.JobId, test.Source.ExecutionId))
@@ -273,6 +289,22 @@ internal sealed partial class WorkflowRunEvidenceCollector
             {
                 ReportArtifactProblem(AnalysisProblemCategory.TestEvidence, "parsing", ex.Message);
                 _testState = EvidenceState.Unavailable;
+            }
+            finally
+            {
+                foreach (var (jobName, log) in mochaDiagnostics)
+                {
+                    var job = jobs.Single(job => job.Name == jobName);
+                    if (log.Omitted > 0)
+                    {
+                        log.Text.Append(CultureInfo.InvariantCulture,
+                            $"\n[Omitted {log.Omitted} further Mocha hook/harness diagnostic entries after reaching the text limit.]\n");
+                    }
+                    var name = $"diagnostics/job-{job.Id.ToString(CultureInfo.InvariantCulture)}-mocha.log";
+                    _attachments[name] = CollectedAttachment.FromText(log.Text.ToString());
+                    _progress.Diagnostics.Record("mocha-non-test-failure", log.Omitted > 0 ? "truncated" : "retained",
+                        new { job = job.Id, omitted_entries = log.Omitted });
+                }
             }
         }
 

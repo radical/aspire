@@ -17,6 +17,10 @@ namespace AnalyzeCiFailure;
 /// </summary>
 internal static partial class DiagnosticTextSanitizer
 {
+    // Prefixes such as "a-" repeated can be arbitrarily long. Keep matching linear
+    // without imposing a key-length limit that could leave long secret settings exposed.
+    // https://learn.microsoft.com/dotnet/standard/base-types/regular-expression-options#nonbacktracking-mode
+    private const RegexOptions SecretSettingRegexOptions = RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
     private const string SecretSettingKeyPattern = @"(?i:(?:[A-Za-z][A-Za-z0-9_.-]*[_-])?(?:password|passwd|pwd|token|api[_-]?key|access[_-]?key|account[_-]?key|primary[_-]?key|secondary[_-]?key|secret|client[_-]?secret|connection[_-]?strings?(?:(?:__|[.:])[A-Za-z0-9_.-]+)?|sharedaccesskey|sharedaccesssignature|signature|private[_-]?key)|pgpassword|_?authToken|_?auth|accessToken|refreshToken)";
     private const string NonConnectionSecretSettingKeyPattern = @"(?i:(?:[A-Za-z][A-Za-z0-9_.-]*[_-])?(?:password|passwd|pwd|token|api[_-]?key|access[_-]?key|account[_-]?key|primary[_-]?key|secondary[_-]?key|secret|client[_-]?secret|sharedaccesskey|sharedaccesssignature|signature|private[_-]?key)|pgpassword|_?authToken|_?auth|accessToken|refreshToken)";
     private const string AnyConnectionStringKeyPattern = @"(?i:(?:[A-Za-z][A-Za-z0-9_.-]*[_-])?connection[_-]?strings?(?:(?:__|[.:])[A-Za-z0-9_.-]+)?)";
@@ -176,10 +180,10 @@ internal static partial class DiagnosticTextSanitizer
     [GeneratedRegex(@"(?<prefix>[?&](?i:sig|signature|token|access_token|api[_-]?key|password|secret|client_secret)=)[^&\s]+", RegexOptions.CultureInvariant)]
     private static partial Regex SecretQueryParameterRegex();
 
-    [GeneratedRegex("(?<prefix>\"" + SecretSettingKeyPattern + "\"\\s*:\\s*\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>\"" + SecretSettingKeyPattern + "\"\\s*:\\s*\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", SecretSettingRegexOptions)]
     private static partial Regex DoubleQuotedJsonSettingRegex();
 
-    [GeneratedRegex("(?<prefix>'" + SecretSettingKeyPattern + "'\\s*:\\s*')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>'" + SecretSettingKeyPattern + "'\\s*:\\s*')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", SecretSettingRegexOptions)]
     private static partial Regex SingleQuotedJsonSettingRegex();
 
     [GeneratedRegex("(?<prefix>" + @"(^|\s)--" + SensitiveCommandLineOptionPattern + @"\s+" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
@@ -191,42 +195,42 @@ internal static partial class DiagnosticTextSanitizer
     [GeneratedRegex(@"(?<prefix>(^|[^\S\r\n])--" + SensitiveCommandLineOptionPattern + @"[^\S\r\n]+)(?![""'])[^\s]+", RegexOptions.CultureInvariant)]
     private static partial Regex UnquotedCommandLineOptionRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + ConnectionStringRootKeyPattern + @"\s*=\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + ConnectionStringRootKeyPattern + @"\s*=\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", SecretSettingRegexOptions)]
     private static partial Regex DoubleQuotedRootConnectionStringRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + ConnectionStringRootKeyPattern + @"\s*=\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + ConnectionStringRootKeyPattern + @"\s*=\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", SecretSettingRegexOptions)]
     private static partial Regex SingleQuotedRootConnectionStringRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", SecretSettingRegexOptions)]
     private static partial Regex DoubleQuotedNamedConnectionStringRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", SecretSettingRegexOptions)]
     private static partial Regex SingleQuotedNamedConnectionStringRegex();
 
-    [GeneratedRegex(@"(?<prefix>\b" + ConnectionStringRootKeyPattern + @"\s*=\s*)(?![""'])[^\r\n]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<prefix>\b" + ConnectionStringRootKeyPattern + @"\s*=\s*)[^""'\r\n][^\r\n]*", SecretSettingRegexOptions)]
     private static partial Regex UnquotedRootConnectionStringRegex();
 
-    [GeneratedRegex(@"(?<prefix>\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*)(?![""'])[^\r\n]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<prefix>\b" + NamedConnectionStringKeyPattern + @"\s*[:=]\s*)[^""'\r\n][^\r\n]*", SecretSettingRegexOptions)]
     private static partial Regex UnquotedNamedConnectionStringRegex();
 
-    [GeneratedRegex(@"(?<prefix>\b" + AnyConnectionStringKeyPattern + @"\s*[:=]\s*)(?![""'])[^\r\n]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<prefix>\b" + AnyConnectionStringKeyPattern + @"\s*[:=]\s*)[^""'\r\n][^\r\n]*", SecretSettingRegexOptions)]
     private static partial Regex UnquotedConnectionStringRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", SecretSettingRegexOptions)]
     private static partial Regex DoubleQuotedNonConnectionSettingRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + SecretSettingKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + SecretSettingKeyPattern + @"\s*[:=]\s*" + "\")" + @"(?:\\[^\r\n]|[^""\\\r\n])*(?<suffix>"")", SecretSettingRegexOptions)]
     private static partial Regex DoubleQuotedSecretSettingRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", SecretSettingRegexOptions)]
     private static partial Regex SingleQuotedNonConnectionSettingRegex();
 
-    [GeneratedRegex("(?<prefix>" + @"\b" + SecretSettingKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?<prefix>" + @"\b" + SecretSettingKeyPattern + @"\s*[:=]\s*" + "')" + @"(?:\\[^\r\n]|[^'\\\r\n])*(?<suffix>')", SecretSettingRegexOptions)]
     private static partial Regex SingleQuotedSecretSettingRegex();
 
-    [GeneratedRegex(@"(?<prefix>\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*)(?![""'])[^;&\r\n]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<prefix>\b" + NonConnectionSecretSettingKeyPattern + @"\s*[:=]\s*)[^""';&\r\n][^;&\r\n]*", SecretSettingRegexOptions)]
     private static partial Regex UnquotedNonConnectionSettingRegex();
 
-    [GeneratedRegex(@"(?<prefix>\b" + SecretSettingKeyPattern + @"\s*[:=]\s*)(?![""'])[^;&\r\n]+", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<prefix>\b" + SecretSettingKeyPattern + @"\s*[:=]\s*)[^""';&\r\n][^;&\r\n]*", SecretSettingRegexOptions)]
     private static partial Regex UnquotedSecretSettingRegex();
 }

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Xunit;
@@ -10,6 +11,44 @@ namespace Infrastructure.Tests;
 /// <summary>Checks diagnostic redaction, Unicode limits and inert rendering of untrusted text.</summary>
 public sealed class AnalyzeCiFailureTextTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LongNonSecretPrefixesAreSanitizedWithinTheProcessingBudget(bool metadata)
+    {
+        var text = string.Concat(Enumerable.Repeat("a-", 10000));
+        _ = AnalyzeCiFailure.DiagnosticTextSanitizer.Sanitize("warmup");
+        var started = Stopwatch.GetTimestamp();
+
+        var sanitized = metadata
+            ? AnalyzeCiFailure.DiagnosticTextSanitizer.SanitizeRunMetadata(text, limit: 4000)
+            : AnalyzeCiFailure.DiagnosticTextSanitizer.Sanitize(text, limit: 4000);
+        var elapsed = Stopwatch.GetElapsedTime(started);
+
+        Assert.Equal(string.Concat(Enumerable.Repeat("a-", 2000)), sanitized);
+        Assert.True(elapsed < TimeSpan.FromSeconds(5), $"Sanitizing 20,000 characters took {elapsed}.");
+    }
+
+    [Theory]
+    [InlineData("{prefix}token=secret", "{prefix}token=[REDACTED]")]
+    [InlineData("{prefix}token='secret'", "{prefix}token='[REDACTED]'")]
+    [InlineData("{prefix}token=\"secret\"", "{prefix}token=\"[REDACTED]\"")]
+    [InlineData("\"{prefix}token\": \"secret\"", "\"{prefix}token\": \"[REDACTED]\"")]
+    [InlineData("'{prefix}token': 'secret'", "'{prefix}token': '[REDACTED]'")]
+    [InlineData("{prefix}ConnectionString=Server=db;Password=secret", "{prefix}ConnectionString=[REDACTED]")]
+    [InlineData("{prefix}ConnectionString='Server=db;Password=secret'", "{prefix}ConnectionString='[REDACTED]'")]
+    [InlineData("{prefix}ConnectionStrings__db=\"Server=db;Password=secret\"", "{prefix}ConnectionStrings__db=\"[REDACTED]\"")]
+    [InlineData("{prefix}ConnectionStrings__db=Server=db;Password=secret", "{prefix}ConnectionStrings__db=[REDACTED]")]
+    public void LongSettingPrefixesDoNotWeakenSecretRedaction(string input, string expected)
+    {
+        var prefix = new string('a', 500) + "_";
+        input = input.Replace("{prefix}", prefix, StringComparison.Ordinal);
+        expected = expected.Replace("{prefix}", prefix, StringComparison.Ordinal);
+
+        Assert.Equal(expected, AnalyzeCiFailure.DiagnosticTextSanitizer.Sanitize(input));
+        Assert.Equal(expected, AnalyzeCiFailure.DiagnosticTextSanitizer.SanitizeRunMetadata(input, int.MaxValue));
+    }
+
     [Fact]
     public void FocusedLogsPrioritizeActualAssertionsOverPassingTestsAndGenericNoise()
     {

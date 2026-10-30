@@ -173,7 +173,15 @@ in the same report. Excluded hook/harness entries remain bounded, redacted
 diagnostic context in `diagnostics/job-<id>-mocha.log`; they do not become failed
 test references or turn passing tests into failures. Their job-level publication
 policy is tracked separately in [#21468](https://github.com/microsoft/aspire/issues/21468).
+Each job retains complete diagnostic entries up to 65,536 Unicode code points,
+plus one notice counting omitted entries. Retained entries are redacted once;
+after the buffer fills, additional entries are counted but not redacted or retained.
+Completed test failures are still collected after the diagnostic limit is reached.
 Format alone does not determine whether evidence is required.
+
+Setting-key redaction uses non-backtracking matching to keep processing linear
+even for long prefixes. Secret values are redacted before display truncation,
+without imposing a maximum length on recognized setting keys.
 
 Artifact collection and parsing diagnostics include the canonical run URL,
 attempt, workflow path, processing stage, and relevant job/artifact names.

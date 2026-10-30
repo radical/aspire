@@ -1,10 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
 using AnalyzeCiFailure;
 using Aspire.TestUtilities;
+using VerifyXunit;
 using Xunit;
 
 namespace Infrastructure.Tests;
@@ -12,6 +14,35 @@ namespace Infrastructure.Tests;
 /// <summary>Checks collector policy against independently defined workflow and artifact conventions.</summary>
 public sealed partial class AnalyzeCiFailureWorkflowTests
 {
+    [Fact]
+    [RequiresTools(["bash", "git"])]
+    public async Task MochaDiagnosticOverflowRemainsBoundedWithoutDroppingLaterCompletedFailures()
+    {
+        var started = Stopwatch.GetTimestamp();
+        var (result, progress) = await CollectAlternateWorkflowAsync(
+            new AlternateWorkflowConventions(TestArtifactFormat.Mocha, TestEvidencePolicy.Required),
+            "mocha-many-hooks");
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        var collected = result.Run!;
+        var failure = Assert.Single(collected.Evidence.TestEvidence.Failures);
+
+        Assert.Equal(EvidenceState.Complete, collected.Evidence.TestEvidence.State);
+        Assert.Equal("Alternate test", failure.Name);
+        Assert.Equal("assertion failed", failure.Diagnostics.Error);
+        Assert.Empty(progress.Problems);
+        Assert.True(elapsed < TimeSpan.FromSeconds(10), $"Collecting 2,000 hook diagnostics took {elapsed}.");
+
+        var diagnostic = collected.Attachments["diagnostics/job-77-mocha.log"].Text;
+        var entries = diagnostic.Split("Mocha hook/harness diagnostic: not a completed test failure.\n", StringSplitOptions.RemoveEmptyEntries);
+        Assert.True(diagnostic.Length <= 65536 + 150);
+        await Verifier.Verify(new
+        {
+            RetainedEntries = entries.Length,
+            FirstEntry = entries[0],
+            LastEntry = entries[^1],
+        }).UseDirectory("Snapshots");
+    }
+
     [Theory]
     [InlineData("mocha-mixed-hook", 1)]
     [InlineData("mocha-hook-only", 0)]
@@ -318,6 +349,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
                     archive,
                     name,
                     scenario == "malformed" ? "malformed" :
+                    scenario == "mocha-many-hooks" ? CreateMochaReportWithManyHooks() :
                     scenario is "mocha-mixed-hook" or "mocha-hook-only"
                     ? $$$"""
                         {"tests":[{"fullTitle":"Alternate test"}],"failures":[
@@ -503,6 +535,25 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
 
         return (await collector.CollectAsync(new EvidenceCollectionRequest("microsoft/aspire", RunId: 123, Attempt: 2), progress, CancellationToken.None), progress);
     }
+
+    private static string CreateMochaReportWithManyHooks()
+        => new JsonObject
+        {
+            ["tests"] = new JsonArray(new JsonObject { ["fullTitle"] = "Alternate test" }),
+            ["failures"] = new JsonArray(Enumerable.Range(0, 2000).Select(index => new JsonObject
+            {
+                ["fullTitle"] = $"after each hook {index:D4}",
+                ["err"] = new JsonObject
+                {
+                    ["name"] = "Error",
+                    ["message"] = new string('x', 1000) + "; token=hook-secret",
+                },
+            }).Append(new JsonObject
+            {
+                ["fullTitle"] = "Alternate test",
+                ["err"] = new JsonObject { ["name"] = "AssertionError", ["message"] = "assertion failed" },
+            }).ToArray()),
+        }.ToJsonString();
 
     private static string FrameworkResult(string name, string execution, string error)
         => $$"""
