@@ -16,22 +16,26 @@ The cask uses Homebrew's native
 [`generate_completions_from_executable`](https://docs.brew.sh/Cask-Cookbook#stanza-generate_completions_from_executable)
 artifact for Bash, Zsh, and Fish. Use a current Homebrew version with
 this cask DSL. Generation is offline and does not depend on the postflight sidecar.
+Declarative preflight steps create their standard completion directories first:
+the generator's sandbox can write the final directory but cannot create missing
+ancestors such as `share/fish` on a fresh prefix.
 
 PowerShell uses a `generated_script` plus a managed `artifact` instead. The loader
 at `share/pwsh/completions/_aspire.ps1` asks the active CLI for its completion script
 when sourced, and only evaluates successful output. The native completion generator
-allows writes to the final completion directory but cannot create a missing
-`share/pwsh` parent inside its sandbox on a fresh prefix. The managed artifact
-handles that directory and uninstall normally, without relaxing the sandbox or
-editing a user profile.
+would capture a static script instead of loading completions from the active CLI.
+The managed artifact handles the loader's directory and uninstall normally,
+without editing a user profile.
 
 Homebrew regenerates these files on install/upgrade and removes them on uninstall.
 It does not edit user profiles; PowerShell in particular needs explicit dot-sourcing.
 See the [CLI shell completion guide](../../src/Aspire.Cli/README.md#shell-completion)
 for activation, conventional locations, and removal. There is no completion-specific
 Homebrew opt-out; `--no-binaries` does not disable generated completion artifacts.
-LiveRelease validation checks that all four completion files exist after install
-and are removed on uninstall, and exercises the PowerShell loader when `pwsh` is available.
+Both dogfood installation and LiveRelease validation reject missing or empty
+completion files after install, even when Homebrew only warns and returns success.
+They also exercise the PowerShell loader when `pwsh` is available. LiveRelease
+validation additionally checks that all four files are removed on uninstall.
 
 Changing this template does not update an already-submitted upstream cask:
 the initial/upstream cask change must include the generation stanza, not just a version bump.
@@ -45,6 +49,7 @@ the initial/upstream cask change must include the generation stanza, not just a 
 | `prepare-cask-artifact.sh` | Prepares CI artifacts by generating, validating, and adding dogfood helpers |
 | `validate-cask-artifact.sh` | Runs shared cask syntax, style, audit, and install validation used by GitHub Actions and Azure DevOps |
 | `dogfood.sh` | Installs a generated cask locally, optionally using downloaded native archive artifacts |
+| `verify-completions.sh` | Checks installed completion files and PowerShell registration; included beside the dogfood script in installer artifacts |
 
 ### Pipeline templates
 
@@ -175,7 +180,9 @@ cask URL points at validation time:
 Common to both modes:
 
 1. `ruby -c aspire.rb` — Ruby syntax check
-2. `brew style --fix` — Cookbook formatting rules
+2. `brew style --cask` — Cookbook formatting rules; violations fail validation
+   without rewriting the generated cask. Fix `aspire.rb.template` rather than
+   relying on automatic corrections in CI.
 3. `brew test-bot --tap local/aspire --only-tap-syntax` — tap-level
    cross-platform syntax check; this is the upstream job that catches
    "Invalid cask (Linux on …)" or other platform-evaluation failures

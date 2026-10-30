@@ -42,6 +42,7 @@ EOF
 }
 
 CASK_FILE=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHANNEL="stable"
 VALIDATION_MODE="LiveRelease"
 
@@ -145,11 +146,9 @@ TAPPED_CASK_PATH="$TAP_ROOT/Casks/aspire.rb"
 cp "$CASK_FILE" "$TAPPED_CASK_PATH"
 
 echo ""
-echo "Applying Homebrew style fixes in local tap..."
-brew style --fix "$TAPPED_CASK_PATH"
-cp "$TAPPED_CASK_PATH" "$CASK_FILE"
+echo "Checking Homebrew cask style..."
 brew style --cask "$TAPPED_CASK_PATH"
-echo "brew style --fix reported no offenses after copying aspire.rb into a temporary local tap."
+echo "brew style reported no offenses."
 
 echo ""
 # Tap-level syntax check: validates that every cask in the tap can be parsed
@@ -274,29 +273,7 @@ if [[ "$VALIDATION_MODE" == "LiveRelease" ]]; then
   aspire_version="$(aspire --version 2>&1)"
   echo "  Version: $aspire_version"
 
-  # The native completion artifact warns on generation failures without necessarily failing
-  # installation. Assert its output separately so a successful install cannot hide a regression.
-  for completion_file in "${completion_files[@]}"; do
-    if [[ ! -s "$completion_file" ]]; then
-      echo "Error: completion file missing or empty after install: $completion_file" >&2
-      exit 1
-    fi
-  done
-
-  if command -v pwsh >/dev/null 2>&1; then
-    ASPIRE_HOMEBREW_COMPLETION_FILE="$brew_prefix/share/pwsh/completions/_aspire.ps1" \
-      pwsh -NoLogo -NoProfile -NonInteractive -Command '
-        $ErrorActionPreference = "Stop"
-        . $env:ASPIRE_HOMEBREW_COMPLETION_FILE
-        $line = "aspire comp"
-        $matches = (TabExpansion2 $line $line.Length).CompletionMatches
-        if ($matches.Count -ne 1 -or $matches[0].CompletionText -ne "completions") {
-          throw "Homebrew PowerShell completion loader did not register the CLI completer."
-        }
-      '
-  else
-    echo "PowerShell is unavailable; skipping the loader execution check."
-  fi
+  bash "$SCRIPT_DIR/verify-completions.sh" "$brew_prefix"
 
   brew uninstall --cask "$test_cask_ref"
   test_cask_installed=false
