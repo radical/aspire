@@ -21,6 +21,7 @@ concurrency:
   job-discriminator: ${{ github.run_id }}
 engine:
   id: copilot
+  version: "1.0.85"
   model: gpt-6.1-sol
   args: ["--reasoning-effort", "high"]
 timeout-minutes: 15
