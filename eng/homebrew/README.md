@@ -207,9 +207,6 @@ artifacts into the same parent directory, then run:
 ./dogfood.sh --archive-root ..
 ```
 
-The dogfood script reports installation success only after `aspire --version`
-succeeds.
-
 ## Open Items
 
 - [ ] Submit the initial `aspire` cask PR to `Homebrew/homebrew-cask`
