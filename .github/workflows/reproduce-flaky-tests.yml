@@ -20,7 +20,7 @@ on:
 env:
   # Test project shortname (maps to tests/Aspire.{name}.Tests/ or tests/{name}.Tests/)
   # Examples: Hosting, Core, Dashboard, Components.Common, Cli.EndToEnd
-  TEST_PROJECT: "Hosting"
+  TEST_PROJECT: "Hosting.OpenAI"
 
   # Test filter arguments passed to dotnet test (after the -- separator).
   # Use quotes around wildcard patterns to prevent shell glob expansion.
@@ -28,24 +28,27 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
+  TEST_FILTER: '--filter-class "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests" --filter-not-trait "outerloop=true"'
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
+  TARGET_OSES: "ubuntu-latest"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "3"
+  RUNNERS_PER_OS: "10"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
+  ITERATIONS_PER_RUNNER: "1"
+
+permissions:
+  contents: read
 
 jobs:
 
   setup:
     name: Generate matrix
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -136,7 +139,7 @@ jobs:
     needs: [setup, build_cli_e2e_image]
     if: >-
       ${{
-        github.repository == 'microsoft/aspire' &&
+        github.repository == 'radical/aspire' &&
         !cancelled() &&
         needs.setup.result == 'success' &&
         (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
@@ -166,6 +169,23 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/aspire
+          ref: c77b0c13c34616d1ce4698771bdd445fd50c7a99
+          persist-credentials: false
+
+      - name: Preserve source and runner receipt
+        shell: bash
+        run: |
+          SOURCE_STATUS=$(git --no-pager status --porcelain)
+          test -z "$SOURCE_STATUS"
+          mkdir -p validation-evidence
+          git --no-pager rev-parse HEAD | tee validation-evidence/source.txt
+          test "$(git --no-pager rev-parse HEAD)" = c77b0c13c34616d1ce4698771bdd445fd50c7a99
+          printf '%s' "$SOURCE_STATUS" > validation-evidence/source-status.txt
+          printf 'run=%s\nattempt=%s\njob=%s\nrunner=%s\nos=%s\nimage=%s\nimage_version=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" '${{ matrix.index }}' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$ImageOS" "$ImageVersion" > validation-evidence/runner.txt
 
       - name: Trust HTTPS development certificate (Linux)
         if: runner.os == 'Linux'
@@ -181,7 +201,7 @@ jobs:
 
       - name: Verify Docker is running (Linux)
         if: runner.os == 'Linux'
-        run: docker info
+        run: docker info | tee validation-evidence/docker.txt
 
       - name: Download prebuilt CLI E2E Docker image
         if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
@@ -263,64 +283,62 @@ jobs:
           # Skip default quarantine/outerloop exclusion filters so the target test can run
           SkipDefaultTestFilters: true
         run: |
-          PASS=0
-          FAIL=0
-          ITERATIONS=${{ env.ITERATIONS_PER_RUNNER }}
+          test "${{ env.ITERATIONS_PER_RUNNER }}" = 1
+          ${{ env.DOTNET_SCRIPT }} --info > validation-evidence/dotnet.txt
+          set +e
+          curl --max-time 10 --fail --silent --show-error --dump-header validation-evidence/status-before.headers \
+            https://status.openai.com/api/v2/status.json > validation-evidence/status-before.json
+          printf '%s\n' "$?" > validation-evidence/status-before-exit.txt
+          set -e
 
-          for i in $(seq 1 "$ITERATIONS"); do
-            echo "::group::Iteration $i/$ITERATIONS"
+          set +e
+          ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" \
+            --no-restore --no-build --no-launch-profile -- \
+            --timeout 10m \
+            --report-trx \
+            --results-directory "${{ github.workspace }}/testresults" \
+            ${{ env.TEST_FILTER }} 2>&1 | tee validation-evidence/test-output.log
+          RESULT=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$RESULT" > validation-evidence/test-exit.txt
 
-            # Cleanup between iterations
-            rm -rf "${{ github.workspace }}/testresults" 2>/dev/null || true
-            pgrep -lf "dcp" 2>/dev/null | grep -E "\bdcp(\.exe|ctl)?\b" | awk '{print $1}' | while read pid; do
-              kill -9 "$pid" 2>/dev/null || true
-            done
-            sleep 1
+          set +e
+          curl --max-time 10 --fail --silent --show-error --dump-header validation-evidence/status-after.headers \
+            https://status.openai.com/api/v2/status.json > validation-evidence/status-after.json
+          printf '%s\n' "$?" > validation-evidence/status-after-exit.txt
+          set -e
+          exit "$RESULT"
 
-            # Run test (capture output for zero-test detection)
-            ITER_OUTPUT="${{ github.workspace }}/iter-output-$i.log"
-            set +e  # Disable errexit so pipefail doesn't abort before PIPESTATUS capture
-            ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" \
-              --no-restore \
-              --no-build \
-              -- \
-              --timeout 10m \
-              --results-directory "${{ github.workspace }}/testresults" \
-              ${{ env.TEST_FILTER }} \
-              2>&1 | tee "$ITER_OUTPUT"
-            RESULT=${PIPESTATUS[0]}
-            set -e
+      - name: Verify complete target inventory
+        if: ${{ always() && runner.os == 'Linux' }}
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
 
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
-            if [ "$RESULT" -eq 0 ]; then
-              if ! grep -qiE "total:\s*[1-9]" "$ITER_OUTPUT" 2>/dev/null; then
-                echo "::error::Iteration $i: Zero tests executed. Verify TEST_FILTER and quarantine settings."
-                RESULT=8
-              fi
-            fi
-            rm -f "$ITER_OUTPUT"
-
-            if [ "$RESULT" -eq 0 ]; then
-              echo "✅ Iteration $i: PASS"
-              PASS=$((PASS + 1))
-            else
-              echo "❌ Iteration $i: FAIL (exit $RESULT)"
-              FAIL=$((FAIL + 1))
-              mkdir -p "${{ github.workspace }}/all-results/failure-$i"
-              cp -r "${{ github.workspace }}/testresults/"* "${{ github.workspace }}/all-results/failure-$i/" 2>/dev/null || true
-            fi
-
-            echo "::endgroup::"
-          done
-
-          echo ""
-          echo "========================================"
-          echo "Summary for runner #${{ matrix.index }} on ${{ matrix.os }}"
-          echo "  Passed: $PASS / $ITERATIONS"
-          echo "  Failed: $FAIL / $ITERATIONS"
-          echo "========================================"
-
-          if [ "$FAIL" -gt 0 ]; then exit 1; fi
+          expected = {
+              "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy",
+              "Aspire.Hosting.OpenAI.Tests.OpenAIFunctionalTests.DependentResourceWaitsForOpenAIResourceWithHealthCheckToBeHealthy",
+          }
+          files = list(Path("testresults").rglob("*.trx"))
+          if len(files) != 1:
+              raise RuntimeError(f"Expected exactly one original TRX, got {files}")
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          root = ET.parse(files[0]).getroot()
+          results = root.findall("t:Results/t:UnitTestResult", ns)
+          actual = [r.attrib["testName"] for r in results]
+          if len(actual) != 2 or set(actual) != expected:
+              raise RuntimeError(f"Missing, duplicate or unplanned target: {actual}")
+          counters = root.find("t:ResultSummary/t:Counters", ns).attrib
+          if int(counters["total"]) != 2 or int(counters["executed"]) != 2:
+              raise RuntimeError(f"Invalid execution counters: {counters}")
+          if any(r.attrib["outcome"] not in {"Passed", "Failed"} for r in results):
+              raise RuntimeError("Skipped or incomplete target")
+          if root.findall("t:ResultSummary/t:RunInfos/t:RunInfo[@outcome='Error']", ns):
+              raise RuntimeError("Test-run or fixture error")
+          evidence = {"results": [r.attrib for r in results], "counters": counters}
+          Path("validation-evidence/inventory.json").write_text(json.dumps(evidence, indent=2))
 
       - name: Run test iterations (Windows)
         if: runner.os == 'Windows'
@@ -389,16 +407,20 @@ jobs:
 
           if ($fail -gt 0) { exit 1 }
 
-      - name: Upload failure logs
-        if: failure()
+      - name: Upload all pilot evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: failures-${{ matrix.os }}-${{ matrix.index }}
-          path: all-results/
-          if-no-files-found: ignore
+          name: pilot-${{ matrix.os }}-${{ matrix.index }}
+          path: |
+            testresults/
+            validation-evidence/
+            artifacts/log/
+          if-no-files-found: error
+          retention-days: 30
 
   results:
-    if: ${{ always() && github.repository == 'microsoft/aspire' }}
+    if: ${{ always() && github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     name: Reproduce Results
     needs: [reproduce]
