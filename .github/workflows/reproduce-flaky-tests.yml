@@ -1,432 +1,1793 @@
-# Reproduces flaky tests by running them repeatedly across multiple OS runners.
-#
-# HOW TO USE:
-# 1. Edit the CONFIGURATION section below with the test you want to reproduce
-# 2. Push to your branch
-# 3. Trigger: gh workflow run reproduce-flaky-tests.yml --repo microsoft/aspire --ref <your-branch>
-# 4. Check the results across OSes and runners
-#
-# The configuration is designed to be edited by agents (Copilot, etc.)
-# who modify the env vars below and push to trigger a run.
-
-name: Reproduce Flaky Tests
-
-on:
+name: PR 21424 Ubuntu operator recheck v2
+run-name: pr-21424-ubuntu1-operator-recheck-v2
+'on':
   workflow_dispatch: {}
-
-# ============================================================
-# CONFIGURATION — Edit these values to customize the test run
-# ============================================================
-env:
-  # Test project shortname (maps to tests/Aspire.{name}.Tests/ or tests/{name}.Tests/)
-  # Examples: Hosting, Core, Dashboard, Components.Common, Cli.EndToEnd
-  TEST_PROJECT: "Hosting"
-
-  # Test filter arguments passed to dotnet test (after the -- separator).
-  # Use quotes around wildcard patterns to prevent shell glob expansion.
-  # Examples:
-  #   --filter-method "*.TestMethodName"
-  #   --filter-class "*.TestClassName"
-  #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
-
-  # Target operating systems (comma-separated)
-  # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
-
-  # Number of parallel runners per OS
-  # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "3"
-
-  # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
-
+permissions:
+  contents: read
 jobs:
-
-  setup:
-    name: Generate matrix
-    if: ${{ github.repository == 'microsoft/aspire' }}
+  recheck:
+    name: Operator recheck Ubuntu ${{ matrix.machine }}
+    if: github.repository == 'radical/aspire' && github.ref == 'refs/heads/ankj/flaky-21424-ubuntu1-operator-recheck-v2' &&
+      github.run_attempt == 1
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.generate.outputs.matrix }}
-      is_cli_e2e: ${{ steps.detect_cli_e2e.outputs.is_cli_e2e }}
-    steps:
-      - name: Validate configuration
-        shell: bash
-        run: |
-          ERRORS=0
-
-          # Validate RUNNERS_PER_OS is a positive integer
-          if ! [[ "${{ env.RUNNERS_PER_OS }}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::RUNNERS_PER_OS must be a positive integer, got '${{ env.RUNNERS_PER_OS }}'"
-            ERRORS=1
-          fi
-
-          # Validate ITERATIONS_PER_RUNNER is a positive integer
-          if ! [[ "${{ env.ITERATIONS_PER_RUNNER }}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::ITERATIONS_PER_RUNNER must be a positive integer, got '${{ env.ITERATIONS_PER_RUNNER }}'"
-            ERRORS=1
-          fi
-
-          # Validate TARGET_OSES is not empty and contains only known runners
-          if [[ -z "${{ env.TARGET_OSES }}" ]]; then
-            echo "::error::TARGET_OSES must not be empty"
-            ERRORS=1
-          else
-            IFS=',' read -ra CHECK_OSES <<< "${{ env.TARGET_OSES }}"
-            for os in "${CHECK_OSES[@]}"; do
-              os=$(echo "$os" | xargs)
-              if [[ "$os" != "ubuntu-latest" && "$os" != "windows-latest" && "$os" != "macos-latest" ]]; then
-                echo "::error::Unknown OS in TARGET_OSES: '$os'. Allowed: ubuntu-latest, windows-latest, macos-latest"
-                ERRORS=1
-              fi
-            done
-          fi
-
-          # Validate TEST_FILTER is not the placeholder
-          if [[ "${{ env.TEST_FILTER }}" == *"YourTestMethodName"* ]]; then
-            echo "::error::TEST_FILTER still contains the placeholder 'YourTestMethodName'. Configure it with the actual test to reproduce."
-            ERRORS=1
-          fi
-
-          if [[ $ERRORS -ne 0 ]]; then exit 1; fi
-
-      - name: Detect CLI E2E project
-        id: detect_cli_e2e
-        shell: bash
-        run: |
-          if [ "${{ env.TEST_PROJECT }}" = "Cli.EndToEnd" ]; then
-            echo "is_cli_e2e=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_cli_e2e=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate runner matrix
-        id: generate
-        shell: bash
-        run: |
-          IFS=',' read -ra OSES <<< "${{ env.TARGET_OSES }}"
-          RUNNERS=${{ env.RUNNERS_PER_OS }}
-
-          ENTRIES=""
-          for os in "${OSES[@]}"; do
-            os=$(echo "$os" | xargs)
-            for i in $(seq 1 "$RUNNERS"); do
-              if [ -n "$ENTRIES" ]; then ENTRIES="$ENTRIES,"; fi
-              ENTRIES="${ENTRIES}{\"os\":\"${os}\",\"index\":${i}}"
-            done
-          done
-
-          MATRIX="{\"include\":[${ENTRIES}]}"
-          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
-
-          TOTAL=$(echo "$ENTRIES" | tr ',' '\n' | wc -l)
-          echo "Generated matrix: $TOTAL runners across ${#OSES[@]} OS(es)"
-          echo "Each runner will execute ${{ env.ITERATIONS_PER_RUNNER }} iterations"
-          echo "Total test executions: $(( TOTAL * ${{ env.ITERATIONS_PER_RUNNER }} ))"
-
-  build_cli_e2e_image:
-    name: Build CLI E2E Docker image
-    needs: setup
-    if: ${{ github.repository == 'microsoft/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
-    uses: ./.github/workflows/build-cli-e2e-image.yml
-
-  reproduce:
-    name: "${{ matrix.os }} #${{ matrix.index }}"
-    needs: [setup, build_cli_e2e_image]
-    if: >-
-      ${{
-        github.repository == 'microsoft/aspire' &&
-        !cancelled() &&
-        needs.setup.result == 'success' &&
-        (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
-      }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+      matrix:
+        machine:
+        - 1
+    defaults:
+      run:
+        shell: pwsh
     env:
+      SOURCE_SHA: 63c361dd3b0b32d55ab7c2276a660a8fd02dd127
+      PLAN_ID: pr-21424-ubuntu1-operator-recheck-v2
+      MACHINE_INDEX: ${{ matrix.machine }}
       DOTNET_ROOT: ${{ github.workspace }}/.dotnet
-
+      MSBUILDTERMINALLOGGER: 'false'
     steps:
-      - name: Setup vars (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          echo "DOTNET_SCRIPT=./dotnet.sh" >> $GITHUB_ENV
-          echo "BUILD_SCRIPT=./build.sh" >> $GITHUB_ENV
-          echo "${{ github.workspace }}/.dotnet" >> $GITHUB_PATH
-
-      - name: Setup vars (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          echo "DOTNET_SCRIPT=.\dotnet.cmd" >> $env:GITHUB_ENV
-          echo "BUILD_SCRIPT=.\build.cmd" >> $env:GITHUB_ENV
-          echo "${{ github.workspace }}\.dotnet" >> $env:GITHUB_PATH
-
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Trust HTTPS development certificate (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          EXIT_CODE=0
-          ${{ env.DOTNET_SCRIPT }} dev-certs https --trust || EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 4 ]; then
-            echo "dev-certs https --trust failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
-          fi
-        env:
-          WSL_INTEROP: ""
-
-      - name: Verify Docker is running (Linux)
-        if: runner.os == 'Linux'
-        run: docker info
-
-      - name: Download prebuilt CLI E2E Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-dotnet-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Download prebuilt CLI E2E Java Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-polyglot-java-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Download prebuilt CLI E2E Go Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-polyglot-go-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Download prebuilt CLI E2E polyglot Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-polyglot-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Load prebuilt CLI E2E Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          eng/scripts/load-cli-e2e-images.sh \
-            --image-dir "${{ github.workspace }}/cli-e2e-image" \
-            --require-dotnet true \
-            --require-polyglot true \
-            --require-java true \
-            --require-go true
-
-      - name: Unlock macOS keychain
-        if: runner.os == 'macOS'
-        uses: ./.github/actions/unlock-macos-keychain
-
-      - name: Compute test project path
-        shell: pwsh
-        run: |
-          $testShortName = "${{ env.TEST_PROJECT }}"
-          $projectPath1 = "${{ github.workspace }}/tests/$testShortName.Tests/$testShortName.Tests.csproj"
-          $projectPath2 = "${{ github.workspace }}/tests/Aspire.$testShortName.Tests/Aspire.$testShortName.Tests.csproj"
-
-          if (Test-Path -Path $projectPath1) {
-              $projectPath = $projectPath1
-          } elseif (Test-Path -Path $projectPath2) {
-              $projectPath = $projectPath2
-          } else {
-              Write-Error "No test project found for shortname '$testShortName'. Looked at: $projectPath1, $projectPath2"
-              exit 1
-          }
-
-          echo "TEST_PROJECT_PATH=$projectPath" >> $env:GITHUB_ENV
-          Write-Host "Resolved test project: $projectPath"
-
-      - name: Build test project
-        run: >
-          ${{ env.BUILD_SCRIPT }}
-          -restore -ci -build
-          -projects ${{ env.TEST_PROJECT_PATH }}
-          /p:InstallBrowsersForPlaywright=false
-          /p:RunQuarantinedTests=true
-
-      - name: Run test iterations (Linux/macOS)
-        if: runner.os != 'Windows'
-        env:
-          ASPIRE__TEST__DCPLOGBASEPATH: ${{ github.workspace }}/testresults/dcp
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
-          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: 'netaspireci.azurecr.io'
-          # Skip default quarantine/outerloop exclusion filters so the target test can run
-          SkipDefaultTestFilters: true
-        run: |
-          PASS=0
-          FAIL=0
-          ITERATIONS=${{ env.ITERATIONS_PER_RUNNER }}
-
-          for i in $(seq 1 "$ITERATIONS"); do
-            echo "::group::Iteration $i/$ITERATIONS"
-
-            # Cleanup between iterations
-            rm -rf "${{ github.workspace }}/testresults" 2>/dev/null || true
-            pgrep -lf "dcp" 2>/dev/null | grep -E "\bdcp(\.exe|ctl)?\b" | awk '{print $1}' | while read pid; do
-              kill -9 "$pid" 2>/dev/null || true
-            done
-            sleep 1
-
-            # Run test (capture output for zero-test detection)
-            ITER_OUTPUT="${{ github.workspace }}/iter-output-$i.log"
-            set +e  # Disable errexit so pipefail doesn't abort before PIPESTATUS capture
-            ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" \
-              --no-restore \
-              --no-build \
-              -- \
-              --timeout 10m \
-              --results-directory "${{ github.workspace }}/testresults" \
-              ${{ env.TEST_FILTER }} \
-              2>&1 | tee "$ITER_OUTPUT"
-            RESULT=${PIPESTATUS[0]}
-            set -e
-
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
-            if [ "$RESULT" -eq 0 ]; then
-              if ! grep -qiE "total:\s*[1-9]" "$ITER_OUTPUT" 2>/dev/null; then
-                echo "::error::Iteration $i: Zero tests executed. Verify TEST_FILTER and quarantine settings."
-                RESULT=8
-              fi
-            fi
-            rm -f "$ITER_OUTPUT"
-
-            if [ "$RESULT" -eq 0 ]; then
-              echo "✅ Iteration $i: PASS"
-              PASS=$((PASS + 1))
-            else
-              echo "❌ Iteration $i: FAIL (exit $RESULT)"
-              FAIL=$((FAIL + 1))
-              mkdir -p "${{ github.workspace }}/all-results/failure-$i"
-              cp -r "${{ github.workspace }}/testresults/"* "${{ github.workspace }}/all-results/failure-$i/" 2>/dev/null || true
-            fi
-
-            echo "::endgroup::"
-          done
-
-          echo ""
-          echo "========================================"
-          echo "Summary for runner #${{ matrix.index }} on ${{ matrix.os }}"
-          echo "  Passed: $PASS / $ITERATIONS"
-          echo "  Failed: $FAIL / $ITERATIONS"
-          echo "========================================"
-
-          if [ "$FAIL" -gt 0 ]; then exit 1; fi
-
-      - name: Run test iterations (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          ASPIRE__TEST__DCPLOGBASEPATH: ${{ github.workspace }}/testresults/dcp
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
-          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: 'netaspireci.azurecr.io'
-          # Skip default quarantine/outerloop exclusion filters so the target test can run
-          SkipDefaultTestFilters: true
-        run: |
-          $pass = 0
-          $fail = 0
-          $iterations = [int]"${{ env.ITERATIONS_PER_RUNNER }}"
-
-          for ($i = 1; $i -le $iterations; $i++) {
-            Write-Host "::group::Iteration $i/$iterations"
-
-            # Cleanup between iterations
-            Remove-Item -Recurse -Force "${{ github.workspace }}/testresults" -ErrorAction SilentlyContinue
-            Get-Process | Where-Object { $_.ProcessName -match '^dcp' } | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-
-            # Run test (capture output for zero-test detection)
-            $iterOutput = Join-Path "${{ github.workspace }}" "iter-output-$i.log"
-            & ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" `
-              --no-restore `
-              --no-build `
-              -- `
-              --timeout 10m `
-              --results-directory "${{ github.workspace }}/testresults" `
-              ${{ env.TEST_FILTER }} *> $iterOutput
-            $result = $LASTEXITCODE
-            Get-Content $iterOutput
-
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
-            if ($result -eq 0) {
-              $content = Get-Content $iterOutput -Raw -ErrorAction SilentlyContinue
-              if (-not ($content -match '(?i)total:\s*[1-9]')) {
-                Write-Host "::error::Iteration ${i}: Zero tests executed. Verify TEST_FILTER and quarantine settings."
-                $result = 8
-              }
+    - name: Record environment and frozen inventory without secrets
+      env:
+        RUNNER_CONTEXT: ${{ toJSON(runner) }}
+      run: |
+        $env:EVIDENCE = Join-Path $env:RUNNER_TEMP "pr21424-recheck-v2-$env:MACHINE_INDEX"
+        "EVIDENCE=$env:EVIDENCE" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        New-Item -ItemType Directory -Path $env:EVIDENCE -Force | Out-Null
+        Copy-Item /etc/os-release "$env:EVIDENCE/os-release"
+        $os = @{}
+        foreach ($line in Get-Content /etc/os-release) {
+          if ($line -match '^([A-Z_]+)=(.*)$') { $os[$Matches[1]] = $Matches[2].Trim('"') }
+        }
+        @{
+          plan = $env:PLAN_ID
+          machine = [int]$env:MACHINE_INDEX
+          workflowSha = $env:GITHUB_SHA
+          workflowRef = $env:GITHUB_WORKFLOW_REF
+          workspace = $env:GITHUB_WORKSPACE
+          requestedSource = $env:SOURCE_SHA
+          runId = $env:GITHUB_RUN_ID
+          runAttempt = $env:GITHUB_RUN_ATTEMPT
+          job = $env:GITHUB_JOB
+          runnerName = $env:RUNNER_NAME
+          runnerEnvironment = $env:RUNNER_ENVIRONMENT
+          runnerOS = $env:RUNNER_OS
+          runnerArch = $env:RUNNER_ARCH
+          runnerContext = ($env:RUNNER_CONTEXT | ConvertFrom-Json)
+          environmentImageOS = $env:ImageOS
+          environmentImageVersion = $env:ImageVersion
+          ubuntuId = $os['ID']
+          ubuntuVersion = $os['VERSION_ID']
+          osDescription = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+          processors = [Environment]::ProcessorCount
+          recordedAt = [DateTimeOffset]::UtcNow.ToString('O')
+        } | ConvertTo-Json -Depth 8 | Set-Content "$env:EVIDENCE/environment.json"
+        $inventory = @'
+        {
+          "plan_id": "pr-21424-ubuntu1-operator-recheck-v2",
+          "source": "63c361dd3b0b32d55ab7c2276a660a8fd02dd127",
+          "source_tree": "672cda2298acdc162c2375ebb5950e0905ff0f50",
+          "branch": "ankj/flaky-21424-ubuntu1-operator-recheck-v2",
+          "workflow_name": "PR 21424 Ubuntu operator recheck v2",
+          "authorization_expires_at": "2026-11-03T00:00:00Z",
+          "expected_results": 228,
+          "common_suite": [
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "ExpiringAllowOnlyAffectsDisplayUntilExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.ExpiringAllowOnlyAffectsDisplayUntilExpiration",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "ExpiringDenyOnlyAffectsDisplayUntilExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.ExpiringDenyOnlyAffectsDisplayUntilExpiration",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "InverseAnonymousRulesDoNotApplyToAnonymousCallers",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.InverseAnonymousRulesDoNotApplyToAnonymousCallers(deny: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "InverseAnonymousRulesDoNotApplyToAnonymousCallers",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.InverseAnonymousRulesDoNotApplyToAnonymousCallers(deny: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_AllowsAnonymousForSingleExplicitAllow",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_AllowsAnonymousForSingleExplicitAllow",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_AllowsAnonymousForSingleInheritedAllow",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_AllowsAnonymousForSingleInheritedAllow",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_AllowsAnonymousWhenExplicitlyAllowedWithInheritedAllowed",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_AllowsAnonymousWhenExplicitlyAllowedWithInheritedAllowed",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_DeniesAnonymousForNoEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_DeniesAnonymousForNoEntries",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_DeniesAnonymousForSingleExplicitDeny",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_DeniesAnonymousForSingleExplicitDeny",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_DeniesAnonymousWhenExplicitlyDeniedWithInheritedAllow",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_DeniesAnonymousWhenExplicitlyDeniedWithInheritedAllow",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "LogAnonymousAccessPolicy_ReturnsDeniedForUnexpectedEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.LogAnonymousAccessPolicy_ReturnsDeniedForUnexpectedEntries",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "PermanentPolicyMatchingRequiresCorrectSubjectAndNoExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.PermanentPolicyMatchingRequiresCorrectSubjectAndNoExpiration(deny: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests",
+              "method": "PermanentPolicyMatchingRequiresCorrectSubjectAndNoExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelAccessStatusTests.PermanentPolicyMatchingRequiresCorrectSubjectAndNoExpiration(deny: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "AccessMutationRetriesWithoutRepeatingCompletedResets",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.AccessMutationRetriesWithoutRepeatingCompletedResets(port: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "AccessMutationRetriesWithoutRepeatingCompletedResets",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.AccessMutationRetriesWithoutRepeatingCompletedResets(port: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "AddingMissingDenyNeverResetsExistingPolicyOnFailure",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.AddingMissingDenyNeverResetsExistingPolicyOnFailure(cancel: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "AddingMissingDenyNeverResetsExistingPolicyOnFailure",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.AddingMissingDenyNeverResetsExistingPolicyOnFailure(cancel: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "AdditionalPermanentDenyAvoidsMutatingExpiringOrInverseRules",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.AdditionalPermanentDenyAvoidsMutatingExpiringOrInverseRules",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ChangedPortConfigurationIsRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ChangedPortConfigurationIsRecreated(protocol: \"http\", description: \"changed\", label: \"label\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ChangedPortConfigurationIsRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ChangedPortConfigurationIsRecreated(protocol: \"http\", description: \"expected\", label: \"different\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ChangedPortConfigurationIsRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ChangedPortConfigurationIsRecreated(protocol: \"https\", description: \"expected\", label: \"label\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "CompletedAccessMutationIsNotRepeatedAfterLostResponse",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.CompletedAccessMutationIsNotRepeatedAfterLostResponse",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "CreatePortIncludesModeledDescription",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.CreatePortIncludesModeledDescription",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "CreateTunnelAsync_WhenCreateConflictsAndUpdateIsNotFound_FailsWithoutRetrying",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.CreateTunnelAsync_WhenCreateConflictsAndUpdateIsNotFound_FailsWithoutRetrying",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "EmptyDescriptionsDoNotRewriteRemoteMetadata",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.EmptyDescriptionsDoNotRewriteRemoteMetadata",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExistingAnonymousTunnelDoesNotResetMatchingAccess",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExistingAnonymousTunnelDoesNotResetMatchingAccess",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExistingTunnelWithMatchingConfigurationDoesNotWrite",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExistingTunnelWithMatchingConfigurationDoesNotWrite(expirationHours: 24, expiration: \"24 hours\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExistingTunnelWithMatchingConfigurationDoesNotWrite",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExistingTunnelWithMatchingConfigurationDoesNotWrite(expirationHours: 25, expiration: \"1 days, 1 hours\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExistingTunnelWithMatchingConfigurationDoesNotWrite",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExistingTunnelWithMatchingConfigurationDoesNotWrite(expirationHours: 720, expiration: \"30 days\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExistingTunnelWithMatchingConfigurationDoesNotWrite",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExistingTunnelWithMatchingConfigurationDoesNotWrite(expirationHours: null, expiration: \"30 days\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExpiringAnonymousAllowDoesNotSatisfyPermanentGrant",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExpiringAnonymousAllowDoesNotSatisfyPermanentGrant",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExpiringAnonymousDenyDoesNotSatisfyPermanentRestriction",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExpiringAnonymousDenyDoesNotSatisfyPermanentRestriction(expiration: \"2000-01-01T00:00:00Z\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ExpiringAnonymousDenyDoesNotSatisfyPermanentRestriction",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ExpiringAnonymousDenyDoesNotSatisfyPermanentRestriction(expiration: \"2099-01-01T00:00:00Z\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FailedDenyResponseIsReconciledWithoutRemovingPreviouslyAppliedDeny",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FailedDenyResponseIsReconciledWithoutRemovingPreviouslyAppliedDeny",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: False, exitCode: 0, response: \"\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: False, exitCode: 0, response: \"null\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: False, exitCode: 1, response: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: True, exitCode: 0, response: \"\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: True, exitCode: 0, response: \"null\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "FreshPortAccessFailureReconcilesWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.FreshPortAccessFailureReconcilesWithoutRecreatingPort(allowAnonymous: True, exitCode: 1, response: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "InverseAnonymousRulesCannotSatisfyModeledPortPolicy",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.InverseAnonymousRulesCannotSatisfyModeledPortPolicy(allowAnonymous: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "InverseAnonymousRulesCannotSatisfyModeledPortPolicy",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.InverseAnonymousRulesCannotSatisfyModeledPortPolicy(allowAnonymous: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MalformedFreshPortAccessResponseCannotReportSuccess",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MalformedFreshPortAccessResponseCannotReportSuccess",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MalformedTunnelIdentityCannotFallBackToDefaultTunnel",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MalformedTunnelIdentityCannotFallBackToDefaultTunnel(json: \"{\\\"tunnel\\\":{}}\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MalformedTunnelIdentityCannotFallBackToDefaultTunnel",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MalformedTunnelIdentityCannotFallBackToDefaultTunnel(json: \"{\\\"unexpected\\\":{\\\"tunnelId\\\":\\\"mytunnel.usw2\\\"}}\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingPortIsNotDeletedOrRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingPortIsNotDeletedOrRecreated(anonymous: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingPortIsNotDeletedOrRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingPortIsNotDeletedOrRecreated(anonymous: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingPortIsNotDeletedOrRecreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingPortIsNotDeletedOrRecreated(anonymous: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingTunnelIdentityAllowsClusterResolution",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingTunnelIdentityAllowsClusterResolution(requested: \"mytunnel\", returned: \"mytunnel\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingTunnelIdentityAllowsClusterResolution",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingTunnelIdentityAllowsClusterResolution(requested: \"mytunnel\", returned: \"mytunnel.usw2\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MatchingTunnelIdentityAllowsClusterResolution",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MatchingTunnelIdentityAllowsClusterResolution(requested: \"mytunnel.usw2\", returned: \"MYTUNNEL.USW2\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MetadataDriftUsesQualifiedIdentityAndUnwrapsUpdateResponse",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MetadataDriftUsesQualifiedIdentityAndUnwrapsUpdateResponse",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MetadataUpdateRetriesAfterRecheckingRemoteState",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MetadataUpdateRetriesAfterRecheckingRemoteState(firstUpdateWasApplied: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MetadataUpdateRetriesAfterRecheckingRemoteState",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MetadataUpdateRetriesAfterRecheckingRemoteState(firstUpdateWasApplied: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MissingAccessMetadataIsFetchedAndMalformedAccessFailsClosed",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MissingAccessMetadataIsFetchedAndMalformedAccessFailsClosed",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MissingPortIsCreatedAndWrappedResponseIsRead",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MissingPortIsCreatedAndWrappedResponseIsRead",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MissingTunnelIsCreated",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MissingTunnelIsCreated",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "MissingTunnelStatusHasAnAuthoritativeFailureType",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.MissingTunnelStatusHasAnAuthoritativeFailureType",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "PortAccessDriftIsRepairedWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.PortAccessDriftIsRepairedWithoutRecreatingPort(anonymous: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "PortAccessDriftIsRepairedWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.PortAccessDriftIsRepairedWithoutRecreatingPort(anonymous: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "PortAccessDriftIsRepairedWithoutRecreatingPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.PortAccessDriftIsRepairedWithoutRecreatingPort(anonymous: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "PortCanInheritAccessWithoutWritingAnExplicitPolicy",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.PortCanInheritAccessWithoutWritingAnExplicitPolicy",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "PrivateTunnelClearsUnexpectedAnonymousAccess",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.PrivateTunnelClearsUnexpectedAnonymousAccess",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "ProvisioningMutationRetriesAreBounded",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.ProvisioningMutationRetriesAreBounded",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "RestrictivePortPolicyIsNotReplacedForExtraEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.RestrictivePortPolicyIsNotReplacedForExtraEntries(cancelReplacement: False, additionalScopes: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "RestrictivePortPolicyIsNotReplacedForExtraEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.RestrictivePortPolicyIsNotReplacedForExtraEntries(cancelReplacement: False, additionalScopes: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "RestrictivePortPolicyIsNotReplacedForExtraEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.RestrictivePortPolicyIsNotReplacedForExtraEntries(cancelReplacement: True, additionalScopes: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "RestrictivePortPolicyIsNotReplacedForExtraEntries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.RestrictivePortPolicyIsNotReplacedForExtraEntries(cancelReplacement: True, additionalScopes: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "StatusQueryRejectsAnotherTunnel",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.StatusQueryRejectsAnotherTunnel",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedCreatedPortIdentityCannotRedirectAccessMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedCreatedPortIdentityCannotRedirectAccessMutation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedCreatedTunnelIdentityFails",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedCreatedTunnelIdentityFails",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedPortIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedPortIdentityFailsBeforeMutation(tunnelId: \"mytunnel.eun1\", portNumber: 3000)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedPortIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedPortIdentityFailsBeforeMutation(tunnelId: \"mytunnel.usw2\", portNumber: 4000)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedPortIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedPortIdentityFailsBeforeMutation(tunnelId: \"other.usw2\", portNumber: 3000)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel\", returned: \"mytunnel-extra.usw2\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel\", returned: \"mytunnel.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel\", returned: \"mytunnel.usw2.other\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel\", returned: \"other.usw2\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel.usw2\", returned: \"mytunnel\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedTunnelIdentityFailsBeforeMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedTunnelIdentityFailsBeforeMutation(requested: \"mytunnel.usw2\", returned: \"mytunnel.eun1\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests",
+              "method": "UnexpectedUpdateIdentityCannotRedirectAccessMutation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliClientTests.UnexpectedUpdateIdentityCannotRedirectAccessMutation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests",
+              "method": "PumpCancellationInterruptsPendingRead",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests.PumpCancellationInterruptsPendingRead",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests",
+              "method": "PumpDoesNotSynchronouslyReadAndDrainsThroughEndOfStream",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests.PumpDoesNotSynchronouslyReadAndDrainsThroughEndOfStream",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests",
+              "method": "SilentStandardOutputDoesNotBlockStandardError",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliOutputTests.SilentStandardOutputDoesNotBlockStandardError",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"0.0.1\", expectedIsValid: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.0.0\", expectedIsValid: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.0.1434\", expectedIsValid: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.0.1435\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.0.1436\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.1.1234\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.1.999\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"1.10.0\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"10.0.0\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests",
+              "method": "ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelCliVersionValidationTests.ValidateDevTunnelCliVersionAsync_ReturnsInvalidForUnsupportedVersion(testVersion: \"2.0.0\", expectedIsValid: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_FormatExpirationInvariantly",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_FormatExpirationInvariantly",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_PassExpirationInHours",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_PassExpirationInHours(hours: 1)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_PassExpirationInHours",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_PassExpirationInHours(hours: 24)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_PassExpirationInHours",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_PassExpirationInHours(hours: 25)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_PassExpirationInHours",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_PassExpirationInHours(hours: 720)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_PassExpirationInHours",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_PassExpirationInHours(hours: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateAndUpdate_WithNullOptions_OmitExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateAndUpdate_WithNullOptions_OmitExpiration",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateTunnelAsync_WhenTunnelExists_PassesExpirationToUpdate",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateTunnelAsync_WhenTunnelExists_PassesExpirationToUpdate(hours: 24)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "CreateTunnelAsync_WhenTunnelExists_PassesExpirationToUpdate",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.CreateTunnelAsync_WhenTunnelExists_PassesExpirationToUpdate(hours: null)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_AcceptsValuesWithinRange",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_AcceptsValuesWithinRange(hours: 1)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_AcceptsValuesWithinRange",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_AcceptsValuesWithinRange(hours: 25)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_AcceptsValuesWithinRange",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_AcceptsValuesWithinRange(hours: 720)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_DefaultsToNullAndCanBeCleared",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_DefaultsToNullAndCanBeCleared",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_RejectsInvalidValuesWithoutChangingOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_RejectsInvalidValuesWithoutChangingOptions(hours: -2147483648)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_RejectsInvalidValuesWithoutChangingOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_RejectsInvalidValuesWithoutChangingOptions(hours: 0)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_RejectsInvalidValuesWithoutChangingOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_RejectsInvalidValuesWithoutChangingOptions(hours: 2147483647)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ExpirationHours_RejectsInvalidValuesWithoutChangingOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ExpirationHours_RejectsInvalidValuesWithoutChangingOptions(hours: 721)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "ToLoggerString_IncludesExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.ToLoggerString_IncludesExpiration",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_ConfiguresOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_ConfiguresOptions(polyglot: False, hours: 1)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_ConfiguresOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_ConfiguresOptions(polyglot: False, hours: 720)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_ConfiguresOptions",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_ConfiguresOptions(polyglot: True, hours: 24)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_RejectsInvalidExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_RejectsInvalidExpiration(hours: -2147483648)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_RejectsInvalidExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_RejectsInvalidExpiration(hours: 0)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_RejectsInvalidExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_RejectsInvalidExpiration(hours: 2147483647)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_RejectsInvalidExpiration",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_RejectsInvalidExpiration(hours: 721)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests",
+              "method": "WithExpiration_RejectsNullBuilder",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelExpirationTests.WithExpiration_RejectsNullBuilder",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AcceptsReadinessMessagesCombinedOnOneLine",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AcceptsReadinessMessagesCombinedOnOneLine",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AccessPolicyLogsOnlyEffectiveChanges",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AccessPolicyLogsOnlyEffectiveChanges",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AccessQueriesDoNotBlockReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AccessQueriesDoNotBlockReadiness",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AccessQueryFailuresClearOnlyFailedResults",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AccessQueryFailuresClearOnlyFailedResults(missingPort: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AccessQueryFailuresClearOnlyFailedResults",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AccessQueryFailuresClearOnlyFailedResults(missingPort: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AnotherHostCannotEstablishUnknownLocalReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AnotherHostCannotEstablishUnknownLocalReadiness",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Command 'restart' was canceled.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Error executing command 'restart'.\\nSystem.Exceptio\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Executing command 'restart'.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Executing command 'stop'.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Failure executing command 'start'. Error message: \"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"Successfully executed command 'start'.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"[Aspire dev tunnels] Failed to refresh tunnel acce\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AspireDiagnosticEntriesDoNotTriggerOutputWarnings",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AspireDiagnosticEntriesDoNotTriggerOutputWarnings(content: \"[sys] Starting process...\\nUnprefixed system detail\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "AuthenticationNotificationDoesNotBlockReconciliation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AuthenticationNotificationDoesNotBlockReconciliation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "CancellingAHealthCallerDoesNotCancelTheSharedObserver",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.CancellingAHealthCallerDoesNotCancelTheSharedObserver",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ColoredCombinedMessagesCannotHideHostTakeover",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ColoredCombinedMessagesCannotHideHostTakeover",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "CustomizedUrlsSurviveReadinessReconciliationAndReconnect",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.CustomizedUrlsSurviveReadinessReconciliationAndReconnect",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "DisposalCancelsIndependentAccessQueries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.DisposalCancelsIndependentAccessQueries",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "DisposedMonitorRejectsNewWork",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.DisposedMonitorRejectsNewWork",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "EndpointCallbackCanStopAndRestartParentWithoutBlockingMonitor",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.EndpointCallbackCanStopAndRestartParentWithoutBlockingMonitor",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "EndpointCallbackFailureCannotBecomeHealthyThroughReconciliation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.EndpointCallbackFailureCannotBecomeHealthyThroughReconciliation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "EstablishedConnectionLossRequiresFreshLocalEvidence",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.EstablishedConnectionLossRequiresFreshLocalEvidence(deletion: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "EstablishedConnectionLossRequiresFreshLocalEvidence",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.EstablishedConnectionLossRequiresFreshLocalEvidence(deletion: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ExpirationAndInverseSemanticsFlowToAccessProperties",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ExpirationAndInverseSemanticsFlowToAccessProperties",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "FailedProcessStopsPortsWithoutStoppedEventOrFinalLog",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.FailedProcessStopsPortsWithoutStoppedEventOrFinalLog",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "HostOutputAllocatesPortsWithoutQueryingServiceStatus",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.HostOutputAllocatesPortsWithoutQueryingServiceStatus",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "IncompleteMessageCannotHideHostTakeover",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.IncompleteMessageCannotHideHostTakeover(wrappedDisconnect: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "IncompleteMessageCannotHideHostTakeover",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.IncompleteMessageCannotHideHostTakeover(wrappedDisconnect: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "InitialZeroHostObservationDoesNotDiscardStartupEvidence",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.InitialZeroHostObservationDoesNotDiscardStartupEvidence",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "LogsCanCompleteReadinessWhileInitialReconciliationIsInFlight",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.LogsCanCompleteReadinessWhileInitialReconciliationIsInFlight",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "MissingTunnelInvalidatesLogDerivedReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.MissingTunnelInvalidatesLogDerivedReadiness",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "OlderReconciliationCannotUndoNewerLogObservations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.OlderReconciliationCannotUndoNewerLogObservations",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "OverlappingHealthEvaluationsShareServiceQuery",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.OverlappingHealthEvaluationsShareServiceQuery",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ReconciliationDoesNotDependOnConsoleUrlNamingConvention",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ReconciliationDoesNotDependOnConsoleUrlNamingConvention",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ReconciliationRetriesUntilUnrecognizedOutputCanBeReplacedByServiceStatus",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ReconciliationRetriesUntilUnrecognizedOutputCanBeReplacedByServiceStatus",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ReconciliationUpdatesAndRemovesPreviouslyObservedPorts",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ReconciliationUpdatesAndRemovesPreviouslyObservedPorts",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "RestartRejectsReadinessFromPreviousRun",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.RestartRejectsReadinessFromPreviousRun",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "ServiceHostCountCannotOverrideLocalDisconnect",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.ServiceHostCountCannotOverrideLocalDisconnect",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "StalledAccessRefreshDoesNotBlockSubsequentStatusQueries",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.StalledAccessRefreshDoesNotBlockSubsequentStatusQueries",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "StopCancelsPendingReadinessAndServiceQuery",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.StopCancelsPendingReadinessAndServiceQuery",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+              "method": "UnrecognizedOutputWarnsOnceAndReconcilesReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.UnrecognizedOutputWarnsOnceAndReconcilesReadiness",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "BoundsBufferedOutput",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.BoundsBufferedOutput",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Connection to host tunnel relay closed. Another ho\"\u00b7\u00b7\u00b7, kind: Disconnected)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Connection to host tunnel relay lost; reconnecting\"\u00b7\u00b7\u00b7, kind: Disconnected)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Connection to host tunnel relay restored.\", kind: Connected)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Hosting port: 65536\", kind: Unrecognized)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Ready to accept connections for tunnel: other.usw2\", kind: Unrecognized)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ClassifiesLifecycleMessages",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ClassifiesLifecycleMessages(text: \"Unexpected future CLI output\", kind: Unrecognized)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "DisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.DisconnectSupersedesUnfinishedMessage(prefix: \"Connect via browser:\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "DisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.DisconnectSupersedesUnfinishedMessage(prefix: \"Connection to host tunnel relay\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "DisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.DisconnectSupersedesUnfinishedMessage(prefix: \"Hosting port:\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "DisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.DisconnectSupersedesUnfinishedMessage(prefix: \"Inspect network activity:\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "DisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.DisconnectSupersedesUnfinishedMessage(prefix: \"Ready to accept connections for tunnel:\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "NewPortSupersedesUnfinishedInspectMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.NewPortSupersedesUnfinishedInspectMessage",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ParsesDocumentedSingleLineFormat",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ParsesDocumentedSingleLineFormat",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ParsesPortWithLayoutVariations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ParsesPortWithLayoutVariations(heading: \" Hosting\\t port = 3000 \", url: \"Connect  via browser -> https://abc-3000.usw2.devt\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ParsesPortWithLayoutVariations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ParsesPortWithLayoutVariations(heading: \"HOSTING PORT | 3000\", url: \"CONNECT VIA BROWSER : <https://abc-3000.usw2.devtu\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ParsesPortWithLayoutVariations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ParsesPortWithLayoutVariations(heading: \"Hosting port: 3000\", url: \"Connect via browser: https://abc-3000.usw2.devtunn\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "ParsesPortWithLayoutVariations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.ParsesPortWithLayoutVariations(heading: \"\\x1b[32mHosting port: 3000\\x1b[0m\", url: \"\\x1b[34mConnect via browser: https://abc-3000.usw2.de\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "PreservesRecognizedFieldsAcrossLines",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.PreservesRecognizedFieldsAcrossLines",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RecognizesReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RecognizesReadiness(line: \" READY  TO ACCEPT CONNECTIONS FOR TUNNEL = mytunne\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RecognizesReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RecognizesReadiness(line: \"Ready to accept connections for tunnel - mytunnel.\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RecognizesReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RecognizesReadiness(line: \"Ready to accept connections for tunnel: mytunnel.u\"\u00b7\u00b7\u00b7)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RecognizesReadiness",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RecognizesReadiness(line: \"Ready to accept connections.\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RecognizesWrappedSingleLineFormatAndReadySuffix",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RecognizesWrappedSingleLineFormatAndReadySuffix",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"http://abc-3000.usw2.devtunnels.ms\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"https://abc-3000.usw2.devtunnels.ms.evil.example\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"https://abc-3000.usw2.devtunnels.ms/path\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"https://abc-3000.usw2.devtunnels.ms?secret=value\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"https://abc-3001.usw2.devtunnels.ms\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "RejectsUnexpectedPortUris",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.RejectsUnexpectedPortUris(url: \"https://user@abc-3000.usw2.devtunnels.ms\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "SplitsColoredLifecycleMessagesBeforeParsing",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.SplitsColoredLifecycleMessagesBeforeParsing(separator: \" | \")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "SplitsColoredLifecycleMessagesBeforeParsing",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.SplitsColoredLifecycleMessagesBeforeParsing(separator: \"; \")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "SplitsColoredLifecycleMessagesBeforeParsing",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.SplitsColoredLifecycleMessagesBeforeParsing(separator: \"\\n\")",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "UnknownOutputCannotJoinUnrelatedFields",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.UnknownOutputCannotJoinUnrelatedFields",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "WaitsForWrappedTunnelId",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.WaitsForWrappedTunnelId",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests",
+              "method": "WrappedDisconnectSupersedesUnfinishedMessage",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelOutputParserTests.WrappedDisconnectSupersedesUnfinishedMessage",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "AddDevTunnel_DefaultLifetimeDoesNotAddPersistenceAnnotation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.AddDevTunnel_DefaultLifetimeDoesNotAddPersistenceAnnotation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "AddDevTunnel_WithAnonymousAccess_SetsAllowAnonymousOption",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.AddDevTunnel_WithAnonymousAccess_SetsAllowAnonymousOption",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "AddDevTunnel_WithPersistentLifetime_AddsPersistenceAnnotation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.AddDevTunnel_WithPersistentLifetime_AddsPersistenceAnnotation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "AddDevTunnel_WithRegion_UsesResolvedTunnelIdForExecutableArgs",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.AddDevTunnel_WithRegion_UsesResolvedTunnelIdForExecutableArgs",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "AddDevTunnel_WithSpecificTunnelId_SetsTunnelIdProperty",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.AddDevTunnel_WithSpecificTunnelId_SetsTunnelIdProperty",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DcpStartupPublishesDevTunnelUrls",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls(useConsoleOutput: False, stopDuringUrlCallback: False, restartBeforeUrlCallbackCompletes: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DcpStartupPublishesDevTunnelUrls",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls(useConsoleOutput: True, stopDuringUrlCallback: False, restartBeforeUrlCallbackCompletes: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DcpStartupPublishesDevTunnelUrls",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls(useConsoleOutput: True, stopDuringUrlCallback: True, restartBeforeUrlCallbackCompletes: False)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DcpStartupPublishesDevTunnelUrls",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DcpStartupPublishesDevTunnelUrls(useConsoleOutput: True, stopDuringUrlCallback: True, restartBeforeUrlCallbackCompletes: True)",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DevTunnelHealthCheck_WithAutoSelectedRegion_UsesReturnedTunnelIdForAccessOperations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DevTunnelHealthCheck_WithAutoSelectedRegion_UsesReturnedTunnelIdForAccessOperations",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "DevTunnelHealthCheck_WithRegion_UsesResolvedTunnelIdForTunnelAndAccessOperations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.DevTunnelHealthCheck_WithRegion_UsesResolvedTunnelIdForTunnelAndAccessOperations",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithEndpointReference_ReturnsEndpointWithErrorWhenEndpointNotFound",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithEndpointReference_ReturnsEndpointWithErrorWhenEndpointNotFound",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithEndpointReference_ReturnsTunnelEndpoint",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithEndpointReference_ReturnsTunnelEndpoint",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithMultipleEndpoints_ReturnsCorrectTunnelEndpoint",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithMultipleEndpoints_ReturnsCorrectTunnelEndpoint",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithResourceAndEndpointName_ReturnsEndpointWithErrorWhenEndpointNotFound",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithResourceAndEndpointName_ReturnsEndpointWithErrorWhenEndpointNotFound",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithResourceAndEndpointName_ReturnsEndpointWithErrorWhenResourceNotReferenced",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithResourceAndEndpointName_ReturnsEndpointWithErrorWhenResourceNotReferenced",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithResourceAndEndpointName_ReturnsTunnelEndpoint",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithResourceAndEndpointName_ReturnsTunnelEndpoint",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "GetEndpoint_WithResourceBuilderAndEndpointName_ReturnsTunnelEndpoint",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.GetEndpoint_WithResourceBuilderAndEndpointName_ReturnsTunnelEndpoint",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "Monitor_PublishesUrlProperties",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.Monitor_PublishesUrlProperties",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "OnBeforeResourceStarted_WithAutoSelectedRegion_UsesCreatedTunnelIdForPortOperations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.OnBeforeResourceStarted_WithAutoSelectedRegion_UsesCreatedTunnelIdForPortOperations",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "OnBeforeResourceStarted_WithRegion_UsesResolvedTunnelIdForPortOperations",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.OnBeforeResourceStarted_WithRegion_UsesResolvedTunnelIdForPortOperations",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "ShowTunnelUrlsCommand_OpensInteractionWithRelevantUrls",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.ShowTunnelUrlsCommand_OpensInteractionWithRelevantUrls",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "ShowTunnelUrlsCommand_OpensInteractionWithoutLocalEndpointAllocation",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.ShowTunnelUrlsCommand_OpensInteractionWithoutLocalEndpointAllocation",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "ShowTunnelUrlsCommand_UsesTargetEndpointNetworkContext",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.ShowTunnelUrlsCommand_UsesTargetEndpointNetworkContext",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_InjectsServiceDiscoveryEnvironmentVariablesWhenReferencingOtherResourcesViaTheTunnel",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_InjectsServiceDiscoveryEnvironmentVariablesWhenReferencingOtherResourcesViaTheTunnel",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_ResolvesDynamicTargetPortForDevTunnelPortWhenAvailable",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_ResolvesDynamicTargetPortForDevTunnelPortWhenAvailable",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_UsesAllocatedPortForContainerDevTunnelPort",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_UsesAllocatedPortForContainerDevTunnelPort",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_UsesAllocatedPortForDevTunnelPortWhenTargetPortIsUnavailable",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_UsesAllocatedPortForDevTunnelPortWhenTargetPortIsUnavailable",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_UsesTargetPortForDevTunnelPortWhenAvailable",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_UsesTargetPortForDevTunnelPortWhenAvailable",
+              "multiplicity": 1
+            },
+            {
+              "class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests",
+              "method": "WithReference_WithAnonymousAccess_SetsPortAllowAnonymousOption",
+              "test_name": "Aspire.Hosting.DevTunnels.Tests.DevTunnelResourceBuilderExtensionsTests.WithReference_WithAnonymousAccess_SetsPortAllowAnonymousOption",
+              "multiplicity": 1
             }
-            Remove-Item $iterOutput -ErrorAction SilentlyContinue
-
-            if ($result -eq 0) {
-              Write-Host "✅ Iteration ${i}: PASS"
-              $pass++
-            } else {
-              Write-Host "❌ Iteration ${i}: FAIL (exit $result)"
-              $fail++
-              $dest = "${{ github.workspace }}/all-results/failure-$i"
-              New-Item -ItemType Directory -Path $dest -Force | Out-Null
-              Copy-Item -Recurse "${{ github.workspace }}/testresults/*" $dest -ErrorAction SilentlyContinue
+          ],
+          "targets": [
+            "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.OlderReconciliationCannotUndoNewerLogObservations",
+            "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.EndpointCallbackCanStopAndRestartParentWithoutBlockingMonitor",
+            "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.RestartRejectsReadinessFromPreviousRun",
+            "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.AnotherHostCannotEstablishUnknownLocalReadiness",
+            "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests.CancellingAHealthCallerDoesNotCancelTheSharedObserver"
+          ],
+          "monitor_class": "Aspire.Hosting.DevTunnels.Tests.DevTunnelMonitorTests",
+          "expected_monitor_cases": 42,
+          "expected_mtp_base_args": "--ignore-exit-code 8 --crashdump --hangdump --hangdump-type none --hangdump-timeout 10m --timeout 20m",
+          "workflow_id": 365601509,
+          "opportunity": "R01",
+          "dispatch_by": "2026-11-02T23:15:00Z",
+          "hard_stop": "2026-11-03T00:00:00Z"
+        }
+        '@
+        Set-Content "$env:EVIDENCE/frozen-inventory.json" $inventory
+        if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Linux' -or
+            $env:RUNNER_ARCH -ne 'X64' -or $os['ID'] -ne 'ubuntu' -or $os['VERSION_ID'] -ne '24.04') {
+          throw 'The admitted lane requires standard hosted Ubuntu 24.04 x64.'
+        }
+    - name: Setup native Unix paths
+      run: |
+        $receipt = @{
+          startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null
+          dotnetScript = './dotnet.sh'; buildScript = './build.sh'
+          workspace = $env:GITHUB_WORKSPACE
+          testRunPath = "$env:GITHUB_WORKSPACE/run-tests"
+          dotnetPath = "$env:GITHUB_WORKSPACE/.dotnet"; githubPathAppended = $false
+        }
+        @(
+          "DOTNET_SCRIPT=$($receipt.dotnetScript)"
+          "BUILD_SCRIPT=$($receipt.buildScript)"
+          "TEST_RUN_PATH=$($receipt.testRunPath)"
+        ) | Tee-Object "$env:EVIDENCE/setup-paths.log" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        $receipt.dotnetPath | Tee-Object "$env:EVIDENCE/setup-paths.log" -Append |
+          Out-File $env:GITHUB_PATH -Append -Encoding utf8
+        $receipt.githubPathAppended = @(Get-Content $env:GITHUB_PATH) -ccontains $receipt.dotnetPath
+        $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+        $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/native-paths.json"
+        if (!$receipt.githubPathAppended) { throw 'Native local SDK path was not appended.' }
+    - name: Checkout immutable natural baseline
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: microsoft/aspire
+        ref: 63c361dd3b0b32d55ab7c2276a660a8fd02dd127
+        persist-credentials: false
+    - name: Authenticate native source
+      run: |
+        $head = (git --no-pager rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $tree = (git --no-pager rev-parse 'HEAD^{tree}').Trim()
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $status = @(git --no-pager status --porcelain --untracked-files=normal)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        @{ head = $head; tree = $tree; status = $status; recordedAt = [DateTimeOffset]::UtcNow.ToString('O') } |
+          ConvertTo-Json | Set-Content "$env:EVIDENCE/source-before.json"
+        $frozen = Get-Content "$env:EVIDENCE/frozen-inventory.json" -Raw | ConvertFrom-Json
+        if ($head -cne $frozen.source -or $tree -cne $frozen.source_tree -or $status.Count -ne 0) {
+          throw 'Native source is not the unchanged clean admitted baseline.'
+        }
+        Copy-Item global.json "$env:EVIDENCE/global.json"
+    - name: Trust HTTPS development certificate (Linux)
+      env:
+        WSL_INTEROP: ''
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $receipt = @{
+          startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null
+          exitCode = $null; wslInterop = [string]$env:WSL_INTEROP
+        }
+        try {
+          & $env:DOTNET_SCRIPT dev-certs https --trust 2>&1 | Tee-Object "$env:EVIDENCE/dev-certs-output.log"
+          $receipt.exitCode = $LASTEXITCODE
+        }
+        finally {
+          $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/dev-certs.json"
+        }
+        if ($receipt.wslInterop -cne '' -or $null -eq $receipt.exitCode) { exit 1 }
+        if ($receipt.exitCode -notin @(0, 4)) { exit $receipt.exitCode }
+        # Native Linux CI explicitly accepts exit code 4 as well as 0.
+        exit 0
+    - name: Verify Docker is running
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $receipt = @{ startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null; exitCode = $null }
+        try {
+          docker info 2>&1 | Tee-Object "$env:EVIDENCE/docker-info.log"
+          $receipt.exitCode = $LASTEXITCODE
+        }
+        finally {
+          $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/docker-info.json"
+        }
+        if ($null -eq $receipt.exitCode) { exit 1 }
+        exit $receipt.exitCode
+    - name: Restore and build ordinary test project
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $receipt = @{ startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null; exitCode = $null }
+        $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/build.json"
+        try {
+          & $env:BUILD_SCRIPT -restore -ci -build `
+            -projects "$env:GITHUB_WORKSPACE/tests/Aspire.Hosting.DevTunnels.Tests/Aspire.Hosting.DevTunnels.Tests.csproj" `
+            /p:InstallBrowsersForPlaywright=false 2>&1 | Tee-Object "$env:EVIDENCE/build-output.log"
+          $receipt.exitCode = $LASTEXITCODE
+        }
+        finally {
+          $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/build.json"
+        }
+        if ($null -eq $receipt.exitCode -or $receipt.exitCode -ne 0) { exit 1 }
+        exit 0
+    - name: Resolve native MTP diagnostic arguments
+      env:
+        NUGET_PACKAGES: ${{ github.workspace }}/.packages
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $receipt = @{
+          startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null
+          exitCode = $null; value = $null; property = 'MtpBaseArgs'
+        }
+        try {
+          $output = @(& $env:DOTNET_SCRIPT msbuild `
+            "$env:GITHUB_WORKSPACE/tests/Aspire.Hosting.DevTunnels.Tests/Aspire.Hosting.DevTunnels.Tests.csproj" `
+            -nologo -getProperty:MtpBaseArgs /p:ContinuousIntegrationBuild=true 2>&1 |
+            Tee-Object "$env:EVIDENCE/diagnostics-output.log")
+          $receipt.exitCode = $LASTEXITCODE
+          $receipt.value = ($output -join "`n").Trim()
+        }
+        finally {
+          $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/diagnostics.json"
+        }
+        $frozen = Get-Content "$env:EVIDENCE/frozen-inventory.json" -Raw | ConvertFrom-Json
+        if ($receipt.exitCode -ne 0 -or $null -eq $receipt.exitCode -or $receipt.value -cne $frozen.expected_mtp_base_args) {
+          throw 'Evaluated native MtpBaseArgs differs from the frozen baseline.'
+        }
+        "EFFECTIVE_MTP_BASE_ARGS=$($receipt.value)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        exit 0
+    - name: Capture actual SDK and runtimes
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        & $env:DOTNET_SCRIPT --info 2>&1 | Tee-Object "$env:EVIDENCE/dotnet-info.log"
+        exit $LASTEXITCODE
+      if: always()
+    - name: Execute exactly one ordinary assembly
+      env:
+        ASPIRE__TEST__DCPLOGBASEPATH: ${{ runner.temp }}/pr21424-recheck-v2-${{ matrix.machine }}/testresults/dcp
+        NUGET_PACKAGES: ${{ github.workspace }}/.packages
+        PLAYWRIGHT_INSTALLED: 'false'
+        TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: netaspireci.azurecr.io
+        ASPIRE_E2E_UBUNTU_APT_MIRROR: http://azure.archive.ubuntu.com/ubuntu/
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $false
+        $results = "$env:EVIDENCE/testresults"
+        New-Item -ItemType Directory -Path $results -Force | Out-Null
+        $receipt = @{
+          plan = $env:PLAN_ID; machine = [int]$env:MACHINE_INDEX; source = $env:SOURCE_SHA
+          invocations = 1; startedAt = [DateTimeOffset]::UtcNow.ToString('O'); endedAt = $null; exitCode = $null
+          mtpBaseArgs = $env:EFFECTIVE_MTP_BASE_ARGS
+        }
+        $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/execution.json"
+        $heartbeat = $null
+        try {
+          $diagnostics = Get-Content "$env:EVIDENCE/diagnostics.json" -Raw | ConvertFrom-Json
+          if ($env:EFFECTIVE_MTP_BASE_ARGS -cne $diagnostics.value) { throw 'Diagnostic argument export differs.' }
+          $mtpArgs = @($env:EFFECTIVE_MTP_BASE_ARGS -split ' ')
+          $heartbeat = Start-Process -FilePath $env:DOTNET_SCRIPT `
+            -ArgumentList "$env:GITHUB_WORKSPACE/tools/scripts/Heartbeat.cs 60" -NoNewWindow -PassThru
+          & $env:DOTNET_SCRIPT test --project "$env:GITHUB_WORKSPACE/tests/Aspire.Hosting.DevTunnels.Tests/Aspire.Hosting.DevTunnels.Tests.csproj" `
+            /p:ContinuousIntegrationBuild=true /p:TrxFileNamePrefix=Hosting.DevTunnels `
+            "-bl:$results/test.binlog" --no-launch-profile --no-restore --no-build -- `
+            @mtpArgs --report-trx --results-directory $results `
+            --filter-not-trait 'quarantined=true' --filter-not-trait 'outerloop=true' `
+            2>&1 | Tee-Object "$env:EVIDENCE/test-output.log"
+          $receipt.exitCode = $LASTEXITCODE
+        }
+        finally {
+          if ($heartbeat -and !$heartbeat.HasExited) { Stop-Process -Id $heartbeat.Id }
+          $receipt.endedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          $receipt | ConvertTo-Json | Set-Content "$env:EVIDENCE/execution.json"
+        }
+        if ($null -eq $receipt.exitCode) { exit 1 }
+        exit $receipt.exitCode
+      if: ${{ success() }}
+    - name: Verify native source stayed unchanged
+      run: |
+        $head = (git --no-pager rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $tree = (git --no-pager rev-parse 'HEAD^{tree}').Trim()
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $status = @(git --no-pager status --porcelain --untracked-files=normal)
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        @{ head = $head; tree = $tree; status = $status; recordedAt = [DateTimeOffset]::UtcNow.ToString('O') } |
+          ConvertTo-Json | Set-Content "$env:EVIDENCE/source-after.json"
+        $frozen = Get-Content "$env:EVIDENCE/frozen-inventory.json" -Raw | ConvertFrom-Json
+        if ($head -cne $frozen.source -or $tree -cne $frozen.source_tree -or $status.Count -ne 0) {
+          throw 'Native source is not the unchanged clean admitted baseline.'
+        }
+      if: always()
+    - name: Guard frozen original inventory and receipts
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $frozen = Get-Content "$env:EVIDENCE/frozen-inventory.json" -Raw | ConvertFrom-Json
+        $files = @(Get-ChildItem "$env:EVIDENCE/testresults" -Filter '*.trx' -Recurse)
+        if ($files.Count -ne 1) { throw "Expected one ordinary-assembly TRX; found $($files.Count)." }
+        [xml]$trx = Get-Content $files[0].FullName -Raw
+        $ns = [System.Xml.XmlNamespaceManager]::new($trx.NameTable)
+        $ns.AddNamespace('t', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
+        $rows = @($trx.SelectNodes('/t:TestRun/t:Results/t:UnitTestResult', $ns))
+        $definitions = @{}
+        foreach ($definition in $trx.SelectNodes('/t:TestRun/t:TestDefinitions/t:UnitTest', $ns)) {
+          if (!$definition.id -or $definitions.ContainsKey($definition.id)) { throw 'Duplicate or missing definition ID.' }
+          $definitions[$definition.id] = $definition
+        }
+        $observed = [System.Collections.Generic.Dictionary[string,int]]::new([System.StringComparer]::Ordinal)
+        $executionIds = @{}
+        $inventory = @(
+          foreach ($row in $rows) {
+            if (!$definitions.ContainsKey($row.testId)) { throw 'Result has no test definition.' }
+            $definition = $definitions[$row.testId]
+            if (!$row.executionId -or $executionIds.ContainsKey($row.executionId) -or $definition.Execution.id -cne $row.executionId) {
+              throw 'Duplicate, missing, or mismatched execution ID.'
             }
-
-            Write-Host "::endgroup::"
+            $executionIds[$row.executionId] = $true
+            if ($row.outcome -cnotin @('Passed', 'Failed')) { throw 'Skipped or nondefinitive result.' }
+            $identity = @($definition.TestMethod.className, $definition.TestMethod.name, $row.testName) | ConvertTo-Json -Compress
+            if (!$observed.ContainsKey($identity)) { $observed[$identity] = 0 }
+            $observed[$identity]++
+            @{
+              class = $definition.TestMethod.className
+              method = $definition.TestMethod.name
+              test_name = $row.testName
+              id = $row.testId
+              executionId = $row.executionId
+              outcome = $row.outcome
+              startedAt = $row.startTime
+              endedAt = $row.endTime
+            }
           }
-
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "Summary for runner #${{ matrix.index }} on ${{ matrix.os }}"
-          Write-Host "  Passed: $pass / $iterations"
-          Write-Host "  Failed: $fail / $iterations"
-          Write-Host "========================================"
-
-          if ($fail -gt 0) { exit 1 }
-
-      - name: Upload failure logs
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: failures-${{ matrix.os }}-${{ matrix.index }}
-          path: all-results/
-          if-no-files-found: ignore
-
-  results:
-    if: ${{ always() && github.repository == 'microsoft/aspire' }}
-    runs-on: ubuntu-latest
-    name: Reproduce Results
-    needs: [reproduce]
-    permissions: {}
-    steps:
-      - name: Summary
-        shell: bash
-        run: |
-          echo "## Reproduce Flaky Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Project | \`${{ env.TEST_PROJECT }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Filter | \`${{ env.TEST_FILTER }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| OSes | ${{ env.TARGET_OSES }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Runners per OS | ${{ env.RUNNERS_PER_OS }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Iterations per runner | ${{ env.ITERATIONS_PER_RUNNER }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.reproduce.result }}" = "success" ]; then
-            echo "### ✅ All iterations passed on all runners" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.reproduce.result }}" = "failure" ]; then
-            echo "### ❌ Some runners reported failures" >> $GITHUB_STEP_SUMMARY
-            echo "Check individual job logs and uploaded failure artifacts for details." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ⚠️ Reproduce job was ${{ needs.reproduce.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Fail if reproduce did not succeed
-        if: ${{ needs.reproduce.result != 'success' }}
-        run: exit 1
+        )
+        $expected = [System.Collections.Generic.Dictionary[string,int]]::new([System.StringComparer]::Ordinal)
+        foreach ($item in $frozen.common_suite) {
+          $identity = @($item.class, $item.method, $item.test_name) | ConvertTo-Json -Compress
+          if ($expected.ContainsKey($identity) -or $item.multiplicity -lt 1) { throw 'Invalid frozen identity.' }
+          $expected[$identity] = [int]$item.multiplicity
+        }
+        if ($observed.Count -ne $expected.Count -or $rows.Count -ne $frozen.expected_results) { throw 'Full inventory differs.' }
+        foreach ($identity in $expected.Keys) {
+          if (!$observed.ContainsKey($identity) -or $observed[$identity] -ne $expected[$identity]) { throw "Inventory mismatch: $identity" }
+        }
+        foreach ($target in $frozen.targets) {
+          $matches = @($rows | Where-Object { $_.testName -ceq $target })
+          if ($matches.Count -ne 1 -or $matches[0].outcome -cnotin @('Passed', 'Failed')) { throw "Invalid target: $target" }
+        }
+        $counterNodes = @($trx.SelectNodes('/t:TestRun/t:ResultSummary/t:Counters', $ns))
+        if ($counterNodes.Count -ne 1) { throw 'Missing or duplicate counters.' }
+        $counters = @{}
+        foreach ($attribute in $counterNodes[0].Attributes) {
+          if ($attribute.Value -cnotmatch '^\d+$') { throw 'Invalid counter value.' }
+          $counters[$attribute.Name] = [int]$attribute.Value
+        }
+        $passed = @($rows | Where-Object outcome -CEQ 'Passed').Count
+        $failed = @($rows | Where-Object outcome -CEQ 'Failed').Count
+        $required = @{ total = $rows.Count; executed = $rows.Count; passed = $passed; failed = $failed
+          error = 0; timeout = 0; aborted = 0; inconclusive = 0; passedButRunAborted = 0
+          notRunnable = 0; notExecuted = 0; disconnected = 0; warning = 0; completed = 0; inProgress = 0; pending = 0 }
+        foreach ($key in $required.Keys) {
+          if (!$counters.ContainsKey($key) -or $counters[$key] -ne $required[$key]) { throw "Absent or inconsistent counter: $key" }
+        }
+        foreach ($key in $counters.Keys) {
+          if (!$required.ContainsKey($key) -and $counters[$key] -ne 0) { throw "Unknown nonzero counter: $key" }
+        }
+        $summary = $trx.SelectSingleNode('/t:TestRun/t:ResultSummary', $ns)
+        if (($failed -gt 0 -and $summary.outcome -cne 'Failed') -or ($failed -eq 0 -and $summary.outcome -cne 'Completed')) {
+          throw 'Contradictory result summary outcome.'
+        }
+        # MTP emits this exact RunInfo for ordinary failed rows, not a second fixture failure.
+        # See https://learn.microsoft.com/en-us/dotnet/core/testing/microsoft-testing-platform-troubleshooting#exit-codes
+        $normal = "Exit code indicates failure: '2'. Please refer to https://aka.ms/testingplatform/exitcodes for more information."
+        $classified = @(
+          foreach ($info in $trx.SelectNodes('//t:RunInfo', $ns)) {
+            if ($info.outcome -cne 'Error' -or $info.Text -cne $normal -or $failed -eq 0) { throw 'Unexpected run-level information/error.' }
+            $info.Text
+          }
+        )
+        if (@($trx.SelectNodes('/t:TestRun/t:ResultSummary/t:Output/t:ErrorInfo', $ns)).Count -ne 0) { throw 'Run-level ErrorInfo exists.' }
+        $execution = Get-Content "$env:EVIDENCE/execution.json" -Raw | ConvertFrom-Json
+        if ($execution.source -cne $frozen.source -or $execution.plan -cne $frozen.plan_id -or $execution.invocations -ne 1 -or
+            !$execution.startedAt -or !$execution.endedAt -or $null -eq $execution.exitCode) { throw 'Invalid single-execution receipt.' }
+        if (($failed -eq 0 -and $execution.exitCode -ne 0) -or ($failed -gt 0 -and $execution.exitCode -notin @(1, 2))) {
+          throw 'Test exit code contradicts original TRX results.'
+        }
+        $start = [DateTimeOffset]::Parse($execution.startedAt)
+        $end = [DateTimeOffset]::Parse($execution.endedAt)
+        $build = Get-Content "$env:EVIDENCE/build.json" -Raw | ConvertFrom-Json
+        if ($start -gt $end -or $build.exitCode -ne 0 -or
+            [DateTimeOffset]::Parse($build.startedAt) -gt [DateTimeOffset]::Parse($build.endedAt) -or
+            [DateTimeOffset]::Parse($build.endedAt) -gt $start) { throw 'Invalid build/execution timing or build exit.' }
+        $paths = Get-Content "$env:EVIDENCE/native-paths.json" -Raw | ConvertFrom-Json
+        $certificate = Get-Content "$env:EVIDENCE/dev-certs.json" -Raw | ConvertFrom-Json
+        $docker = Get-Content "$env:EVIDENCE/docker-info.json" -Raw | ConvertFrom-Json
+        $diagnostics = Get-Content "$env:EVIDENCE/diagnostics.json" -Raw | ConvertFrom-Json
+        if ($paths.githubPathAppended -ne $true -or !$paths.workspace -or
+            $paths.dotnetScript -cne './dotnet.sh' -or $paths.buildScript -cne './build.sh' -or
+            $paths.dotnetPath -cne "$($paths.workspace)/.dotnet" -or $paths.testRunPath -cne "$($paths.workspace)/run-tests") {
+          throw 'Native Unix path setup is invalid.'
+        }
+        if ($null -eq $certificate.exitCode -or $certificate.exitCode -notin @(0, 4) -or $certificate.wslInterop -cne '') {
+          throw 'Native Linux certificate setup is invalid.'
+        }
+        if ($null -eq $docker.exitCode -or $docker.exitCode -ne 0) { throw 'Native Docker setup failed.' }
+        if ($null -eq $diagnostics.exitCode -or $diagnostics.exitCode -ne 0 -or $diagnostics.property -cne 'MtpBaseArgs' -or
+            $diagnostics.value -cne $frozen.expected_mtp_base_args -or $execution.mtpBaseArgs -cne $diagnostics.value) {
+          throw 'Native MTP diagnostic arguments differ.'
+        }
+        $previousEnd = $null
+        foreach ($receipt in @($paths, $certificate, $docker, $build, $diagnostics)) {
+          $receiptStart = [DateTimeOffset]::Parse($receipt.startedAt)
+          $receiptEnd = [DateTimeOffset]::Parse($receipt.endedAt)
+          if ($receiptStart -gt $receiptEnd -or ($null -ne $previousEnd -and $receiptStart -lt $previousEnd)) {
+            throw 'Native setup/build/diagnostic timing is invalid.'
+          }
+          $previousEnd = $receiptEnd
+        }
+        if ($previousEnd -gt $start) { throw 'Native diagnostics were not resolved before suite invocation.' }
+        foreach ($phase in @('before', 'after')) {
+          $source = Get-Content "$env:EVIDENCE/source-$phase.json" -Raw | ConvertFrom-Json
+          if ($source.head -cne $frozen.source -or $source.tree -cne $frozen.source_tree -or @($source.status).Count -ne 0) {
+            throw "Source mismatch: $phase"
+          }
+          $recorded = [DateTimeOffset]::Parse($source.recordedAt)
+          if (($phase -eq 'before' -and $recorded -gt [DateTimeOffset]::Parse($certificate.startedAt)) -or
+              ($phase -eq 'after' -and $recorded -lt $end)) { throw "Source timestamp mismatch: $phase" }
+        }
+        @{ valid = $true; rows = $rows.Count; passed = $passed; failed = $failed; inventory = $inventory
+          counters = $counters; classifiedRunInfos = $classified } |
+          ConvertTo-Json -Depth 10 | Set-Content "$env:EVIDENCE/guard.json"
+        Write-Host "VALID: $($rows.Count) frozen baseline identities; $passed passed, $failed failed; $($frozen.targets.Count) linked targets once each."
+      if: always()
+    - name: Preserve every opportunity, successful or failed
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: pr-21424-recheck-v2-ubuntu-${{ matrix.machine }}
+        path: ${{ runner.temp }}/pr21424-recheck-v2-${{ matrix.machine }}/
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 30
+      if: always()
