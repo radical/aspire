@@ -19,6 +19,7 @@ env:
   SOURCE_SHA: ${{ inputs.revision == 'baseline' && '6a8f53125b8788df3c409088381057a3c0dacfff' || 'cc6ab9c75d655dbbba3c66190a0895f64afc81d7' }}
   DOTNET_ROOT: ${{ github.workspace }}/.dotnet
   NUGET_PACKAGES: ${{ github.workspace }}/.packages
+  TEST_PROJECT_PATH: ${{ github.workspace }}/tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj
 
 jobs:
   proof:
@@ -41,6 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git --no-pager rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f "$TEST_PROJECT_PATH"
           printf 'Measured revision: %s\n' "$SOURCE_SHA"
           printf 'Runner image: %s %s\n' "${ImageOS-unset}" "${ImageVersion-unset}"
           printf '%s/.dotnet\n' "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
@@ -49,7 +51,7 @@ jobs:
       - name: Restore and build the test project
         run: >-
           ./build.sh -restore -ci -build
-          -projects tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj
+          -projects "$TEST_PROJECT_PATH"
           /p:InstallBrowsersForPlaywright=false
 
       - name: Trust HTTPS development certificate
@@ -70,7 +72,7 @@ jobs:
           # Each job is a fresh machine; no global Docker or process cleanup is needed.
           set +e
           ./dotnet.sh test \
-            --project tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj \
+            --project "$TEST_PROJECT_PATH" \
             --no-restore --no-build --no-launch-profile -- \
             --timeout 10m \
             --results-directory "$GITHUB_WORKSPACE/testresults" \
