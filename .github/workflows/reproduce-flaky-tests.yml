@@ -1,584 +1,123 @@
-# Reproduces flaky tests by running them repeatedly across multiple OS runners.
-#
-# HOW TO USE:
-# 1. Edit the CONFIGURATION section below with the test you want to reproduce
-# 2. Push to your branch
-# 3. Trigger: gh workflow run reproduce-flaky-tests.yml --repo microsoft/aspire --ref <your-branch>
-# 4. Check the results across OSes and runners
-#
-# The configuration is designed to be edited by agents (Copilot, etc.)
-# who modify the env vars below and push to trigger a run.
-
-name: Reproduce Flaky Tests
-run-name: "${{ inputs.repair_phase != '' && format('Repair {0} {1} [{2}] {3}', inputs.repair_target, inputs.repair_phase, inputs.controller_run_id, inputs.candidate_sha) || format('Real test proof round {0} [{1}]', inputs.proof_round, inputs.controller_run_id) }}"
+name: Azure Functions Test Fix Proof
+run-name: "Test fix proof 21566 - ${{ inputs.revision }}"
 
 on:
   workflow_dispatch:
     inputs:
-      controller_run_id:
-        description: Fork-only parent agent correlation
-        type: string
+      revision:
+        description: Pinned revision to measure
         required: true
-      expected_sha:
-        description: Expected frozen candidate commit
-        type: string
-        required: false
-      proof_round:
-        description: Bounded experiment round
         type: choice
-        options: ['1', '2']
-        required: false
-      proof_iterations:
-        description: Bounded experiment iterations
-        type: choice
-        options: ['1', '2']
-        required: false
-      repair_phase:
-        description: Fork-only repair experiment phase
-        type: choice
-        options: [reproduce, verify]
-        required: false
-      candidate_sha:
-        description: Exact source commit, separate from the trusted workflow ref
-        type: string
-        required: false
-      repair_iterations:
-        description: Repair experiment repetitions (1-50)
-        type: number
-        default: 25
-      repair_runners:
-        description: Repair experiment parallel runners (1-3)
-        type: number
-        default: 1
-      quarantine_project:
-        description: Reproduce contention with other quarantined tests
-        type: boolean
-        default: false
-      repair_target:
-        description: Approved fork-only repair target
-        type: choice
-        options: [executable, openai, openai-controlled]
-        default: executable
+        options:
+          - baseline
+          - fixed
 
 permissions:
   contents: read
 
-# ============================================================
-# CONFIGURATION — Edit these values to customize the test run
-# ============================================================
 env:
-  # Test project shortname (maps to tests/Aspire.{name}.Tests/ or tests/{name}.Tests/)
-  # Examples: Hosting, Core, Dashboard, Components.Common, Cli.EndToEnd
-  TEST_PROJECT: "${{ startsWith(inputs.repair_target, 'openai') && 'Hosting.OpenAI' || 'Hosting' }}"
-
-  # Test filter arguments passed to dotnet test (after the -- separator).
-  # Use quotes around wildcard patterns to prevent shell glob expansion.
-  # Examples:
-  #   --filter-method "*.TestMethodName"
-  #   --filter-class "*.TestClassName"
-  #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: >-
-    ${{ inputs.quarantine_project && '--filter-trait "quarantined=true" --filter-not-trait "outerloop=true"' || startsWith(inputs.repair_target, 'openai') && '--filter-method "*.DependentResourceWaitsForOpenAIModelResourceWithHealthCheckToBeHealthy"' || '--filter-method "*.ExecutableExitsImmediately"' }}
-
-  # Target operating systems (comma-separated)
-  # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "${{ startsWith(inputs.repair_target, 'openai') && 'ubuntu-latest' || 'windows-latest' }}"
-
-  # Number of parallel runners per OS
-  # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "${{ inputs.repair_phase != '' && inputs.repair_runners || 1 }}"
-
-  # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "${{ inputs.repair_phase != '' && inputs.repair_iterations || inputs.proof_iterations }}"
+  SOURCE_SHA: ${{ inputs.revision == 'baseline' && '6a8f53125b8788df3c409088381057a3c0dacfff' || 'cc6ab9c75d655dbbba3c66190a0895f64afc81d7' }}
+  DOTNET_ROOT: ${{ github.workspace }}/.dotnet
+  NUGET_PACKAGES: ${{ github.workspace }}/.packages
 
 jobs:
-
-  setup:
-    name: Generate matrix
-    if: ${{ github.repository == 'radical/aspire' }}
+  proof:
+    if: github.repository == 'radical/aspire'
+    name: "${{ inputs.revision }} / fresh Linux runner ${{ matrix.index }}"
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.generate.outputs.matrix }}
-      is_cli_e2e: ${{ steps.detect_cli_e2e.outputs.is_cli_e2e }}
-    steps:
-      - name: Validate bounded experiment receipt
-        shell: bash
-        env:
-          PARENT: ${{ inputs.controller_run_id }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          ROUND: ${{ inputs.proof_round }}
-          ITERATIONS: ${{ inputs.proof_iterations }}
-          REPAIR_PHASE: ${{ inputs.repair_phase }}
-          CANDIDATE: ${{ inputs.candidate_sha }}
-          REPAIR_ITERATIONS: ${{ inputs.repair_iterations }}
-          REPAIR_RUNNERS: ${{ inputs.repair_runners }}
-          REPAIR_TARGET: ${{ inputs.repair_target }}
-        run: |
-          if [[ -n "$REPAIR_PHASE" ]]; then
-            [[ "$GITHUB_REF" == refs/heads/main ]] || { echo "::error::Repair workflow must run on trusted main"; exit 1; }
-            [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full candidate SHA"; exit 1; }
-            [[ "$REPAIR_PHASE" == reproduce || "$REPAIR_PHASE" == verify ]] || { echo "::error::Invalid repair phase"; exit 1; }
-            [[ "$REPAIR_TARGET" == executable || "$REPAIR_TARGET" == openai || "$REPAIR_TARGET" == openai-controlled ]] || { echo "::error::Unapproved repair target"; exit 1; }
-            [[ "$REPAIR_ITERATIONS" =~ ^[0-9]+$ ]] && (( REPAIR_ITERATIONS >= 1 && REPAIR_ITERATIONS <= 50 )) || { echo "::error::Repair repetitions must be between 1 and 50"; exit 1; }
-            [[ "$REPAIR_RUNNERS" =~ ^[0-9]+$ ]] && (( REPAIR_RUNNERS >= 1 && REPAIR_RUNNERS <= 3 )) || { echo "::error::Repair runners must be between 1 and 3"; exit 1; }
-            [[ "$PARENT" =~ ^[0-9]+$ ]] || { echo "::error::Missing controller correlation"; exit 1; }
-            exit 0
-          fi
-          [[ "$GITHUB_REF" == refs/heads/flaky-real-candidate-20261021 ]] || exit 1
-          [[ "$EXPECTED_SHA" == "$GITHUB_SHA" ]] || exit 1
-          [[ "$PARENT" =~ ^[0-9]+$ ]] || exit 1
-          [[ "$ROUND" =~ ^[12]$ && "$ITERATIONS" == "$ROUND" ]] || exit 1
-      - name: Validate configuration
-        shell: bash
-        run: |
-          ERRORS=0
-
-          # Validate RUNNERS_PER_OS is a positive integer
-          if ! [[ "${{ env.RUNNERS_PER_OS }}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::RUNNERS_PER_OS must be a positive integer, got '${{ env.RUNNERS_PER_OS }}'"
-            ERRORS=1
-          fi
-
-          # Validate ITERATIONS_PER_RUNNER is a positive integer
-          if ! [[ "${{ env.ITERATIONS_PER_RUNNER }}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::ITERATIONS_PER_RUNNER must be a positive integer, got '${{ env.ITERATIONS_PER_RUNNER }}'"
-            ERRORS=1
-          fi
-
-          # Validate TARGET_OSES is not empty and contains only known runners
-          if [[ -z "${{ env.TARGET_OSES }}" ]]; then
-            echo "::error::TARGET_OSES must not be empty"
-            ERRORS=1
-          else
-            IFS=',' read -ra CHECK_OSES <<< "${{ env.TARGET_OSES }}"
-            for os in "${CHECK_OSES[@]}"; do
-              os=$(echo "$os" | xargs)
-              if [[ "$os" != "ubuntu-latest" && "$os" != "windows-latest" && "$os" != "macos-latest" ]]; then
-                echo "::error::Unknown OS in TARGET_OSES: '$os'. Allowed: ubuntu-latest, windows-latest, macos-latest"
-                ERRORS=1
-              fi
-            done
-          fi
-
-          # Validate TEST_FILTER is not the placeholder
-          if [[ "${{ env.TEST_FILTER }}" == *"YourTestMethodName"* ]]; then
-            echo "::error::TEST_FILTER still contains the placeholder 'YourTestMethodName'. Configure it with the actual test to reproduce."
-            ERRORS=1
-          fi
-
-          if [[ $ERRORS -ne 0 ]]; then exit 1; fi
-
-      - name: Detect CLI E2E project
-        id: detect_cli_e2e
-        shell: bash
-        run: |
-          if [ "${{ env.TEST_PROJECT }}" = "Cli.EndToEnd" ]; then
-            echo "is_cli_e2e=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_cli_e2e=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate runner matrix
-        id: generate
-        shell: bash
-        run: |
-          IFS=',' read -ra OSES <<< "${{ env.TARGET_OSES }}"
-          RUNNERS=${{ env.RUNNERS_PER_OS }}
-
-          ENTRIES=""
-          for os in "${OSES[@]}"; do
-            os=$(echo "$os" | xargs)
-            for i in $(seq 1 "$RUNNERS"); do
-              if [ -n "$ENTRIES" ]; then ENTRIES="$ENTRIES,"; fi
-              ENTRIES="${ENTRIES}{\"os\":\"${os}\",\"index\":${i}}"
-            done
-          done
-
-          MATRIX="{\"include\":[${ENTRIES}]}"
-          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
-
-          TOTAL=$(echo "$ENTRIES" | tr ',' '\n' | wc -l)
-          echo "Generated matrix: $TOTAL runners across ${#OSES[@]} OS(es)"
-          echo "Each runner will execute ${{ env.ITERATIONS_PER_RUNNER }} iterations"
-          echo "Total test executions: $(( TOTAL * ${{ env.ITERATIONS_PER_RUNNER }} ))"
-
-  build_cli_e2e_image:
-    name: Build CLI E2E Docker image
-    needs: setup
-    if: ${{ github.repository == 'radical/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
-    uses: ./.github/workflows/build-cli-e2e-image.yml
-
-  reproduce:
-    name: "${{ matrix.os }} #${{ matrix.index }}"
-    needs: [setup, build_cli_e2e_image]
-    if: >-
-      ${{
-        github.repository == 'radical/aspire' &&
-        !cancelled() &&
-        needs.setup.result == 'success' &&
-        (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
-      }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
-    env:
-      DOTNET_ROOT: ${{ github.workspace }}/.dotnet
-
+      matrix:
+        index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
-      - name: Setup vars (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: |
-          echo "DOTNET_SCRIPT=./dotnet.sh" >> $GITHUB_ENV
-          echo "BUILD_SCRIPT=./build.sh" >> $GITHUB_ENV
-          echo "${{ github.workspace }}/.dotnet" >> $GITHUB_PATH
-
-      - name: Setup vars (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          echo "DOTNET_SCRIPT=.\dotnet.cmd" >> $env:GITHUB_ENV
-          echo "BUILD_SCRIPT=.\build.cmd" >> $env:GITHUB_ENV
-          echo "${{ github.workspace }}\.dotnet" >> $env:GITHUB_PATH
-
-      - name: Checkout code
+      - name: Checkout measured revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-          ref: ${{ inputs.candidate_sha || github.sha }}
+          repository: microsoft/aspire
+          ref: ${{ env.SOURCE_SHA }}
 
-      - name: Record exact source checkout independently from workflow commit
-        if: inputs.repair_phase != ''
-        shell: pwsh
-        env:
-          CANDIDATE: ${{ inputs.candidate_sha }}
-          PHASE: ${{ inputs.repair_phase }}
-          CONTROLLER: ${{ inputs.controller_run_id }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          ITERATIONS: ${{ inputs.repair_iterations }}
-          RUNNERS: ${{ inputs.repair_runners }}
-          RUNNER_INDEX: ${{ matrix.index }}
-          QUARANTINE_PROJECT: ${{ inputs.quarantine_project }}
-        run: |
-          $actual = git --no-pager rev-parse HEAD
-          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:CANDIDATE) {
-              throw "Candidate checkout did not match authorized SHA"
-          }
-          @{
-              candidate_sha = $actual
-              workflow_sha = $env:WORKFLOW_SHA
-              phase = $env:PHASE
-              controller_run_id = $env:CONTROLLER
-              run_id = $env:GITHUB_RUN_ID
-              run_attempt = $env:GITHUB_RUN_ATTEMPT
-              iterations_per_runner = [int]$env:ITERATIONS
-              runners = [int]$env:RUNNERS
-              runner_index = [int]$env:RUNNER_INDEX
-              quarantine_project = $env:QUARANTINE_PROJECT -eq 'true'
-          } | ConvertTo-Json | Set-Content candidate-receipt.json
-
-      - name: Trust HTTPS development certificate (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          EXIT_CODE=0
-          ${{ env.DOTNET_SCRIPT }} dev-certs https --trust || EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 4 ]; then
-            echo "dev-certs https --trust failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
-          fi
-        env:
-          WSL_INTEROP: ""
-
-      - name: Verify Docker is running (Linux)
-        if: runner.os == 'Linux'
-        run: docker info
-
-      - name: Download prebuilt CLI E2E Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-dotnet-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Download prebuilt CLI E2E Java Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-polyglot-java-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Download prebuilt CLI E2E polyglot Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: cli-e2e-polyglot-image
-          path: ${{ github.workspace }}/cli-e2e-image
-
-      - name: Load prebuilt CLI E2E Docker image
-        if: ${{ needs.setup.outputs.is_cli_e2e == 'true' && runner.os == 'Linux' }}
-        shell: bash
+      - name: Verify measured revision and environment
         run: |
           set -euo pipefail
-          eng/scripts/load-cli-e2e-images.sh \
-            --image-dir "${{ github.workspace }}/cli-e2e-image" \
-            --require-dotnet true \
-            --require-polyglot true \
-            --require-java true
+          test "$(git --no-pager rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'Measured revision: %s\n' "$SOURCE_SHA"
+          printf 'Runner image: %s %s\n' "${ImageOS-unset}" "${ImageVersion-unset}"
+          printf '%s/.dotnet\n' "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          docker info
 
-      - name: Unlock macOS keychain
-        if: runner.os == 'macOS'
-        uses: ./.github/actions/unlock-macos-keychain
-
-      - name: Compute test project path
-        shell: pwsh
-        run: |
-          $testShortName = "${{ env.TEST_PROJECT }}"
-          $projectPath1 = "${{ github.workspace }}/tests/$testShortName.Tests/$testShortName.Tests.csproj"
-          $projectPath2 = "${{ github.workspace }}/tests/Aspire.$testShortName.Tests/Aspire.$testShortName.Tests.csproj"
-
-          if (Test-Path -Path $projectPath1) {
-              $projectPath = $projectPath1
-          } elseif (Test-Path -Path $projectPath2) {
-              $projectPath = $projectPath2
-          } else {
-              Write-Error "No test project found for shortname '$testShortName'. Looked at: $projectPath1, $projectPath2"
-              exit 1
-          }
-
-          echo "TEST_PROJECT_PATH=$projectPath" >> $env:GITHUB_ENV
-          Write-Host "Resolved test project: $projectPath"
-
-      - name: Build test project
-        run: >
-          ${{ env.BUILD_SCRIPT }}
-          -restore -ci -build
-          -projects ${{ env.TEST_PROJECT_PATH }}
+      - name: Restore and build the test project
+        run: >-
+          ./build.sh -restore -ci -build
+          -projects tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj
           /p:InstallBrowsersForPlaywright=false
-          /p:RunQuarantinedTests=true
 
-      - name: Run test iterations (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Trust HTTPS development certificate
+        env:
+          WSL_INTEROP: ""
+        run: |
+          EXIT_CODE=0
+          ./dotnet.sh dev-certs https --trust || EXIT_CODE=$?
+          if [ "$EXIT_CODE" -ne 0 ] && [ "$EXIT_CODE" -ne 4 ]; then
+            exit "$EXIT_CODE"
+          fi
+
+      - name: Execute the class once on this fresh runner
         env:
           ASPIRE__TEST__DCPLOGBASEPATH: ${{ github.workspace }}/testresults/dcp
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
-          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: 'netaspireci.azurecr.io'
-          # Skip default quarantine/outerloop exclusion filters so the target test can run
-          SkipDefaultTestFilters: true
+          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: netaspireci.azurecr.io
         run: |
-          PASS=0
-          FAIL=0
-          ITERATIONS=${{ env.ITERATIONS_PER_RUNNER }}
+          # Each job is a fresh machine; no global Docker or process cleanup is needed.
+          set +e
+          ./dotnet.sh test \
+            --project tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj \
+            --no-restore --no-build --no-launch-profile -- \
+            --timeout 10m \
+            --results-directory "$GITHUB_WORKSPACE/testresults" \
+            --filter-class "*.AzureFunctionsTests" \
+            --filter-not-trait "quarantined=true" \
+            --filter-not-trait "outerloop=true" \
+            2>&1 | tee test-output.log
+          RESULT=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import xml.etree.ElementTree as ET
 
-          for i in $(seq 1 "$ITERATIONS"); do
-            echo "::group::Iteration $i/$ITERATIONS"
-
-            # Cleanup between iterations
-            rm -rf "${{ github.workspace }}/testresults" 2>/dev/null || true
-            pgrep -lf "dcp" 2>/dev/null | grep -E "\bdcp(\.exe|ctl)?\b" | awk '{print $1}' | while read pid; do
-              kill -9 "$pid" 2>/dev/null || true
-            done
-            sleep 1
-
-            # Run test (capture output for zero-test detection)
-            ITER_OUTPUT="${{ github.workspace }}/iter-output-$i.log"
-            set +e  # Disable errexit so pipefail doesn't abort before PIPESTATUS capture
-            ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" \
-              --no-restore \
-              --no-build \
-              -- \
-              --timeout 10m \
-              --results-directory "${{ github.workspace }}/testresults" \
-              --report-trx --report-trx-filename real-proof.trx \
-              ${{ env.TEST_FILTER }} \
-              2>&1 | tee "$ITER_OUTPUT"
-            RESULT=${PIPESTATUS[0]}
-            set -e
-
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
-            if [ "$RESULT" -eq 0 ]; then
-              if ! grep -qiE "total:\s*[1-9]" "$ITER_OUTPUT" 2>/dev/null; then
-                echo "::error::Iteration $i: Zero tests executed. Verify TEST_FILTER and quarantine settings."
-                RESULT=8
-              fi
-            fi
-            mkdir -p "${{ github.workspace }}/all-results/iteration-$i"
-            mv "$ITER_OUTPUT" "${{ github.workspace }}/all-results/iteration-$i/output.log"
-            cp -r "${{ github.workspace }}/testresults/." "${{ github.workspace }}/all-results/iteration-$i/"
-
-            if [ "$RESULT" -eq 0 ]; then
-              echo "✅ Iteration $i: PASS"
-              PASS=$((PASS + 1))
-            else
-              echo "❌ Iteration $i: FAIL (exit $RESULT)"
-              FAIL=$((FAIL + 1))
-              mkdir -p "${{ github.workspace }}/all-results/failure-$i"
-              cp -r "${{ github.workspace }}/testresults/"* "${{ github.workspace }}/all-results/failure-$i/" 2>/dev/null || true
-            fi
-
-            echo "::endgroup::"
-          done
-
-          echo ""
-          echo "========================================"
-          echo "Summary for runner #${{ matrix.index }} on ${{ matrix.os }}"
-          echo "  Passed: $PASS / $ITERATIONS"
-          echo "  Failed: $FAIL / $ITERATIONS"
-          echo "========================================"
-
-          if [ "$FAIL" -gt 0 ]; then exit 1; fi
-
-      - name: Run test iterations (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          ASPIRE__TEST__DCPLOGBASEPATH: ${{ github.workspace }}/testresults/dcp
-          NUGET_PACKAGES: ${{ github.workspace }}/.packages
-          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: 'netaspireci.azurecr.io'
-          # Skip default quarantine/outerloop exclusion filters so the target test can run
-          SkipDefaultTestFilters: true
-        run: |
-          $pass = 0
-          $fail = 0
-          $iterations = [int]"${{ env.ITERATIONS_PER_RUNNER }}"
-
-          for ($i = 1; $i -le $iterations; $i++) {
-            Write-Host "::group::Iteration $i/$iterations"
-
-            # Cleanup between iterations
-            Remove-Item -Recurse -Force "${{ github.workspace }}/testresults" -ErrorAction SilentlyContinue
-            Get-Process | Where-Object { $_.ProcessName -match '^dcp' } | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-
-            # Run test (capture output for zero-test detection)
-            $iterOutput = Join-Path "${{ github.workspace }}" "iter-output-$i.log"
-            & ${{ env.DOTNET_SCRIPT }} test --project "${{ env.TEST_PROJECT_PATH }}" `
-              --no-restore `
-              --no-build `
-              -- `
-              --timeout 10m `
-              --results-directory "${{ github.workspace }}/testresults" `
-              --report-trx --report-trx-filename real-proof.trx `
-              ${{ env.TEST_FILTER }} *> $iterOutput
-            $result = $LASTEXITCODE
-            Get-Content $iterOutput
-
-            # Detect zero-test runs (--ignore-exit-code 8 in Testing.targets masks exit code 8)
-            if ($result -eq 0) {
-              $content = Get-Content $iterOutput -Raw -ErrorAction SilentlyContinue
-              if (-not ($content -match '(?i)total:\s*[1-9]')) {
-                Write-Host "::error::Iteration ${i}: Zero tests executed. Verify TEST_FILTER and quarantine settings."
-                $result = 8
-              }
-            }
-            $evidence = "${{ github.workspace }}/all-results/iteration-$i"
-            New-Item -ItemType Directory -Path $evidence -Force | Out-Null
-            Move-Item $iterOutput (Join-Path $evidence "output.log")
-            Copy-Item -Recurse "${{ github.workspace }}/testresults/*" $evidence
-
-            if ($result -eq 0) {
-              Write-Host "✅ Iteration ${i}: PASS"
-              $pass++
-            } else {
-              Write-Host "❌ Iteration ${i}: FAIL (exit $result)"
-              $fail++
-              $dest = "${{ github.workspace }}/all-results/failure-$i"
-              New-Item -ItemType Directory -Path $dest -Force | Out-Null
-              Copy-Item -Recurse "${{ github.workspace }}/testresults/*" $dest -ErrorAction SilentlyContinue
-            }
-
-            Write-Host "::endgroup::"
+          expected = {
+              "AddAzureFunctionsProject_WorksWithMultipleProjects",
+              "AddAzureFunctionsProject_RemoveDefaultHostStorageWhenUseHostStorageIsUsed",
+              "AddAzureFunctionsProject_WithProjectPath_CanUseCustomHostStorage",
           }
+          results = []
+          for path in pathlib.Path("testresults").rglob("*.trx"):
+              for node in ET.parse(path).iter():
+                  if node.tag.rsplit("}", 1)[-1] == "UnitTestResult":
+                      row = dict(node.attrib)
+                      row["errors"] = [
+                          child.text for child in node.iter()
+                          if child.tag.rsplit("}", 1)[-1] in ("Message", "StackTrace") and child.text
+                      ]
+                      results.append(row)
+          for name in expected:
+              matches = [r for r in results if r.get("testName", "").rsplit(".", 1)[-1] == name]
+              if len(matches) != 1 or matches[0].get("outcome") not in ("Passed", "Failed"):
+                  raise SystemExit(f"Expected one executed result for {name}; got {matches!r}")
+          receipt = {"head": os.environ["SOURCE_SHA"], "results": results}
+          pathlib.Path("proof.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          print(json.dumps(receipt, indent=2))
+          PY
+          exit "$RESULT"
 
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "Summary for runner #${{ matrix.index }} on ${{ matrix.os }}"
-          Write-Host "  Passed: $pass / $iterations"
-          Write-Host "  Failed: $fail / $iterations"
-          Write-Host "========================================"
-
-          if ($fail -gt 0) { exit 1 }
-
-      - name: Upload failure logs
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: failures-${{ matrix.os }}-${{ matrix.index }}
-          path: all-results/
-          if-no-files-found: ignore
-
-      - name: Preserve actual iteration evidence, including passing results
+      - name: Retain passing and failing proof evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-test-evidence-${{ matrix.os }}-${{ matrix.index }}
-          path: all-results/
-          if-no-files-found: error
-
-      - name: Preserve source checkout receipt
-        if: always() && inputs.repair_phase != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: repair-worker-receipt-${{ matrix.index }}
-          path: candidate-receipt.json
-          if-no-files-found: error
-
-  results:
-    if: ${{ always() && github.repository == 'radical/aspire' }}
-    runs-on: ubuntu-latest
-    name: Reproduce Results
-    needs: [reproduce]
-    permissions: {}
-    steps:
-      - name: Summary
-        shell: bash
-        run: |
-          echo "## Reproduce Flaky Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Test Project | \`${{ env.TEST_PROJECT }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Filter | \`${{ env.TEST_FILTER }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| OSes | ${{ env.TARGET_OSES }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Runners per OS | ${{ env.RUNNERS_PER_OS }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Iterations per runner | ${{ env.ITERATIONS_PER_RUNNER }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [ "${{ needs.reproduce.result }}" = "success" ]; then
-            echo "### ✅ All iterations passed on all runners" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.reproduce.result }}" = "failure" ]; then
-            echo "### ❌ Some runners reported failures" >> $GITHUB_STEP_SUMMARY
-            echo "Check individual job logs and uploaded failure artifacts for details." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ⚠️ Reproduce job was ${{ needs.reproduce.result }}" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Fail if reproduce did not succeed
-        if: ${{ needs.reproduce.result != 'success' }}
-        run: exit 1
-
-  notify:
-    needs: [setup, reproduce, results]
-    if: >-
-      always() &&
-      github.repository == 'radical/aspire' &&
-      needs.setup.result == 'success' &&
-      inputs.controller_run_id != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      actions: write
-    steps:
-      - name: Notify trusted continuation without candidate checkout
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKER_RUN_ID: ${{ github.run_id }}
-          REPAIR_PHASE: ${{ inputs.repair_phase }}
-          REPAIR_TARGET: ${{ inputs.repair_target }}
-        run: |
-          workflow=flaky-real-continuation.yml
-          if [[ -n "$REPAIR_PHASE" ]]; then workflow=flaky-repair-continuation.yml; fi
-          if [[ "$REPAIR_TARGET" == openai ]]; then workflow=flaky-openai-repair-continuation.yml; fi
-          if [[ "$REPAIR_TARGET" == openai-controlled ]]; then workflow=flaky-controlled-repair-continuation.yml; fi
-          gh workflow run "$workflow" \
-            --repo radical/aspire --ref main \
-            -f "worker_run_id=$WORKER_RUN_ID"
+          name: proof-${{ inputs.revision }}-${{ matrix.index }}
+          path: |
+            testresults/
+            test-output.log
+            proof.json
+          if-no-files-found: warn
