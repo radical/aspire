@@ -10,6 +10,9 @@
 # who modify the env vars below and push to trigger a run.
 
 name: Reproduce Flaky Tests
+run-name: pr-21426-native-baseline-10-20261103
+permissions:
+  contents: read
 
 on:
   workflow_dispatch: {}
@@ -28,24 +31,25 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
+  TEST_FILTER: '--filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true" --filter-not-trait "category=failing" --filter-trait "Partition=4" --report-trx'
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
+  TARGET_OSES: "windows-latest"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
-  RUNNERS_PER_OS: "3"
+  RUNNERS_PER_OS: "10"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
+  ITERATIONS_PER_RUNNER: "1"
 
 jobs:
 
   setup:
     name: Generate matrix
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    timeout-minutes: 5
+    if: ${{ github.repository == 'radical/aspire' && github.ref == 'refs/heads/ankj/flaky-21426-native-baseline-10-20261103' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -128,7 +132,7 @@ jobs:
   build_cli_e2e_image:
     name: Build CLI E2E Docker image
     needs: setup
-    if: ${{ github.repository == 'microsoft/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
+    if: ${{ github.repository == 'radical/aspire' && github.ref == 'refs/heads/ankj/flaky-21426-native-baseline-10-20261103' && github.run_attempt == 1 && needs.setup.outputs.is_cli_e2e == 'true' }}
     uses: ./.github/workflows/build-cli-e2e-image.yml
 
   reproduce:
@@ -136,13 +140,13 @@ jobs:
     needs: [setup, build_cli_e2e_image]
     if: >-
       ${{
-        github.repository == 'microsoft/aspire' &&
+        github.repository == 'radical/aspire' && github.ref == 'refs/heads/ankj/flaky-21426-native-baseline-10-20261103' && github.run_attempt == 1 &&
         !cancelled() &&
         needs.setup.result == 'success' &&
         (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
       }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
@@ -166,6 +170,29 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/aspire
+          ref: 63c361dd3b0b32d55ab7c2276a660a8fd02dd127
+          persist-credentials: false
+
+      - name: Record selected source and runner metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git --no-pager rev-parse HEAD).Trim()
+          $tree = (git --no-pager rev-parse 'HEAD^{tree}').Trim()
+          $status = @(git --no-pager status --porcelain --untracked-files=normal)
+          @{
+            source = $head; sourceTree = $tree; sourceStatus = $status
+            workflowSha = $env:GITHUB_SHA; workflowRef = $env:GITHUB_WORKFLOW_REF
+            runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT
+            job = $env:GITHUB_JOB; runnerName = $env:RUNNER_NAME
+            runnerEnvironment = $env:RUNNER_ENVIRONMENT
+            runnerOS = $env:RUNNER_OS; runnerArch = $env:RUNNER_ARCH
+            imageOS = $env:ImageOS; imageVersion = $env:ImageVersion
+            recordedAt = [DateTimeOffset]::UtcNow.ToString('O')
+          } | ConvertTo-Json -Depth 4 | Set-Content native-reproduction-metadata.json
+
 
       - name: Trust HTTPS development certificate (Linux)
         if: runner.os == 'Linux'
@@ -298,7 +325,7 @@ jobs:
                 RESULT=8
               fi
             fi
-            rm -f "$ITER_OUTPUT"
+            # Retain original output for passing and failing opportunities.
 
             if [ "$RESULT" -eq 0 ]; then
               echo "✅ Iteration $i: PASS"
@@ -364,7 +391,7 @@ jobs:
                 $result = 8
               }
             }
-            Remove-Item $iterOutput -ErrorAction SilentlyContinue
+            # Retain original output for passing and failing opportunities.
 
             if ($result -eq 0) {
               Write-Host "✅ Iteration ${i}: PASS"
@@ -389,18 +416,23 @@ jobs:
 
           if ($fail -gt 0) { exit 1 }
 
-      - name: Upload failure logs
-        if: failure()
+      - name: Upload all original results and logs
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: failures-${{ matrix.os }}-${{ matrix.index }}
-          path: all-results/
+          name: results-${{ matrix.os }}-${{ matrix.index }}
+          path: |
+            testresults/
+            iter-output-*.log
+            artifacts/log/
+            native-reproduction-metadata.json
           if-no-files-found: ignore
 
   results:
-    if: ${{ always() && github.repository == 'microsoft/aspire' }}
+    if: ${{ always() && github.repository == 'radical/aspire' && github.ref == 'refs/heads/ankj/flaky-21426-native-baseline-10-20261103' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     name: Reproduce Results
+    timeout-minutes: 5
     needs: [reproduce]
     permissions: {}
     steps:
