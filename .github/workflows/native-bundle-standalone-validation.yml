@@ -38,6 +38,7 @@ jobs:
           global-json-file: global.json
 
       - name: Restore solution
+        id: restore
         run: ./restore.sh
 
       - name: Build solution and packages
@@ -45,13 +46,17 @@ jobs:
         env:
           SkipNativeBuild: 'true'
 
+      # Collect independent diagnostics without hiding a failed solution build.
       - name: Build native CLI with embedded bundle
+        id: bundle
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
         run: |
           ./dotnet.sh msbuild eng/Bundle.proj /restore \
             /p:Configuration=Release \
             /p:TargetRid=linux-x64
 
       - name: Prepare and verify standalone products
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         env:
           VALIDATION_COMMIT: ${{ github.sha }}
         run: |
