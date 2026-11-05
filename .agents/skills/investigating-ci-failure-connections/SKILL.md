@@ -9,6 +9,16 @@ Experimental prompt for a failure-driven investigation and repair loop.
 Run a bounded working pass, expose its evidence, and tune the next pass from
 observed mistakes. This is not a continuous watcher or authority to publish.
 
+## Current investigation focus
+
+Prioritize individual test-failure families, fresh regressions and their repair
+PRs, starting with stale-issue pruning proposals. Reused workflow-health
+umbrella trackers are deferred until the user reinstates them; retain prior
+evidence without marking them recovered.
+A run referenced by an umbrella can still supply evidence for an individual
+failure. A cause-specific tracker is not excluded merely because it records
+repeated occurrences of the same signature.
+
 ## Outcome
 
 Produce a locally preserved report and repair-ready packets:
@@ -19,9 +29,10 @@ issue, failing run, or repair PR -> exact occurrence -> revision and diagnostic 
 Use issues, observed failures, and repair PRs as discovery inputs, not an
 unrestricted download of every pipeline log. A regression need not have an
 issue to enter the investigation.
-Inventory open and historical `ci-failure-cause` and `automation-broken` issues,
-then search for relevant workflow reports without either label and open PRs
-that may repair or prevent the observed failures. Include public
+Inventory open and historical `ci-failure-cause` issues within the current
+focus, then search for related unlabeled reports and open repair PRs.
+Expand `automation-broken` and umbrella-workflow discovery when that scope is
+reinstated. Include public
 GitHub Actions CI, internal official builds, outerloop/quarantine, and relevant
 scheduled workflows. Record query scope, pagination, collection time and gaps.
 
@@ -105,9 +116,16 @@ coverage and gaps; link detailed family reports. Do not put downloaded logs,
 private receipts or machine paths into committed/public prose.
 
 Start the report with a short decision overview: a table of issues or groups
-being tracked, supported findings and proposed next steps. State approval
-status and important uncertainty beside that overview. Inventory counts must
-not imply diagnostic coverage. Keep detailed evidence, history, measurements
+being tracked, supported findings, recommendations and action confidence.
+Show tracker age, latest recorded actual failure date across verified family
+members, and elapsed time since that hit. Unknown dates remain unknown;
+issue updates and closure recommendations are not failure occurrences.
+List full verified group membership and relationship type, not just example
+pairs, without merging distinct signatures to manufacture larger groups.
+For pruning, state the cutoff, evidence limits and exact proposed closure text;
+confidence in policy-based retirement is not confidence a bug was fixed.
+State approval status and important uncertainty beside that overview. Inventory
+counts must not imply diagnostic coverage. Keep detailed evidence, history, measurements
 and process improvements below it; record prompt checkpoints and what each
 improvement addresses in the local evaluation history.
 
