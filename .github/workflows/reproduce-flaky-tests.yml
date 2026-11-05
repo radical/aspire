@@ -20,7 +20,7 @@ on:
 env:
   # Test project shortname (maps to tests/Aspire.{name}.Tests/ or tests/{name}.Tests/)
   # Examples: Hosting, Core, Dashboard, Components.Common, Cli.EndToEnd
-  TEST_PROJECT: "Hosting"
+  TEST_PROJECT: "Infrastructure"
 
   # Test filter arguments passed to dotnet test (after the -- separator).
   # Use quotes around wildcard patterns to prevent shell glob expansion.
@@ -28,24 +28,24 @@ env:
   #   --filter-method "*.TestMethodName"
   #   --filter-class "*.TestClassName"
   #   --filter-method "*.Test1" --filter-method "*.Test2"
-  TEST_FILTER: '--filter-method "*.YourTestMethodName"'
+  TEST_FILTER: '--filter-class "*.MacOSStaplerRetryTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"'
 
   # Target operating systems (comma-separated)
   # Options: ubuntu-latest, windows-latest, macos-latest
-  TARGET_OSES: "ubuntu-latest,windows-latest"
+  TARGET_OSES: "ubuntu-latest,macos-latest"
 
   # Number of parallel runners per OS
   # Total jobs = RUNNERS_PER_OS × number of OSes (must be ≤ 256)
   RUNNERS_PER_OS: "3"
 
   # Number of test iterations each runner executes
-  ITERATIONS_PER_RUNNER: "3"
+  ITERATIONS_PER_RUNNER: "10"
 
 jobs:
 
   setup:
     name: Generate matrix
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -128,7 +128,7 @@ jobs:
   build_cli_e2e_image:
     name: Build CLI E2E Docker image
     needs: setup
-    if: ${{ github.repository == 'microsoft/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
+    if: ${{ github.repository == 'radical/aspire' && needs.setup.outputs.is_cli_e2e == 'true' }}
     uses: ./.github/workflows/build-cli-e2e-image.yml
 
   reproduce:
@@ -136,7 +136,7 @@ jobs:
     needs: [setup, build_cli_e2e_image]
     if: >-
       ${{
-        github.repository == 'microsoft/aspire' &&
+        github.repository == 'radical/aspire' &&
         !cancelled() &&
         needs.setup.result == 'success' &&
         (needs.build_cli_e2e_image.result == 'success' || needs.build_cli_e2e_image.result == 'skipped')
@@ -398,7 +398,7 @@ jobs:
           if-no-files-found: ignore
 
   results:
-    if: ${{ always() && github.repository == 'microsoft/aspire' }}
+    if: ${{ always() && github.repository == 'radical/aspire' }}
     runs-on: ubuntu-latest
     name: Reproduce Results
     needs: [reproduce]
