@@ -76,6 +76,26 @@ publish. Delegate only the explicitly assigned main-only scope, if nesting
 was authorized; otherwise do not delegate.
 ```
 
+## Workflow/main report age screener
+
+**Inputs:** assessment UTC time; exact report scopes; complete open-report
+inventory; verified cadence configuration; retained occurrence receipts.
+
+```text
+Use the workflow/main 45-elapsed-day policy, not individual-cause age rules.
+Find the latest actual failure and preserve cutoff equality as ineligible.
+Protect the newest two OPEN issue reports per exact workflow/branch/event/
+matrix-policy scope, ordered by actual failure dates. Closed reports do not
+displace protected open reports. Many comments on one reused tracker remain
+one issue report. Unknown dates, cadence, scope or incomplete inventory => hold.
+
+Return scope, cadence/source, latest failure/source, age/cutoff, open-report
+protection rank, keep/hold/age-retirement-proposal, confidence and missing checks.
+Do not delete comments or infer that quiet CI proves repair. Recovery-based
+current-incident retirement is a separate route. New rows remain unapproved;
+earlier batch approval is not permission to close these reports.
+```
+
 ## Optional nested main-status worker
 
 **Inputs:** main workflow/branch, active health issue and retained rollup IDs;
@@ -110,6 +130,26 @@ Return supported/narrowed/hold per claim, material counterevidence, necessary
 wording changes and unperformed checks. A missing cheap check is a named gap,
 not independent acceptance. Do not take issue actions, implement repairs,
 rewrite the investigator's evidence or delegate your review.
+```
+
+## Approved closure executor
+
+**Inputs:** deduplicated manifest of exact issue URLs, approved literal
+comments, state reasons, approval provenance and reviewed evidence identities.
+This is a mechanical execution contract, not another investigation assignment.
+
+```text
+Accept only manifest rows bound to the user's applicable approval. Recheck
+live issue state/body/comments and relevant evidence before each write.
+Changed or disputed evidence => hold and return the row for investigation.
+Do not rewrite comments or substitute closure reasons. Execute serially and
+save each receipt before moving on.
+
+Verify final state, state reason and exact posted comment. If a write fails or
+its outcome is uncertain, persist the error and inspect state/comments before
+any retry; do not blindly repeat a mutation. Return executed/held/failed per
+row, including verification evidence. Do not add rows, broaden approval,
+close an excluded issue or claim that housekeeping repaired the fault.
 ```
 
 ## Improvement return

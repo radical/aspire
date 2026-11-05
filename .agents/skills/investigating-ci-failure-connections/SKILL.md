@@ -73,12 +73,32 @@ An exit-only message can establish the stage without establishing the kind.
 Execution disruption does not assign fault to infrastructure. Keep distinct
 signatures and primary/cascade evidence separate.
 
-| Handler | Evidence to inspect | Decision rule |
-|---|---|---|
-| Individual test failure | Exact test/case, exception/assertion, occurrence identities and attempted repairs | Do not infer flakiness from the title or repetition. Use verified repairs or the record-age rules below for closure proposals |
-| Individual build/job failure | Actual failing operation, first supported diagnostic and downstream consequences | A test-named job can fail before tests run. Unknown causes stay unknown; do not merge generic exits |
-| Active main-health incident | Newest relevant runs/attempts/revisions and execution of the previously failing scope | Propose current-incident retirement after a newer completed eligible main execution passes the affected scope with no newer contrary failure. A successful individual job does not establish whole-main health |
-| Reused workflow-health tracker | Latest failure-bearing comment, comment-linked attempt, newer relevant executions and reporter lifecycle contract | Follow current failure evidence, not the last administrative comment. Keep a red current episode active; hold incomplete evidence. A narrow green step does not retire a broad tracker |
+### Individual test failures
+
+Inspect the exact test/case, exception/assertion, occurrence identities and
+attempted repairs. Do not infer flakiness from the title or repetition.
+Use verified repairs or the individual-cause age rules for closure proposals.
+
+### Individual build/job failures
+
+Inspect the actual failing operation, first supported diagnostic and downstream
+consequences. A test-named job can fail before tests run. Unknown causes stay
+unknown; do not merge generic exits. Individual-cause age rules apply.
+
+### Active main-health incidents
+
+Inspect newest relevant runs/attempts/revisions and execution of the previously
+failing scope. Propose current-incident retirement after a newer completed
+eligible main execution passes the affected scope with no newer contrary
+failure. A successful individual job does not establish whole-main health.
+
+### Reused workflow-health trackers
+
+Inspect the latest failure-bearing comment, comment-linked attempt, newer
+relevant executions and reporter lifecycle contract. Follow current failure
+evidence, not the last administrative comment. Keep a red current episode
+active; hold incomplete evidence. A narrow green step does not retire a broad
+tracker.
 
 For health trackers, distinguish branch, workflow, event and matrix/policy
 eligibility. Preserve changed failures between attempts. Green notices,
@@ -86,9 +106,9 @@ reopens and repeated comments are not distinct same-signature occurrences.
 A later eligible green may retire the current incident without repairing or
 erasing a recurring cause family. Some reporters auto-close on green and
 others retain trackers; check the contract rather than assuming one lifecycle.
-Record-age pruning below applies to individual cause records, not wholesale
-retirement of reused health trackers. Every external action retains the
-exact-draft approval gate.
+Use the separate workflow/main report age policy below, not individual-cause
+cutoffs, for health reports. Every external action retains the exact-draft
+approval gate.
 
 ## Relationship and lifecycle rules
 
@@ -96,6 +116,8 @@ Use explicit relationships: duplicate, shared fixture/fix, producer-consumer
 cascade, blocks-validation-of, same scenario/different signature, or unproven.
 Matching names, timing, host exit codes or green headlines do not establish
 causality. Do not assign a common root cause from a shared timeout alone.
+
+### Individual-cause age retirement
 
 Compute last-seen across the canonical family, including reopened duplicates
 and comments containing actual occurrences. State whether three months means
@@ -125,6 +147,8 @@ newer matching failure evidence omitted from the issue's occurrence table.
 Verify cited run/job diagnostics before changing the last-seen date. An open
 repair alone does not block stale retirement; a newer verified failure does.
 
+### Attempted repairs and execution history
+
 Inspect recent maintainer comments, including "already fixed" recommendations.
 Record the author, exact claim, date and comment link; author identity alone
 does not establish a fix. Verify a linked repair's merged state and relevant
@@ -142,6 +166,29 @@ Separate a proposed repair, merged repair, prevention-only change and verified
 recovery. An open PR is not a fix on main, and a repair claim is not causal
 proof. Check existing repair work before proposing a new assignment; prepare
 missing evidence or validation for that work instead of duplicating it.
+
+## Workflow/main report age retirement
+
+For active-main and reused-workflow reports, propose age retirement only when
+the latest actual failure is strictly older than 45 elapsed days. Compute the
+cutoff from a stated UTC assessment time; an occurrence exactly on the cutoff
+does not qualify. Administrative comments and issue update times do not reset
+failure age.
+
+Use conservative retention: protect the newest two open issue reports per
+exact workflow, branch, event and matrix/policy scope, ordered by latest actual
+failure. State that retention interpretation in the report. Verify the open
+report inventory and the workflow's cadence from primary configuration;
+unknown dates, cadence, scope or incomplete inventory require a hold.
+Closed reports do not displace protected open reports. A single reused issue
+with many comments is one report, not many reports to prune. Preserve comments.
+
+This protection applies to age retirement. Separately verified current-incident
+recovery, duplicate or repair proposals retain their own evidence requirements.
+Neither route proves a recurring cause repaired. Workflow age policy does not
+enable the disabled 45-day individual-singleton alternative.
+New proposals need their own exact-draft approval; approval of an earlier
+batch does not authorize future rows.
 
 ## Escape analysis and prevention
 
@@ -178,6 +225,21 @@ Report the actual worker tree, not hypothetical delegation.
 Each worker returns observed prompt traps and proposed improvements. Preserve
 the triggering evidence and a counterexample; exercise a changed prompt before
 claiming improvement. Prompt iteration is not model training.
+
+### Independent audits and checkpoints
+
+Use a separate primary-review context periodically, especially for a changed
+retirement rule or material correlation claim before acting on it. Resolve its
+model and effort from the user's current selection and role policy; verify
+availability. Bound the audit to explicit claims, cases and receipts, and
+record supported/narrowed/hold decisions. A cancelled, missing or incomplete
+audit is not acceptance. Reconcile material objections before execution.
+
+Exercise changed rules on frozen cases before and after the edit, including
+cutoff equality, protected reports, unknown coverage and scope counterexamples.
+Record omissions and regressions, not only passing cases. Checkpoint coherent
+improvements with previewed commit messages; push to the authorized branch and
+destination only when requested, then verify the remote revision.
 
 Each packet contains tracking links, exact symptom, candidate mechanism,
 confidence, counterevidence, prior fix/ancestry, escape analysis, proposed
