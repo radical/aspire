@@ -74,6 +74,19 @@ not required. Unknown dates, incomplete occurrence lists or a newer matching
 duplicate prevent an age-qualified decision. Describe this as retirement of
 the recorded incident, not proof of recovery.
 
+For a family with exactly one distinct recorded failure, also propose stale
+retirement when that occurrence is strictly older than two calendar months.
+Count across the issue, known matching duplicates, comments and linked failure
+evidence. Repeated mentions of the same run/attempt/job/test count once;
+distinct failing jobs or attempts count separately. Unknown identities or
+incomplete evidence require a hold, not an assumed singleton. Multi-hit
+families retain the general three-calendar-month rule.
+
+The single-hit cutoff is two calendar months; a 45-day alternative is not
+enabled. Show the distinct occurrence count, latest actual occurrence, cutoff
+and qualifying rule in each pruning row. An age-qualified proposal still
+requires the existing exact-draft approval gate before external action.
+
 Before an age-based closure, inspect linked repair PRs and cross-references for
 newer matching failure evidence omitted from the issue's occurrence table.
 Verify cited run/job diagnostics before changing the last-seen date. An open
