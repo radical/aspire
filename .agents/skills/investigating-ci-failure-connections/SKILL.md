@@ -74,6 +74,11 @@ not required. Unknown dates, incomplete occurrence lists or a newer matching
 duplicate prevent an age-qualified decision. Describe this as retirement of
 the recorded incident, not proof of recovery.
 
+Before an age-based closure, inspect linked repair PRs and cross-references for
+newer matching failure evidence omitted from the issue's occurrence table.
+Verify cited run/job diagnostics before changing the last-seen date. An open
+repair alone does not block stale retirement; a newer verified failure does.
+
 Inspect recent maintainer comments, including "already fixed" recommendations.
 Record the author, exact claim, date and comment link; author identity alone
 does not establish a fix. Verify a linked repair's merged state and relevant
