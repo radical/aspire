@@ -11,10 +11,10 @@ observed mistakes. This is not a continuous watcher or authority to publish.
 
 ## Current investigation focus
 
-Prioritize individual test-failure families, fresh regressions and their repair
-PRs, starting with stale-issue pruning proposals. Reused workflow-health
-umbrella trackers are deferred until the user reinstates them; retain prior
-evidence without marking them recovered.
+Prioritize individual failure families, fresh regressions and their repair
+PRs, alongside bounded current-status checks of main CI and reused workflow
+trackers. Workflow status checks do not authorize a full historical scan or
+restart deferred root-cause investigations.
 A run referenced by an umbrella can still supply evidence for an individual
 failure. A cause-specific tracker is not excluded merely because it records
 repeated occurrences of the same signature.
@@ -31,8 +31,7 @@ unrestricted download of every pipeline log. A regression need not have an
 issue to enter the investigation.
 Inventory open and historical `ci-failure-cause` issues within the current
 focus, then search for related unlabeled reports and open repair PRs.
-Expand `automation-broken` and umbrella-workflow discovery when that scope is
-reinstated. Include public
+Include bounded `automation-broken` and umbrella-workflow discovery. Include public
 GitHub Actions CI, internal official builds, outerloop/quarantine, and relevant
 scheduled workflows. Record query scope, pagination, collection time and gaps.
 
@@ -56,6 +55,40 @@ not authorize a remote build, publisher, or other side effect.
 5. Investigate why the affected consumer escaped original PR validation.
 6. Have an independent challenger review the evidence and proposed handoff.
    Reconcile once, preserve disagreements, and name remaining questions.
+
+## Classify before choosing a handler
+
+Record independent dimensions, not one label inferred from the issue title:
+
+- `trackerScope`: individual-cause, active-main-health or reused-workflow-health.
+- `observedFailureKind`: test-failure, build-failure, execution-disruption, mixed
+  or unknown; include the diagnostic and source.
+- `failingStage`: setup, build, test-execution, artifact/publish or unknown.
+- `intermittentStatus`: unproven unless matched contrasting executions support
+  intermittency for the comparable scenario, lane and revision.
+
+A workflow-related unit test is still an individual test failure. A compiler
+error inside a template test is a build failure at test-execution stage.
+An exit-only message can establish the stage without establishing the kind.
+Execution disruption does not assign fault to infrastructure. Keep distinct
+signatures and primary/cascade evidence separate.
+
+| Handler | Evidence to inspect | Decision rule |
+|---|---|---|
+| Individual test failure | Exact test/case, exception/assertion, occurrence identities and attempted repairs | Do not infer flakiness from the title or repetition. Use verified repairs or the record-age rules below for closure proposals |
+| Individual build/job failure | Actual failing operation, first supported diagnostic and downstream consequences | A test-named job can fail before tests run. Unknown causes stay unknown; do not merge generic exits |
+| Active main-health incident | Newest relevant runs/attempts/revisions and execution of the previously failing scope | Propose current-incident retirement after a newer completed eligible main execution passes the affected scope with no newer contrary failure. A successful individual job does not establish whole-main health |
+| Reused workflow-health tracker | Latest failure-bearing comment, comment-linked attempt, newer relevant executions and reporter lifecycle contract | Follow current failure evidence, not the last administrative comment. Keep a red current episode active; hold incomplete evidence. A narrow green step does not retire a broad tracker |
+
+For health trackers, distinguish branch, workflow, event and matrix/policy
+eligibility. Preserve changed failures between attempts. Green notices,
+reopens and repeated comments are not distinct same-signature occurrences.
+A later eligible green may retire the current incident without repairing or
+erasing a recurring cause family. Some reporters auto-close on green and
+others retain trackers; check the contract rather than assuming one lifecycle.
+Record-age pruning below applies to individual cause records, not wholesale
+retirement of reused health trackers. Every external action retains the
+exact-draft approval gate.
 
 ## Relationship and lifecycle rules
 
@@ -136,6 +169,15 @@ escape analysis, and independent evidence/process challenge. Follow the user's
 model policy. The challenger must not merely validate its own findings.
 The investigator prepares repair work; a repair agent implements only an
 authorized specific assignment.
+
+Use the reusable [worker prompts](worker-prompts.md) with explicit inputs,
+evidence bounds, output contracts and stopping conditions. Parallelize only
+independent scopes. A workflow worker may use one authorized nested main-only
+worker; do not duplicate that scope in the parent or add further nesting.
+Report the actual worker tree, not hypothetical delegation.
+Each worker returns observed prompt traps and proposed improvements. Preserve
+the triggering evidence and a counterexample; exercise a changed prompt before
+claiming improvement. Prompt iteration is not model training.
 
 Each packet contains tracking links, exact symptom, candidate mechanism,
 confidence, counterevidence, prior fix/ancestry, escape analysis, proposed
