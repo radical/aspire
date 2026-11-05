@@ -11,17 +11,22 @@ observed mistakes. This is not a continuous watcher or authority to publish.
 
 ## Current investigation focus
 
-Prioritize individual failure families, fresh regressions and their repair
-PRs, alongside bounded current-status checks of main CI and reused workflow
-trackers. Workflow status checks do not authorize a full historical scan or
-restart deferred root-cause investigations.
+Inventory relevant reports broadly at metadata level, then prioritize the
+latest actual failures, generally in the last one to two weeks. This is a
+priority window, not an exclusion cutoff. Cover individual cause families,
+repair PRs and workflow reports within the assigned scope. One workflow
+investigator handles main CI, outerloop, quarantine, scheduled and internal
+workflow reports using the same evidence and lifecycle rules.
+Follow history and attempted fixes to answer concrete current-pattern
+questions, not to perform a full historical log sweep or restart deferred work.
 A run referenced by an umbrella can still supply evidence for an individual
 failure. A cause-specific tracker is not excluded merely because it records
 repeated occurrences of the same signature.
 
 ## Outcome
 
-Produce a locally preserved report and repair-ready packets:
+Produce a locally preserved decision report and, for selected substantive
+claims, repair-ready packets:
 
 issue, failing run, or repair PR -> exact occurrence -> revision and diagnostic -> supported connection
 -> why validation missed it -> repair/prevention proposal -> recovery evidence.
@@ -41,8 +46,9 @@ not authorize a remote build, publisher, or other side effect.
 
 ## First working pass
 
-1. Inventory the issues; inspect promising families and recent issue-linked
-   failures. Deliver a few actionable cases before exhaustive historical work.
+1. Establish the run's objective, scopes, permissions, evidence bounds and
+   output paths. Inventory open and historical reports at metadata level;
+   inspect the latest actual failures first. Record unexamined candidates.
 2. Record run, attempt, job, failing revision, exact diagnostic and artifact
    identity. Separate primary failure, downstream consequence, and unknown.
 3. Join matching historical records and attempted fixes, including open PRs.
@@ -52,8 +58,10 @@ not authorize a remote build, publisher, or other side effect.
 4. Prove a failing revision contains a fix before calling it a recurrence.
    Then compare signatures: a new mechanism in the same test is not proof the
    old fix failed. A late-filed issue can describe a pre-fix run.
-5. Investigate why the affected consumer escaped original PR validation.
-6. Have an independent challenger review the evidence and proposed handoff.
+5. For selected substantive recurrence, causal or repair claims, investigate
+   why the affected consumer escaped original PR validation. Administrative
+   dispositions do not each require deep repair or escape analysis.
+6. Use independent evidence review for material claims as described below.
    Reconcile once, preserve disagreements, and name remaining questions.
 
 ## Classify before choosing a handler
@@ -85,20 +93,13 @@ Inspect the actual failing operation, first supported diagnostic and downstream
 consequences. A test-named job can fail before tests run. Unknown causes stay
 unknown; do not merge generic exits. Individual-cause age rules apply.
 
-### Active main-health incidents
+### Workflow-health reports
 
-Inspect newest relevant runs/attempts/revisions and execution of the previously
-failing scope. Propose current-incident retirement after a newer completed
-eligible main execution passes the affected scope with no newer contrary
-failure. A successful individual job does not establish whole-main health.
-
-### Reused workflow-health trackers
-
-Inspect the latest failure-bearing comment, comment-linked attempt, newer
-relevant executions and reporter lifecycle contract. Follow current failure
-evidence, not the last administrative comment. Keep a red current episode
-active; hold incomplete evidence. A narrow green step does not retire a broad
-tracker.
+For main, outerloop, quarantine, scheduled and internal scopes, inspect the
+latest failure-bearing body/comment, linked attempt, newer relevant executions
+and reporter lifecycle contract. Follow actual failure evidence, not the last
+administrative comment or issue creation date. A reused tracker created months
+ago remains current when it records recent actual failures.
 
 For health trackers, distinguish branch, workflow, event and matrix/policy
 eligibility. Preserve changed failures between attempts. Green notices,
@@ -106,9 +107,8 @@ reopens and repeated comments are not distinct same-signature occurrences.
 A later eligible green may retire the current incident without repairing or
 erasing a recurring cause family. Some reporters auto-close on green and
 others retain trackers; check the contract rather than assuming one lifecycle.
-Use the separate workflow/main report age policy below, not individual-cause
-cutoffs, for health reports. Every external action retains the exact-draft
-approval gate.
+Use workflow relevance/currentness dispositions below, not individual-cause
+age cutoffs. A successful individual job does not establish whole-main health.
 
 ## Relationship and lifecycle rules
 
@@ -117,11 +117,26 @@ cascade, blocks-validation-of, same scenario/different signature, or unproven.
 Matching names, timing, host exit codes or green headlines do not establish
 causality. Do not assign a common root cause from a shared timeout alone.
 
+### Verified cause duplicates
+
+For `ci-failure-cause` issues, compare the specific diagnostic, scenario and
+scope against primary occurrence evidence, not titles or generic timeouts or
+exit codes. A verified family can span distinct runs. The same test with a
+different exception/signature is not a duplicate without additional evidence.
+
+Choose useful active canonical tracking. Before retiring a duplicate, preserve
+the union of distinct occurrences and unique evidence in the canonical record
+or an accessible linked evidence index, and link the duplicate to the canonical.
+Do not retire the sole active tracker into a closed obsolete canonical as
+though a current failure were resolved; keep useful active tracking or obtain
+authority for the necessary canonical update. Missing evidence that could
+change the duplicate decision requires a hold.
+
 ### Individual-cause age retirement
 
 Compute last-seen across the canonical family, including reopened duplicates
-and comments containing actual occurrences. State whether three months means
-calendar months or elapsed days. Use the latest actual occurrence, not the
+and comments containing actual occurrences. Use calendar-month cutoffs and
+the latest actual occurrence, not the
 issue's creation date or a recent administrative comment. Under the user's
 age policy, a latest occurrence strictly older than three calendar months is
 sufficient for stale-record closure; proof of repair or a fresh green run is
@@ -137,10 +152,10 @@ distinct failing jobs or attempts count separately. Unknown identities or
 incomplete evidence require a hold, not an assumed singleton. Multi-hit
 families retain the general three-calendar-month rule.
 
-The single-hit cutoff is two calendar months; a 45-day alternative is not
-enabled. Show the distinct occurrence count, latest actual occurrence, cutoff
-and qualifying rule in each pruning row. An age-qualified proposal still
-requires the existing exact-draft approval gate before external action.
+Show the distinct occurrence count, latest actual occurrence, cutoff and
+qualifying rule in each pruning row. Individual-cause age retirement retains
+the exact-draft approval requirement; delegation of workflow retirement or
+verified duplicates does not authorize this separate category.
 
 Before an age-based closure, inspect linked repair PRs and cross-references for
 newer matching failure evidence omitted from the issue's occurrence table.
@@ -167,28 +182,37 @@ recovery. An open PR is not a fix on main, and a repair claim is not causal
 proof. Check existing repair work before proposing a new assignment; prepare
 missing evidence or validation for that work instead of duplicating it.
 
-## Workflow/main report age retirement
+## Workflow relevance and disposition
 
-For active-main and reused-workflow reports, propose age retirement only when
-the latest actual failure is strictly older than 45 elapsed days. Compute the
-cutoff from a stated UTC assessment time; an occurrence exactly on the cutoff
-does not qualify. Administrative comments and issue update times do not reset
-failure age.
+Judge relevance, currentness and actionability within verified workflow,
+branch, event and matrix/policy scope. There is no fixed day threshold,
+minimum open-report quota or mandatory age-based protection. Verify cadence
+from primary configuration when it matters: silence on an infrequent workflow
+is weaker evidence than comparable executed scope. Do not require diagnosis
+of all historical failures before disposing of a superseded report.
 
-Use conservative retention: protect the newest two open issue reports per
-exact workflow, branch, event and matrix/policy scope, ordered by latest actual
-failure. State that retention interpretation in the report. Verify the open
-report inventory and the workflow's cadence from primary configuration;
-unknown dates, cadence, scope or incomplete inventory require a hold.
-Closed reports do not displace protected open reports. A single reused issue
-with many comments is one report, not many reports to prune. Preserve comments.
+Distinguish these dispositions and state the evidence and tracking consequence:
 
-This protection applies to age retirement. Separately verified current-incident
-recovery, duplicate or repair proposals retain their own evidence requirements.
-Neither route proves a recurring cause repaired. Workflow age policy does not
-enable the disabled 45-day individual-singleton alternative.
-New proposals need their own exact-draft approval; approval of an earlier
-batch does not authorize future rows.
+- **Active/current:** a relevant current failure needs active tracking.
+- **Recurring-cause:** retain useful cause tracking separately from a recovered
+  workflow episode; recovery of one execution does not repair the family.
+- **Recovered:** a newer completed eligible green establishes recovery only
+  for the affected scope actually executed, with no newer contrary evidence.
+  Skips, cancellation or a narrower green do not recover broader scope.
+- **Stale/obsolete:** the report no longer has relevant actionable content;
+  justify this from current evidence and cadence, not age alone.
+- **Superseded:** a current report covers the relevant scope and the older
+  record has no unique unresolved actionable information. The older report
+  can retire even while a different current failure remains red.
+- **Insufficient-evidence:** hold only when a named missing fact could change
+  the action. An unknown root cause does not itself make disposition unknown.
+
+Preserve closed-history evidence and links; never erase comments. Name the
+current tracker for superseded reports and preserve any unique actionable
+information before retirement. Do not imply permanent repair from a green
+execution or housekeeping. These judgments do not change the separate
+three-calendar-month general or two-calendar-month verified-singleton
+individual-cause policies.
 
 ## Escape analysis and prevention
 
@@ -218,10 +242,11 @@ The investigator prepares repair work; a repair agent implements only an
 authorized specific assignment.
 
 Use the reusable [worker prompts](worker-prompts.md) with explicit inputs,
-evidence bounds, output contracts and stopping conditions. Parallelize only
-independent scopes. A workflow worker may use one authorized nested main-only
-worker; do not duplicate that scope in the parent or add further nesting.
-Report the actual worker tree, not hypothetical delegation.
+evidence bounds, output contracts and stopping conditions. Use one workflow
+investigator by default; the same prompt may cover independent workflow
+scopes separately when useful. Do not duplicate scope or require separate
+status, age-screening or main-only assignments. Independent evidence review
+remains a separate role. Report actual assignments, not hypothetical delegation.
 Each worker returns observed prompt traps and proposed improvements. Preserve
 the triggering evidence and a counterexample; exercise a changed prompt before
 claiming improvement. Prompt iteration is not model training.
@@ -236,7 +261,8 @@ record supported/narrowed/hold decisions. A cancelled, missing or incomplete
 audit is not acceptance. Reconcile material objections before execution.
 
 Exercise changed rules on frozen cases before and after the edit, including
-cutoff equality, protected reports, unknown coverage and scope counterexamples.
+supersession, recent reused trackers, duplicate signatures, unknown coverage,
+individual-cause cutoff boundaries and permission counterexamples.
 Record omissions and regressions, not only passing cases. Checkpoint coherent
 improvements with previewed commit messages; push to the authorized branch and
 destination only when requested, then verify the remote revision.
@@ -257,12 +283,15 @@ members, and elapsed time since that hit. Unknown dates remain unknown;
 issue updates and closure recommendations are not failure occurrences.
 List full verified group membership and relationship type, not just example
 pairs, without merging distinct signatures to manufacture larger groups.
-For pruning, state the cutoff, evidence limits and exact proposed closure text;
-confidence in policy-based retirement is not confidence a bug was fixed.
-State approval status and important uncertainty beside that overview. Inventory
+For retirement, state the applicable rule, evidence limits and exact closure
+text; include cutoffs only for individual-cause age decisions. Confidence in
+retirement is not confidence a bug was fixed.
+State authorization and important uncertainty beside that overview. Inventory
 counts must not imply diagnostic coverage. Keep detailed evidence, history, measurements
 and process improvements below it; record prompt checkpoints and what each
-improvement addresses in the local evaluation history.
+improvement addresses in the local evaluation history. Return the report,
+action receipts (or none), evidence gaps, observed prompt traps and next
+bounded queue. Do not turn that queue into unrequested work.
 
 Measure inventory/evidence coverage, independently adjudicated false merges
 and false splits, causal-claim precision, eligible post-fix executions,
@@ -272,15 +301,35 @@ unmeasured metrics as unmeasured, not zero. Closure count is not success.
 Compute replay conclusions from evidence available at the cutoff only; keep
 later observations in a separate current-history view.
 
-Default to read-only. Present exact drafts and obtain applicable authorization
-before external updates; do not close, comment, queue, rerun, schedule, push,
-or launch repair implementation as an incidental investigation step.
-Before any issue comment or closure, show an approval table containing the
-issue link, proposed action, evidence/reason, exact comment or closure text
-and approval status. Long drafts may be separately numbered and linked from
-their rows. Start every row as pending; execute only the specific actions and
-wording the user approves. General permission to investigate is not approval
-to engage issues. Apply the required automated attribution to proposed drafts.
+## Per-run authority and decision comments
+
+Default to read-only without applicable delegation. Record this run's
+authorization source, categories, scope and limits. Explicitly delegated
+workflow stale/superseded/recovered retirement, verified cause duplicates or
+short material decision comments may execute after live evidence checks
+without redundant per-item approval. Record the exact comment/reason,
+canonical/current tracker link and verified receipts for each action.
+Categories not delegated remain proposals. Prior batch receipts authorize
+neither new rows nor retries.
+
+Preserve any explicit draft-approval requirements that still apply to the
+category; do not let an unconditional per-item gate negate newer explicit
+delegation. General investigation permission is not write authority. New
+issues/PRs, product fixes, remote builds/reruns, schedules and unrelated writes
+need their own authority and applicable draft approval.
+
+Use short `[automated] ` decision comments, normally one to three sentences:
+the actual decision, concise evidence, and a canonical/current tracker or
+relevant run link. Do not comment on every unchanged keep or repeat status
+spam. Housekeeping must not imply a fix.
+
+Before writing, check live state, body, comments and decision-changing
+evidence. Record each action's authorization, evidence, exact text and reason;
+show drafts and obtain approval where required. Preserve evidence links before
+closing duplicates. After writing, verify final state, state reason and exact
+comment. Persist uncertain outcomes and partial errors; inspect live
+state/comments before any authorized retry, never blindly repeat a mutation.
+
 Record observed process failures locally, propose a small prompt revision,
 then evaluate the changed prompt afresh on the same cases. Label prototype
 evaluations honestly; do not claim continuous operation or proven accuracy.
