@@ -104,6 +104,13 @@ Keep the current report and raw evidence in session artifacts. Summarize
 coverage and gaps; link detailed family reports. Do not put downloaded logs,
 private receipts or machine paths into committed/public prose.
 
+Start the report with a short decision overview: a table of issues or groups
+being tracked, supported findings and proposed next steps. State approval
+status and important uncertainty beside that overview. Inventory counts must
+not imply diagnostic coverage. Keep detailed evidence, history, measurements
+and process improvements below it; record prompt checkpoints and what each
+improvement addresses in the local evaluation history.
+
 Measure inventory/evidence coverage, independently adjudicated false merges
 and false splits, causal-claim precision, eligible post-fix executions,
 recurrence, detection-to-handoff latency, and cost per accepted finding.
