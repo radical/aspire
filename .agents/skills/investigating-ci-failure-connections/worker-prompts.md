@@ -109,9 +109,26 @@ a duplicate without supporting evidence. Choose useful active canonical
 tracking, preserve the union of distinct occurrences and unique evidence,
 and link the duplicate to the canonical. Do not retire the sole active
 tracker into a closed obsolete canonical as though current failure resolved.
-Individual causes retain the separate three-calendar-month general and
-two-calendar-month verified-singleton age policies and their approval rules;
-workflow discretion does not loosen them.
+For individual causes only, a latest actual matching occurrence strictly older
+than 30 elapsed days qualifies for administrative retirement, with one or many
+hits. Cutoff = assessment time minus 30 × 24 hours; equality does not qualify.
+Use exact timestamps when known. A date-only hit qualifies only when every
+possible time on that date is older than 30 days; disclose timezone uncertainty.
+Check accessible history, known matching families, comments, linked repairs and
+recent evidence. Unknown latest dates or credible later matching evidence and
+coverage gaps that could change eligibility require a hold. Verify cited
+diagnostics before changing last-seen; an open repair alone is not a blocker.
+
+An unidentified underlying cause or unprovable singleton status alone does not
+block retiring an old, specifically recorded incident after those checks.
+Disclose identity/coverage uncertainty, never assert no untracked recurrences
+or a proven fix. Report distinct counts when supportable, otherwise unknown;
+deduplicate repeated run/attempt/job/test mentions, not distinct failing jobs
+or attempts. Include assessment time, cutoff, last-seen and evidence limits.
+Retirement needs no repair proof or fresh green. Preserve per-run write
+authority and exact-draft approval unless newer explicit user authorization
+covers that row. Workflow/duplicate delegation does not authorize individual
+age closures; workflow relevance rules have no 30-day gate.
 
 Apply only this run's delegated categories. Check live state/body/comments
 and material evidence before writes. Use short [automated] decision comments,

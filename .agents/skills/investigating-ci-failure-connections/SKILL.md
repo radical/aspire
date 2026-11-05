@@ -135,32 +135,38 @@ change the duplicate decision requires a hold.
 ### Individual-cause age retirement
 
 Compute last-seen across the canonical family, including reopened duplicates
-and comments containing actual occurrences. Use calendar-month cutoffs and
-the latest actual occurrence, not the
-issue's creation date or a recent administrative comment. Under the user's
-age policy, a latest occurrence strictly older than three calendar months is
-sufficient for stale-record closure; proof of repair or a fresh green run is
-not required. Unknown dates, incomplete occurrence lists or a newer matching
-duplicate prevent an age-qualified decision. Describe this as retirement of
-the recorded incident, not proof of recovery.
+and comments containing actual occurrences. A latest actual matching occurrence
+strictly older than 30 elapsed days qualifies for administrative retirement,
+whether there is one occurrence or many. Compute the cutoff as assessment time
+minus 30 days (30 × 24 hours); the occurrence must precede it, not equal it.
+Use exact timestamps when known, not issue creation or administrative updates.
+For a date-only occurrence, qualify only when every possible time on that date
+is strictly older than 30 days; disclose date/timezone uncertainty.
 
-For a family with exactly one distinct recorded failure, also propose stale
-retirement when that occurrence is strictly older than two calendar months.
-Count across the issue, known matching duplicates, comments and linked failure
-evidence. Repeated mentions of the same run/attempt/job/test count once;
-distinct failing jobs or attempts count separately. Unknown identities or
-incomplete evidence require a hold, not an assumed singleton. Multi-hit
-families retain the general three-calendar-month rule.
+Check accessible occurrence history, known matching families, comments, linked
+repair PRs and cross-references for recent evidence. Unknown latest actual dates
+or credible later matching evidence that could change eligibility require a
+hold, including unresolved decision-changing coverage gaps. Verify cited
+run/job diagnostics before changing last-seen. An open repair alone does not
+block retirement; a newer verified failure changes the age calculation.
 
-Show the distinct occurrence count, latest actual occurrence, cutoff and
-qualifying rule in each pruning row. Individual-cause age retirement retains
-the exact-draft approval requirement; delegation of workflow retirement or
-verified duplicates does not authorize this separate category.
+An unidentified underlying cause or unprovable single-hit status alone need
+not block retirement of an old, specifically recorded incident after those
+checks. Disclose identity and coverage uncertainty; do not claim there were
+no untracked recurrences. Proof of repair or a fresh green run is not required.
+This retires the documented incident administratively, not as proof of repair
+or recovery.
 
-Before an age-based closure, inspect linked repair PRs and cross-references for
-newer matching failure evidence omitted from the issue's occurrence table.
-Verify cited run/job diagnostics before changing the last-seen date. An open
-repair alone does not block stale retirement; a newer verified failure does.
+Report the distinct occurrence count when supportable; otherwise mark it
+unknown, not an assumed singleton. Repeated mentions of the same
+run/attempt/job/test count once; distinct failing jobs or attempts count
+separately. Show latest actual occurrence, assessment time, cutoff, qualifying
+rule and evidence limits in each pruning row.
+
+Individual-cause age retirement retains per-run write-authority and exact-draft
+approval requirements unless newer explicit user authorization covers that row.
+Delegation of workflow retirement or verified duplicates does not authorize
+this separate category.
 
 ### Attempted repairs and execution history
 
@@ -211,8 +217,8 @@ Preserve closed-history evidence and links; never erase comments. Name the
 current tracker for superseded reports and preserve any unique actionable
 information before retirement. Do not imply permanent repair from a green
 execution or housekeeping. These judgments do not change the separate
-three-calendar-month general or two-calendar-month verified-singleton
-individual-cause policies.
+strictly-older-than-30-elapsed-days individual-cause retirement policy or apply
+that cutoff to workflow reports.
 
 ## Escape analysis and prevention
 
