@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 7bf070a5c9c383a5f1a1299848bdec62e6d506aa
+  SOURCE_SHA: 97719af00186e44771ca776dd6871d621eea68f0
   ASPIRE_CLI_TELEMETRY_OPTOUT: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
 
