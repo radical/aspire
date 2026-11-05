@@ -66,9 +66,22 @@ causality. Do not assign a common root cause from a shared timeout alone.
 
 Compute last-seen across the canonical family, including reopened duplicates
 and comments containing actual occurrences. State whether three months means
-calendar months or elapsed days. Old evidence supports retirement review,
-not proof of recovery. Removed main execution lanes can still matter to
-supported release branches.
+calendar months or elapsed days. Use the latest actual occurrence, not the
+issue's creation date or a recent administrative comment. Under the user's
+age policy, a latest occurrence strictly older than three calendar months is
+sufficient for stale-record closure; proof of repair or a fresh green run is
+not required. Unknown dates, incomplete occurrence lists or a newer matching
+duplicate prevent an age-qualified decision. Describe this as retirement of
+the recorded incident, not proof of recovery.
+
+Inspect recent maintainer comments, including "already fixed" recommendations.
+Record the author, exact claim, date and comment link; author identity alone
+does not establish a fix. Verify a linked repair's merged state and relevant
+change, then compare the latest failure revision with the repair. A tentative
+claim without supporting evidence is not a confirmed fix, but does not block
+an independently age-qualified closure. Keep stale retirement, verified repair
+and removal of an execution lane as separate closure reasons. Removed main
+execution lanes can still matter to supported release branches.
 
 Preserve attempt history. The latest attempt's failures are not the union of
 every attempt. Canceled runs can contain real failures; skipped tests are not
