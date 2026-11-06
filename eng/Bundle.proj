@@ -547,8 +547,14 @@
       <_CliDistributionResponseArgument Condition="$([MSBuild]::IsOSPlatform('Windows'))">&quot;'@$(_CliDistributionResponseFile.Replace(&quot;'&quot;, &quot;''&quot;))'&quot;</_CliDistributionResponseArgument>
       <_StandaloneSigningResponseArgument Condition="$([MSBuild]::IsOSPlatform('Windows'))">&quot;'@$(_StandaloneSigningResponseFile.Replace(&quot;'&quot;, &quot;''&quot;))'&quot;</_StandaloneSigningResponseArgument>
     </PropertyGroup>
+    <!-- Components were signed before archive creation. Only the final macOS pass
+         excludes their publish copies; new CLI archives and NuGet containers still sign. -->
+    <ItemGroup Condition="'$(BuildDistributionPackages)' == 'true' and '$(Sign)' == 'true' and $(TargetRid.StartsWith('osx-'))">
+      <_FinalBundleSigningArgument Include="/p:SkipBundleComponentSigning=true" />
+    </ItemGroup>
     <ItemGroup Condition="'$(BuildDistributionPackages)' == 'true' and '$(SkipCliArtifacts)' != 'true'">
       <_CliDistributionArgument Include="@(_BundleMSBuildArgument)" />
+      <_CliDistributionArgument Include="@(_FinalBundleSigningArgument)" />
       <_CliDistributionArgument Include="/p:SkipManagedBuild=true;/p:TargetRids=$(TargetRid)" />
       <_CliDistributionArgument Include="&quot;/p:BundlePayloadPath=$(_BundleArchivePath)&quot;" />
       <_CliDistributionArgument Include="&quot;/bl:$(_ArtifactsLogDir)PublishAndPackageCli.binlog&quot;" />
@@ -558,7 +564,7 @@
                       Overwrite="true"
                       Condition="'$(BuildDistributionPackages)' == 'true' and '$(SkipCliArtifacts)' != 'true'" />
     <WriteLinesToFile File="$(_StandaloneSigningResponseFile)"
-                      Lines="@(_BundleMSBuildArgument);&quot;/bl:$(_ArtifactsLogDir)SignNonCliDistributionPackages.binlog&quot;"
+                      Lines="@(_BundleMSBuildArgument);@(_FinalBundleSigningArgument);&quot;/bl:$(_ArtifactsLogDir)SignNonCliDistributionPackages.binlog&quot;"
                       Overwrite="true"
                       Condition="'$(BuildDistributionPackages)' == 'true' and '$(Sign)' == 'true' and '$(SkipCliArtifacts)' == 'true'" />
 
