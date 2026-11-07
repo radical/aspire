@@ -121,7 +121,13 @@
     <!-- Sign only the final NativeAOT CLI publish output; CLI archives are signed separately. -->
     <ItemsToSign Condition="$([System.OperatingSystem]::IsWindows())" Include="$(ArtifactsBinDir)Aspire.Cli.*\**\publish\aspire.exe" />
     <ItemsToSign Condition="!$([System.OperatingSystem]::IsWindows())" Include="$(ArtifactsBinDir)Aspire.Cli.*/**/publish/aspire" />
+  </ItemGroup>
 
+  <!-- The final macOS bundle pass consumes components already signed before layout
+       creation. Signing their publish copies again cannot update the embedded payload.
+       Keep container discovery and certificates unchanged: new NuGet packages still
+       require recursive signing and their outer NuGet signature. -->
+  <ItemGroup Condition="'$(SkipBundleComponentSigning)' != 'true' or !$([System.OperatingSystem]::IsMacOS())">
     <!-- Sign the aspire-managed binary at its publish output path (before it gets packed into the bundle archive) -->
     <ItemsToSign Condition="$([System.OperatingSystem]::IsWindows())" Include="$(ArtifactsBinDir)Aspire.Managed\**\publish\aspire-managed.exe" />
     <ItemsToSign Condition="$([System.OperatingSystem]::IsWindows())" Include="$(ArtifactsBinDir)Aspire.Tray.Windows\**\publish\aspire-tray.exe" />
@@ -146,6 +152,9 @@
     <!-- Hardened runtime library validation requires bundled dylibs to use the Dashboard's Team ID.
          Arcade's default .dylib rule signs these with MacDeveloperHarden. -->
     <ItemsToSign Condition="$([System.OperatingSystem]::IsMacOS())" Include="$(ArtifactsBinDir)Aspire.Dashboard/**/publish/*.dylib" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       Note: VS Code extension (.vsix) is NOT included here.
       Signing the VSIX changes its hash, breaking manifest integrity verification.
@@ -153,4 +162,28 @@
     -->
     <ItemsToSignPostBuild Include="$(VisualStudioSetupInsertionPath)\**\*.zip" Condition="'$(PostBuildSign)' == 'true'" />
   </ItemGroup>
+
+  <Target Name="_ValidateBundleFinalSigningInputs"
+          BeforeTargets="Sign"
+          Condition="'$(SkipBundleComponentSigning)' == 'true' and $([System.OperatingSystem]::IsMacOS())">
+    <PropertyGroup>
+      <_BundleSigningBinPathPattern>$([System.Text.RegularExpressions.Regex]::Escape('$([MSBuild]::NormalizeDirectory('$(ArtifactsBinDir)'))'))</_BundleSigningBinPathPattern>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- Match prepared paths such as Aspire.Dashboard/osx-arm64/Release/net11.0/osx-arm64/publish/Aspire.Dashboard,
+           not similarly named files discovered recursively inside distribution containers. -->
+      <_UnexpectedBundleComponentToSign Include="@(ItemsToSign)"
+                                        Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ItemsToSign.FullPath)', '^$(_BundleSigningBinPathPattern)Aspire\.(Managed|TerminalHost|Dashboard|Hosting\.Native\.Server)/.*/publish/'))" />
+      <_BundleCliArchiveToSign Include="@(ItemsToSign)"
+                               Condition="Exists('%(ItemsToSign.Identity)') and $([System.Text.RegularExpressions.Regex]::IsMatch('%(ItemsToSign.Filename)%(ItemsToSign.Extension)', '^aspire-cli-$(TargetRid)-.+\.tar\.gz$'))" />
+      <_BundleDashboardPackageToSign Include="@(ItemsToSign)"
+                                     Condition="Exists('%(ItemsToSign.Identity)') and $([System.Text.RegularExpressions.Regex]::IsMatch('%(ItemsToSign.Filename)%(ItemsToSign.Extension)', '^Aspire\.Dashboard\.Sdk\.$(TargetRid)\..+\.nupkg$'))" />
+    </ItemGroup>
+    <Error Condition="'@(_UnexpectedBundleComponentToSign)' != ''"
+           Text="Final macOS bundle signing must exclude prepared component publish files: @(_UnexpectedBundleComponentToSign, ', '). Keep SkipBundleComponentSigning scoped to the final pass and exclude these inputs from ItemsToSign." />
+    <Error Condition="'$(BundlePayloadPath)' != '' and '@(_BundleCliArchiveToSign)' == ''"
+           Text="Final macOS bundle signing must include the produced aspire-cli-$(TargetRid)-*.tar.gz archive. Ensure CLI packaging completes before signing and the archive remains in ItemsToSign." />
+    <Error Condition="'$(PostBuildSign)' != 'true' and '@(_BundleDashboardPackageToSign)' == ''"
+           Text="Final macOS bundle signing must include the produced Aspire.Dashboard.Sdk.$(TargetRid).*.nupkg package. Ensure Dashboard packing completes before signing and default NuGet discovery remains enabled." />
+  </Target>
 </Project>
