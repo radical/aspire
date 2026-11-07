@@ -1,0 +1,73 @@
+name: PR 21033 native Windows validation
+
+on:
+  push:
+    branches: [ankj/validate-pr21033-native-forwarding]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  native:
+    uses: ./.github/workflows/run-tests.yml
+    with:
+      testShortName: NativeForwarding.Validation
+      os: windows-latest
+      versionOverrideArg: >-
+        '/p:NativeBuildProbe=$(whoami)'
+        '/p:NativeCmdProbe=x&whoami'
+        '/p:NativeSpaceProbe=two words'
+      extraTestArgs: >-
+        --filter-trait 'Partition=x&whoami'
+        --filter-trait 'Literal=$(whoami)'
+        --filter-trait 'Spaced=two words'
+
+  verify:
+    needs: native
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      NATIVE_JOB_RESULT: ${{ needs.native.result }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: logs-NativeForwarding.Validation-windows-latest
+          path: receipts
+      - name: Verify native receivers actually ran
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          assert os.environ["NATIVE_JOB_RESULT"] == "success"
+          root = Path("receipts")
+          expected = {
+              "NativeBuildProbe": "$(whoami)",
+              "NativeCmdProbe": "x&whoami",
+              "NativeSpaceProbe": "two words",
+          }
+          for name in ("native-build-inputs.json", "native-test-argv.json"):
+              paths = list(root.rglob(name))
+              assert len(paths) == 1, (name, paths)
+              receipt = json.loads(paths[0].read_text())
+              assert receipt["IsWindows"] is True, receipt
+              assert receipt["ProductionHead"] == "86505c0cd58cc13f08baa1d93b5b8bdea08b78db"
+              assert receipt["ValidationHead"] == os.environ["GITHUB_SHA"]
+              assert receipt["BuildInputs"] == expected, receipt
+              assert receipt["FilterTraits"] == [
+                  "Partition=x&whoami", "Literal=$(whoami)", "Spaced=two words"
+              ], receipt
+              print(json.dumps(receipt, indent=2))
+
+          summaries = []
+          for path in root.rglob("*.trx"):
+              tree = ET.parse(path)
+              summaries.extend(tree.findall(".//{*}ResultSummary/{*}Counters"))
+          assert len(summaries) == 1, len(summaries)
+          assert summaries[0].attrib["total"] == "2", summaries[0].attrib
+          assert summaries[0].attrib["passed"] == "2", summaries[0].attrib
+          assert summaries[0].attrib["failed"] == "0", summaries[0].attrib
+          print("Verified 2 passing tests and both final native receiver receipts.")

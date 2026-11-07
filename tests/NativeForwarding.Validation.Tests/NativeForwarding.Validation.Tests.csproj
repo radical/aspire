@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IncludeTestUtilities>false</IncludeTestUtilities>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.extensibility.core" />
+    <PackageReference Include="xunit.v3.assert" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NativeBuildProbe</_Parameter1>
+      <_Parameter2>$(NativeBuildProbe)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NativeCmdProbe</_Parameter1>
+      <_Parameter2>$(NativeCmdProbe)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>NativeSpaceProbe</_Parameter1>
+      <_Parameter2>$(NativeSpaceProbe)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

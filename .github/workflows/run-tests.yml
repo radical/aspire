@@ -54,7 +54,7 @@ permissions:
 jobs:
 
   test:
-    if: ${{ github.repository == 'microsoft/aspire' }}
+    if: ${{ github.repository == 'radical/aspire' }}
     runs-on: ${{ inputs.os }}
     timeout-minutes: 60
     name: ${{ inputs.testShortName }} (${{ inputs.os }})
