@@ -47,7 +47,7 @@ the obligation does not belong to that role.
 | Original claim protocol (settle-expire-v1) | `Approval/expiry/death alone settle nothing` | `protocol:"settle-expire-v1"`; `Approval/expiry/death settle nothing` | `make ONE versioned handoff packet`; `AND independently verified settlement` |
 | Settled release with explicit expiry | `CAS own expiry=1` | `CAS own expiry1` | `CAS own expiry1` |
 | PR cap and slots | `Group <=3 open PRs` | `<=3 open group PRs` | `<=3 PR cap` |
-| PR readiness gate and maintainer requests | n/a: monitor reports status only | `passing targeted validation and required checks, no blocking review: mark OWN PR ready`; `mark OWN PR ready, verify non-draft, request suitable maintainers` | `Ready: independent current-head pass`; `verify each new ready handoff against Ready` |
+| PR readiness gate and maintainer requests | n/a: monitor reports status only | `passing targeted validation and required checks, no blocking review: mark OWN PR ready`; `mark OWN PR ready, verify non-draft, request maintainers (reuse); verify requests` | `Ready: independent current-head pass`; `verify each new ready handoff against Ready` |
 | Conflicting current-head verdict is not a pass | n/a: monitor reads review status | `Conflicting current-head verdicts aren't a pass: resolve evidence or fresh exact-head review` | `conflicting current-head verdicts aren't a pass` |
 | Human merge | `merge` | `Approval/merge stay human`; `Human shiproom required` | `Humans merge` |
 | Recovery needs later scheduled/push CI | `Recovery needs scheduled/push CI containing the fix` | `merged isn't recovered (monitor owns outcomes)` | `Recovery needs later scheduled/push CI containing the fix` |
@@ -55,7 +55,7 @@ the obligation does not belong to that role.
 | Shared recovery core embedded inline | `RECOVERY CORE v2` | `RECOVERY CORE v2` | `RECOVERY CORE v2` |
 | Parked: not due/overdue and excluded from unchanged-check escalation until reopenCondition verifiably changes; ages/due kept; cheap reopen check only | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `Two eligible unparked passes`; `core-7 parking`; `parked shows reopen condition` | `parked until reopenCondition verifiably changes`; `one cheap reopen check`; `Parked own work resumes on core-3 reopen` | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `one cheap reopen check`; `Never reset ages/deadlines/IDs` |
 | Missed milestone: classify, never kill | `Age prompts diagnosis, never kill/takeover/duplicate` | `Age prompts diagnosis, never kill/takeover/duplicate`; `no duplicate/replacement (core 8)` | `concrete <=60min diagnostic milestone` |
-| Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement` |
+| Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement`; `STALE (owner-authorized, this recovery only; no workflow/host kills)`; `completed idle awaiting legitimate input isn't hung`; `verify termination+outcomes before ONE replacement (no concurrent duplicate)`; `record exact missing control+UI owner action once`; `reconnect/disable/expiry never kill` |
 | Windows environment and diagnostic slot | `ab8cd228-635c-48f4-861c-a5d77c81e5ba` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `worker/diagnostic-slot.json is the sole claimless non-expiring probe lock` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `no second child/name/operation` |
 | Review findings private; legacy reviewer findings consumed | `ack exact supervisor/legacy reviewer findings` | `Review findings stay private in artifacts` | `Consume legacy reviewer critique as evidence` |
 | Seven-day observation, not self-grading | `Judged on missed/deferred work and later CI recovery`; `You own later failure-rate outcomes` | `Judge useful progress/later CI outcomes` | `Seven-day observation, ALL due blockers`; `you own delivery` |
@@ -169,6 +169,15 @@ changes adds authority.
 - Monitor: "backfill missing nextCheckAt" → core 3; "Refusals citing old
   prompt/tool limits are adoption mismatches" → core 11; legacy oversize
   detail → "Legacy oversize migration needs separate lossless approval".
+- Owner-authorized STALE addition (supervisor): 12h/24h idle or unresponsive
+  sessions get exact evidence checks, then stop/close only through an exposed
+  authorized control, with verified termination before one replacement;
+  without such a control, the missing control and owner UI action are recorded
+  once and the item parks. Room came from prose shortening (for example
+  "Schedules aren't delivery", the ledger-filter tip, the duplicate "approval
+  isn't settlement" and "lost receipt" lines, which RECOVERY CORE 4 and the
+  claims rules cover). The fixer ready gate restores "verify requests" for
+  maintainer review requests.
 - Supervisor: "diagnose <=3 executable actions deeply" → ONE due blocked item
   by rotating cursor, as the owner directed; the reviewer correctness
   consumer is removed; post-merge detail (manual/skipped green, canceled

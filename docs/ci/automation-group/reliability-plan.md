@@ -313,7 +313,12 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   transfers (4 retired); sizes 11,984/11,996/11,981 bytes. A narrow pre-deployment fix moved
   reviews to per-`<reviewId>` subdirectories (fresh same-head review after
   settlement), consumes native results immediately and adds the fixer's
-  boundary checkpoint; 207 anchors. Not yet
+  boundary checkpoint. A later owner-authorized supervisor STALE rule
+  handles 12h/24h idle or unresponsive sessions (evidence first; stop/close
+  only through an exposed authorized control, else record the missing control
+  once and park; no such control is in today's catalog), and the fixer ready
+  gate again verifies maintainer requests. Sizes now 11,984/11,995/11,993; 212
+  anchors. Not yet
   independently reviewed; deployment and the reviewer retirement sequence are
   pending (hosted `automation_get`/list aborted again at 18:32 UTC) and
   recorded in [prompts/README.md](prompts/README.md#deployment-and-reviewer-retirement-status).

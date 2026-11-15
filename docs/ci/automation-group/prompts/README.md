@@ -84,7 +84,12 @@ They replace the separate reviewer cron, at the owner's request:
   and failure-rate measurement;
 - the supervisor verifies readiness handoffs, diagnoses one due blocked item
   per pass and takes a daily independently selected missed-work sample, with
-  no audit-of-audit;
+  no audit-of-audit, and (owner-authorized for this recovery only) handles
+  12h/24h idle or unresponsive sessions: exact evidence first, stop/close only
+  through an exposed authorized control with verified termination before one
+  replacement, otherwise one recorded missing-control/UI owner action and park.
+  The current catalog has no stop/close/restart tool, so today this records
+  the gap; reconnect, disable and lease expiry are never treated as a kill;
 - legacy `verifier/*` records stay read-only evidence.
 
 `create_session` has no model or tool parameter, so no child model is
