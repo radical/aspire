@@ -39,8 +39,26 @@ source evidence or policy, then depended on an interactive response path.
 [operating rules](operating-rules.md). Genuine authorization boundaries still
 require a specific decision, but should not hold up unrelated work.
 
-**Status:** owner rule captured; application to future prompts and resolution of
-the already-waiting task remain unverified.
+**Status, November 15, 06:05 UTC:** unattended operation and deterministic
+source-branch/`main` fallback rules are applied to all four role prompts.
+Resolution of already-waiting tasks and consistent future behavior remain
+unverified.
+
+### Release fixes can duplicate work already completed on main
+
+**Observed:** a later source investigation identified an existing main-branch
+remedy missing from a release branch. The owner explicitly prefers reuse.
+
+**Mechanism:** starting implementation from the release failure alone can miss
+an established fix and create an unnecessary independent solution.
+
+**Change:** the fixer searches main and existing source/target backports first,
+prefers an applicable merged fix, follows `backport-pr` checks and shiproom
+formatting, and validates on the target branch. Monitor supplies leads; reviewer
+checks reuse and target validation. Ownership and existing grants still apply.
+
+**Status, November 15, 06:05 UTC:** applied to the relevant prompts. A completed
+backport using the new instruction has not yet been demonstrated.
 
 ### Handoffs were recorded without a reachable executor
 
@@ -101,8 +119,10 @@ requests, but did not establish that the fixer itself performed the transition.
 Record operation evidence when attributing the action to an automation; otherwise
 report only the observed external state.
 
-**Status:** reporting distinction and intended delivery rule documented.
-Automated end-to-end readiness handling still needs verification.
+**Status, November 15, 06:05 UTC:** the fixer now has an applied instruction to
+perform and verify the ready transition and reviewer requests once its gates
+pass; reviewer checks the actual state. End-to-end execution still needs
+verification.
 
 ### Routine reporting generated too much coordination work
 
@@ -174,6 +194,7 @@ promptly when access prevents independent verification.
 | November 15, 02:57-04:35 inspection window | Observed partial adoption | Independent diagnosis, feedback consumption, a permitted diagnostic execution, and baseline cursor progress | End-to-end result use, unresolved handoff resolution, and later CI health |
 | November 15, documentation pass | Captured rules and simpler operating design | Versioned notes distinguish observations, owner decisions, and proposals | Implemented helpers/procedures and verified configuration changes |
 | November 15, process-notes revision | Refocused persisted findings on operating mechanisms | Added working practices, problem mechanisms, remedy status, and follow-up checks; removed task-specific case histories | Keep subsequent updates equally process-focused |
+| November 15, 06:00-06:03 | Applied unattended, skill-use, branch-selection, readiness, and backport rules | Four prompt-only updates applied; complete current and baseline snapshots verified and saved | New runs use the rules, routine input waits disappear, and release fixes reuse main when appropriate |
 
 Do not advance a row from "documented" to "implemented" or "effective" without
 new evidence. Editing these notes changes neither running sessions nor saved

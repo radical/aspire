@@ -6,15 +6,25 @@ tools, or old sessions implement it.
 
 ## Autonomous routine decisions
 
-1. Work from the accepted incident's source branch, run, attempt, and evidence.
-   Target the fix PR at that branch. Do not ask whether to use main or
-   release/17.0 when the source already answers it.
+1. Target the branch named by the original issue; otherwise use the branch where
+   the accepted source failure occurred. If neither is known, target `main` and
+   record that fallback. Do not ask the owner to choose. A known out-of-scope
+   branch remains excluded, not silently retargeted to `main`.
+   For a `release/*` fix, first search `main` for an existing applicable fix and
+   an existing backport for that source/target pair. Prefer backporting a merged
+   fix instead of reimplementing it. Use the repository's `backport-pr` skill
+   checks and shiproom style: source PR link, release-prefixed title, Customer
+   Impact, Testing, Risk, and Regression? sections. Validate the target branch,
+   preserve uncertainty, and do not take over someone else's active backport.
+   Within existing grants the fixer can create its own manual draft backport;
+   this rule does not authorize source-PR mutations or bot dispatch. If no
+   applicable fix exists, continue normal diagnosis and record the reason.
 2. Correlate the same cause across branches without losing branch-specific
    validation and delivery. Do not silently retarget an existing PR or include
    an unapproved backport in the current task.
-3. Resolve routine implementation, test-selection, and branch decisions using
-   repository guidance and the agreed scope. Do not enter an interactive
-   question loop for those decisions.
+3. Run unattended without expecting the user to be available. Resolve routine
+   implementation, test-selection, and branch decisions using repository
+   guidance and the agreed scope. Do not enter an interactive question loop.
 4. A real permission, cost, destructive-action, or scope boundary still needs
    authorization. Save the exact decision needed, route it to the responsible
    person, release execution resources safely, and work on another eligible

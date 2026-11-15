@@ -12,6 +12,7 @@ belong in the runtime work ledger, not these notes.
 | [Process findings](findings.md) | Working practices, recurring problems, remedy status, and follow-up evidence |
 | [Operating rules](operating-rules.md) | Agreed behavior that prompts, skills, and tooling should implement |
 | [Proposed design](proposed-design.md) | A smaller decision loop, reusable procedures, state model, and implementation sequence |
+| [Complete prompt snapshots](prompts/README.md) | Applied prompts, earlier baseline, exact revisions, proposal receipts, and adoption limits |
 
 ## Current position
 
@@ -19,6 +20,13 @@ The group has a monitor, fixer, reviewer, and supervisor. Prompt changes applied
 around 02:52 UTC on November 15 improved diagnosis and feedback handling, but did
 not resolve every stalled task. The objective remains useful fixes and healthier
 CI, not more automation runs, reports, or acknowledgements.
+
+At 06:00-06:03 UTC, further prompt-only updates were applied to all four roles:
+unattended routine decisions, source-branch targeting with a `main` fallback,
+explicit repository-skill use, verified readiness actions, and release-fix reuse
+from `main` with backport shiproom formatting. Existing sessions are not upgraded
+by configuration edits. The [snapshot index](prompts/README.md) records exactly
+what was applied; effective recovery still requires later execution evidence.
 
 The immediate lesson is not "add another rule for every failure." Keep explicit
 policy in short prompts, reusable procedures in repository skills, and mechanical
