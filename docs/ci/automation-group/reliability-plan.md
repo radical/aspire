@@ -309,8 +309,11 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   `worker/reviews/<pr>/<head>/` and the ready gate; monitor owns
   `planner/outcomes/` and failure rates; supervisor owns readiness-handoff
   checks, one due blocked item per pass and a daily missed-work sample, with
-  no audit-of-audit. Checker: exit 0, 54 rows/201 anchors, 27 reviewer
-  transfers (4 retired); sizes 11,984/11,992/11,981 bytes. Not yet
+  no audit-of-audit. Checker: exit 0, 54 rows, 27 reviewer
+  transfers (4 retired); sizes 11,984/11,996/11,981 bytes. A narrow pre-deployment fix moved
+  reviews to per-`<reviewId>` subdirectories (fresh same-head review after
+  settlement), consumes native results immediately and adds the fixer's
+  boundary checkpoint; 207 anchors. Not yet
   independently reviewed; deployment and the reviewer retirement sequence are
   pending (hosted `automation_get`/list aborted again at 18:32 UTC) and
   recorded in [prompts/README.md](prompts/README.md#deployment-and-reviewer-retirement-status).

@@ -74,9 +74,12 @@ They replace the separate reviewer cron, at the owner's request:
 - the fixer runs a fresh-context read-only review of each new owned PR head
   (native task tool if exposed, else `create_session` +
   `send_session_message` with an explicit reverse reply), persists it under
-  `worker/reviews/<pr>/<head>/`, keeps at most one outstanding review per
-  owned incident apart from the Windows diagnostic slot, and owns the ready
-  gate;
+  `worker/reviews/<pr>/<head>/<reviewId>/` with a `worker/reviews/<pr>/current.json`
+  latest ref (a fresh same-head review only after the prior one settles,
+  never while unknown), consumes a native result immediately (the no-wait
+  rule applies to child transport only), keeps at most one outstanding review
+  per owned incident apart from the Windows diagnostic slot, and owns the
+  ready gate;
 - the monitor owns post-merge outcomes (`planner/outcomes/<pr>/<window>.json`)
   and failure-rate measurement;
 - the supervisor verifies readiness handoffs, diagnoses one due blocked item
@@ -85,7 +88,7 @@ They replace the separate reviewer cron, at the owner's request:
 - legacy `verifier/*` records stay read-only evidence.
 
 `create_session` has no model or tool parameter, so no child model is
-promised, and the child's read-only limits are prompt instructions, not tool
+promised and no child tool grant is assumed; the child's read-only limits are prompt instructions, not tool
 enforcement. [prompt-obligations.md](../prompt-obligations.md) maps every
 preserved obligation and every reviewer transfer.
 
@@ -120,8 +123,8 @@ Pending retirement sequence (nothing below has happened):
    `repository_id` 696529789, `expected_generation`, `prompt`), then read back
    prompt and unchanged settings.
 2. Observe one actual review result from a fixer review subagent, consumed
-   under the new fixer revision (`worker/reviews/<pr>/<head>/result.json` and
-   `consumption.json`). No manual fault injection.
+   under the new fixer revision (`worker/reviews/<pr>/<head>/<reviewId>/result.json`
+   and `consumption.json`). No manual fault injection.
 3. Only then disable reviewer `62ff16a7-a74c-4c96-a23c-d053c3f35743` with a
    fresh read and CAS `automation_set_enabled`; verify readback.
 4. Old reviewer sessions stay frozen; their records remain read-only legacy

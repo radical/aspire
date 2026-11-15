@@ -38,7 +38,7 @@ the obligation does not belong to that role.
 | State ownership (own paths only) | `you own planner/current.json` | `others read-only` | `Never write worker-owned claim/lifecycle fields` |
 | Immutable record, full readback, then CAS | `verify FULL readback, then CAS planner/current.json` | `current CAS-points only to a FULL-verified pass` | `verify FULL bytes, CAS supervisor/current.json` |
 | Pointers are advisory, not inventory | `pointers aren't full inventory` | `pointers aren't inventory` | `Pointers aren't inventory/live status` |
-| Paging and size bounds | `Hot bytes + >=4096 reserve <=32768`; `follow nextOffset, discard conflicted/mixed reads` | `Hot bytes+>=4096 reserve<=32768`; `discard mixed reads` | `Hot bytes+>=4096 reserve<=32768`; `discard mixed reads` |
+| Paging and size bounds | `Hot bytes + >=4096 reserve <=32768`; `follow nextOffset, discard conflicted/mixed reads` | `Hot bytes+>=4096 reserve<=32768`; `discard mixed reads`; `At limits checkpoint criteria/owner/versions/effects`; `Legacy oversize: separate approved lossless migration` | `Hot bytes+>=4096 reserve<=32768`; `discard mixed reads` |
 | Unknown outcomes keep original operation (core 8) | `Keep original call/operation/args/bytes/ETags` | `Keep original call/operation/args/bytes/ETags`; `Unknown/timed-out create/send holds the slot` | `Keep original call/operation/args/bytes/ETags`; `No invented receipt API` |
 | CAS conflict: reconcile, no ETag substitution (core 8) | `CAS conflict: reconcile, never substitute ETags` | `CAS conflict: reconcile, never substitute ETags` | `CAS conflict: reconcile, never substitute ETags` |
 | Lease held by another holder: no write, no wait | `Another holder's unexpired lease: no protected writes/wait/poll; end.` | `Another holder's unexpired claim/lease: skip only that incident; no protected writes/polling.` | `Another holder's unexpired lease: no protected writes/wait/poll; end.` |
@@ -72,9 +72,9 @@ the obligation does not belong to that role.
 | Denied/missing tools are capability evidence, not workaround license (core 10) | `not task state or workaround license` | `not task state or workaround license` | `not task state or workaround license` |
 | Overlapping monitor issue-body race (F3) | `overlapping monitors can race: reconcile the actual body, never assume one edit` | n/a: never edits #22241 | n/a: never edits #22241 |
 | Evidence attributed to producers; roles/models aren't independence (F8) | n/a: monitor aggregates producer evidence | n/a: fixer produces evidence | `attribute evidence to producers` |
-| Fresh-context exact-head review owned by fixer | n/a: worker owns review | `REVIEW: before ready`; `via native task tool if actually exposed, else child`; `upstream code-review skill`; `Accept only an actual native result or the child's authoritative explicit reply; recheck head (moved=stale)` | `<=1 outstanding review child per owned incident` |
-| Review persistence and slot | n/a: worker owns review | `worker/reviews/<pr>/<head>/{request,child,send,result,consumption}.json`; `<=1 outstanding per owned incident, apart from diagnostic slot`; `CAS bounded worker/reviews/<pr>/current.json` | `worker/reviews/<pr>/current.json` |
-| Child create/send identity and no duplicate | n/a: monitor creates no children | `save operationId (accepted isn't delivered)`; `explicit reverse send AND final text (no child artifact access assumed)`; `Unknown/timed-out create/send holds the slot` | `no second child/name/operation` |
+| Fresh-context exact-head review owned by fixer | n/a: worker owns review | `REVIEW: before ready`; `via native task tool if actually exposed, else child`; `upstream code-review skill`; `Accept only an actual native result (consume now) or the child's authoritative explicit reply`; `recheck head (moved=stale)` | `<=1 outstanding review child per owned incident` |
+| Review persistence and slot | n/a: worker owns review | `worker/reviews/<pr>/<head>/<reviewId>/{request,child,send,result,consumption}.json`; `new same-head reviewId only after prior settles (not while unknown)`; `<=1 outstanding per owned incident, apart from diagnostic slot`; `CAS bounded worker/reviews/<pr>/current.json` | `worker/reviews/<pr>/current.json` |
+| Child create/send identity and no duplicate | n/a: monitor creates no children | `save operationId (accepted isn't delivered)`; `explicit reverse send AND final text (no child artifact access assumed)`; `never waits on child transport`; `no model/tool grant assumed`; `Unknown/timed-out create/send holds the slot` | `no second child/name/operation` |
 | Legacy reviewer records read-only | `legacy reviewer verifier/* read-only`; `Legacy verifier outcomes: read-only evidence` | `LEGACY read-only verifier/current.json+reviews/verdicts`; `Legacy blocking feedback never vanishes without consumption` | `LEGACY verifier/*`; `(retiring; read-only evidence)` |
 | Post-merge outcome records | `planner/outcomes/<pr>/<window>.json`; `eligible later push/scheduled runs containing the fix (attempt1), seven-day revisit, unknown exposure` | `merged isn't recovered (monitor owns outcomes)` | `monitor owns CI recovery` |
 | Compact supervision without audit-of-audit | n/a: monitor does not supervise | n/a: fixer does not supervise | `diagnose ONE due blocked item by rotating cursor`; `daily missed-work sample, independently selected from run inventory/intake`; `no full artifact census; record unknown coverage`; `No audit-of-audit; no reviewer ack required` |
@@ -135,7 +135,7 @@ changes adds authority.
   diagnostic milestone) is unchanged.
 - Source record semantics (paths, field names, `settle-expire-v1`,
   `schemaVersion` 1) are unchanged. New paths are additive:
-  `worker/reviews/<pr>/<head>/` (fixer) and `planner/outcomes/<pr>/<window>.json`
+  `worker/reviews/<pr>/<head>/<reviewId>/` (fixer) and `planner/outcomes/<pr>/<window>.json`
   (monitor). Legacy `verifier/*` records stay read-only; old blocking feedback
   cannot vanish, an exact-head legacy pass can be reused, and conflicting
   verdicts must be resolved.
@@ -155,8 +155,17 @@ changes adds authority.
   - "backfill undated legacy blockers additively" → core 3 (undated legacy is
     due now).
   - "Legacy oversize needs approved lossless archive…" → "Keep
-    history/legacy claims; no migration/deletion" and "No truncation/oversize
-    retry".
+    history/legacy claims; no migration/deletion", "No truncation/oversize
+    retry" and "Legacy oversize: separate approved lossless migration".
+  - Pre-deployment fix: reviews use a per-`<reviewId>` subdirectory under the
+    head with a `current.json` latest ref, so a blocked or conflicting
+    verdict can get a fresh same-head review once the prior one settles. An
+    unknown review is never replaced. A native result is consumed
+    immediately. "Never waits" applies to child transport only. The fixer
+    gains the boundary checkpoint (criteria/owner/versions/effects) and states
+    that no child model or tool grant is assumed. The bytes came from prose
+    shortening only (for example "naming owner isn't acceptance",
+    "(record SHA/fit)", "<=3 friction facts"); no guardrail was dropped.
 - Monitor: "backfill missing nextCheckAt" → core 3; "Refusals citing old
   prompt/tool limits are adoption mismatches" → core 11; legacy oversize
   detail → "Legacy oversize migration needs separate lossless approval".
