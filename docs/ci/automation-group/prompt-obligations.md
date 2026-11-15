@@ -38,17 +38,17 @@ the obligation does not belong to that role.
 | Original claim protocol (settle-expire-v1) | `Approval/expiry/death alone settle nothing` | `protocol:"settle-expire-v1"`; `Approval/expiry/death settle nothing` | `Approval/expiry/death settle nothing` | `make ONE versioned handoff packet`; `AND independently verified settlement` |
 | Settled release with explicit expiry | `CAS own expiry=1` | `CAS own expiry1` | `own expiry1` | `CAS own expiry1` |
 | PR cap and slots | `Group <=3 open PRs` | `<=3 open group PRs` | `<=3 PRs` | `<=3 PR cap` |
-| PR readiness and reviewer requests | n/a: monitor reports status only | `mark OWN PR ready, verify non-draft, request suitable maintainers` | `Verify non-draft/reviewer requests, not eligibility` | `Ready: independent current-head pass` |
-| Conflicting current-head verdict is not a pass | n/a: monitor reads verdict status | `A conflicting current-head verdict isn't a pass` | `Conflicting current-head verdicts aren't a pass` | `conflicting current-head verdicts aren't a pass` |
+| PR readiness and reviewer requests | n/a: monitor reports status only | `passing targeted validation and required checks, no blocking review: mark OWN PR ready`; `mark OWN PR ready, verify non-draft, request suitable maintainers` | `passing validation/required checks`; `Verify non-draft/reviewer requests, not eligibility` | `Ready: independent current-head pass` |
+| Conflicting current-head verdict is not a pass | n/a: monitor reads verdict status | `Conflicting current-head verdicts aren't a pass: resolve evidence or await superseding verdict` | `Conflicting current-head verdicts aren't a pass` | `conflicting current-head verdicts aren't a pass` |
 | Human merge | `merge` | `Approval/merge stay human`; `Human shiproom required` | `Never infer human approval` | `Humans merge` |
 | Recovery needs later scheduled/push CI | `Recovery needs scheduled/push CI containing the fix` | `Recovery needs later eligible CI exercising the fix` | `Recovery needs eligible scheduled/push CI containing the fix` | `Recovery needs later scheduled/push CI containing the fix` |
 | Budgets | `<=60 metadata reads/10 logs per pass` | `Limits <=40 metadata reads/5 logs` | `<=40 metadata reads/5 logs` | `Bounds <=6 ledger pages, <=2 captured-run inspections, <=20 extra GitHub metadata reads, <=3 original-session inspections, <=1 new original resume/pass` |
 | Shared recovery core embedded inline | `RECOVERY CORE v2` | `RECOVERY CORE v2` | `RECOVERY CORE v2` | `RECOVERY CORE v2` |
-| Parked items: cheap reopen check only | `core-7 parking`; `parked shows reopen condition` | `one cheap reopen check`; `Parked own work resumes on verified reopenCondition` | `one cheap reopen check`; `not item/work state or stall` | `one cheap reopen check`; `not item/work state or stall` |
+| Parked: not due/overdue and excluded from unchanged-check escalation until reopenCondition verifiably changes; ages/due kept; cheap reopen check only | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `Two eligible unparked passes`; `core-7 parking`; `parked shows reopen condition` | `parked until reopenCondition verifiably changes`; `one cheap reopen check`; `Parked own work resumes on core-3 reopen` | `parked until reopenCondition verifiably changes`; `one cheap reopen check`; `two eligible unparked passes` | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `one cheap reopen check`; `Never reset ages/deadlines/IDs` |
 | Missed milestone: classify, never kill | `Age prompts diagnosis, never kill/takeover/duplicate` | `Age prompts diagnosis, never kill/takeover/duplicate` | `Escalate, never terminate or silently defer` | `concrete <=60min diagnostic milestone` |
 | Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | n/a: audits only | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement` |
 | Windows environment and diagnostic slot | `ab8cd228-635c-48f4-861c-a5d77c81e5ba` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `worker/diagnostic-slot.json is the sole claimless non-expiring probe lock` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `no second child/name/operation` |
-| Reviewer findings private; no duplicate findings | `ack exact supervisor/reviewer findings` | `Reviewer findings stay private in artifacts` | `Deliver findings PRIVATELY to the fixer`; `Never recreate duplicate findings` | `Consume reviewer critique` |
+| Reviewer findings private; no duplicate findings | `ack exact supervisor/reviewer findings` | `Reviewer findings stay private in artifacts` | `Deliver findings PRIVATELY to fixer`; `Never recreate duplicate findings` | `Consume reviewer critique` |
 | Seven-day observation, not self-grading | `Judged on missed/deferred work and later CI recovery` | `Judge useful progress/later CI outcomes` | `Seven-day observation (not self-grading)` | `Seven-day observation, ALL due blockers` |
 | Only monitor edits #22241 | `only mutate #22241 ISSUE DESCRIPTION` | `never edit #22241 body` | `Only monitor edits #22241` | `only monitor writes #22241` |
 | Shared host safety | n/a: monitor does not build | `Shared host: no broad cleanup/unrelated kills/global installs` | `Shared host: no broad cleanup/unrelated kills/global installs` | `no shared cleanup/global installs/kills` |
@@ -144,11 +144,11 @@ behavioral proof.
 ### Size cost by change family
 
 Baseline is checkpoint `6f17c3dd0` (core v1, 1,376 characters). Core v2 is
-1,852 characters (+476; the shorter header saves 20), and every prompt pays that amount.
+1,898 characters (+522; includes the GPT-6 Astra parked-exclusion fix), and every prompt pays that amount.
 
 | Family | Core cost | Role-text cost |
 | --- | --- | --- |
-| Due/progress definition (F6, F10) | +100 (core 3) | Due and parked sentences removed from all roles |
+| Due/progress definition and parked exclusion (F6, F10) | +146 (core 3, 6) | Due and parked sentences removed from all roles |
 | Outcome versus settlement (F5) | +49 (core 4) | none |
 | Parked metadata (F10) | +43 (core 7) | Role parked sentences reduced to reopen hooks |
 | Unknown/CAS consolidation and contention (F1) | +141 (core 8) | Per-role CAS and unknown sentences removed |
@@ -158,14 +158,14 @@ Baseline is checkpoint `6f17c3dd0` (core v1, 1,376 characters). Core v2 is
 
 | Role | Before | After | Role text net |
 | --- | --- | --- | --- |
-| Monitor | 11,639 | 11,846 | −269 |
-| Fixer | 11,978 cp / 11,981 B | 11,973 cp / 11,976 B | −481 |
-| Reviewer | 11,946 | 11,971 | −451 |
-| Supervisor | 11,985 | 11,861 | −600 |
+| Monitor | 11,639 | 11,901 | −260 |
+| Fixer | 11,978 cp / 11,981 B | 11,987 cp / 11,990 B | −513 |
+| Reviewer | 11,946 | 11,989 | −479 |
+| Supervisor | 11,985 | 11,907 | −600 |
 
 All four exceed the 11,400 target, and all stay under the 12,000 hard limit.
-The reviewer has only 29 characters of headroom, so any further reviewer
-addition needs an equal consolidation first.
+The fixer has 10 bytes and the reviewer 11 characters of headroom, so any
+further addition to either needs an equal consolidation first.
 
 ### Semantic consolidation (what moved, what replaced it)
 

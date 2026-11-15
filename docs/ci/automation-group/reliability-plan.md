@@ -159,7 +159,8 @@ UTF-8 limits both matter; the existing worker emoji consumes extra bytes.
 | Supervisor | 11985 | 11985 | at most 11400 where consolidation permits |
 
 After implementation (core v2), the rendered candidates measure: monitor
-11846/11846, fixer 11973/11976, reviewer 11971/11971, supervisor 11861/11861.
+11901/11901, fixer 11987/11990, reviewer 11989/11989, supervisor 11907/11907
+(after the GPT-6 Astra review fixes).
 The per-family costs are in
 [prompt-obligations.md](prompt-obligations.md#size-cost-by-change-family).
 
@@ -259,18 +260,31 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   remaining blockers.
 - Candidate implementation: the implement-now dispositions are implemented as
   UNAPPLIED candidates. The changes:
-  - the shared core is now RECOVERY CORE v2 (1,852 characters);
+  - the shared core is now RECOVERY CORE v2 (1,898 characters after review fixes);
   - the four sources and rendered candidates are updated;
   - the skill decision table and worked examples cover `fence_lost`, the
     missing-fence capability gap, mixed generations and absent optional
     fields;
-  - the preservation map has 49 rows and 223 anchors, plus a disposition
+  - the preservation map has 49 rows and 232 anchors, plus a disposition
     record, per-family size costs and a semantic-consolidation list.
 
-  Rendered sizes (code points / UTF-8 bytes): monitor 11,846/11,846; fixer
-  11,973/11,976; reviewer 11,971/11,971; supervisor 11,861/11,861. All are
+  Rendered sizes (code points / UTF-8 bytes): monitor 11,901/11,901; fixer
+  11,987/11,990; reviewer 11,989/11,989; supervisor 11,907/11,907. All are
   under the 12,000 hard limit and over the 11,400 target. F18 cadence, tools,
   configuration and schedules are unchanged. No hosted calls were made.
-- GPT-6 Astra implementation review: pending (manager-launched).
+- GPT-6 Astra implementation review of `1ccb4a05e`: two deployment blockers
+  and one checker defect. All three are fixed as UNAPPLIED candidates; the
+  same reviewer's re-review is pending (manager-launched).
+
+  | Finding | Severity | Disposition |
+  | --- | --- | --- |
+  | Fixer ready gate (`source/worker.md`) said "targeted validation and required checks" without requiring them to pass; other roles can't substitute for a standalone gate | blocker | fixed: "passing targeted validation and required checks" restored in the fixer ready step; map row anchors the exact gate |
+  | Core 3 defined due only by retained deadlines, with no parked exception, so core 6, monitor two-pass escalation and reviewer missed-deadline sampling still forced new action on parked work | blocker | fixed: core 3 excludes parked actions from due/stalled until `reopenCondition` verifiably changes; core 6 excludes parked; monitor and reviewer two-pass clauses say "unparked"; core 7 keeps the cheap reopen check; core 2 keeps ages/deadlines/IDs. Supervisor overdue and fixer DUE clauses rely on the core-3 definition |
+  | `check_prompts.py` silently skipped malformed obligation rows and could pass with zero anchors | defect | fixed: malformed rows, empty role cells, cells with neither anchor nor `n/a:` reason, an empty map and a map with zero anchors now fail. Exercised by negative cases (4-cell row, empty map, header-only, empty cell, unanchored prose cell, all-`n/a`) plus the normal full run. Still an authoring check only |
+
+  Size offsets for the core growth (+46): wording-only abbreviations
+  ("reproduction" → "repro", "directory" → "dir", article removals), the
+  fixer parked hook now cites core 3, and the core uses "+" and
+  "/awaited" in items 5 and 11. No safeguard was removed.
 - Live rollout: not started.
 - Runtime recovery and external notification: not demonstrated.

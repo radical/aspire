@@ -26,15 +26,15 @@ for in all four prompts.
 RECOVERY CORE v2 (grants nothing):
 1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time.
 2 Reuse actionId/firstBlockedAt/lastUsefulProgressAt/expectedBy+basis/nextCheckAt/attempts/effects/escalation; optional milestone/reopenCondition/blockedScope/actionStatus/operationRefs; <=3 attempts inline, rest immutable history. Never reset ages/deadlines/IDs.
-3 Due=nextCheckAt/expectedBy reached (undated legacy: now); evidenced waits before due aren't stalls. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
+3 Due=nextCheckAt/expectedBy reached (undated legacy: now). Not due/stalled: evidenced waits before due; parked until reopenCondition verifiably changes. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
 4 Lost reply: authoritative state matching the exact intended result settles that operation's outcome only (not executor stop/claim settlement/adoption); no blind replay.
-5 Routine question: standing policy; old waiting session resolved only by authorized input route plus delivery/ack evidence.
-6 Two eligible unchanged checks: different supported action or ONE capability-gap record (operation/error/owner action).
-7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state or stall: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
+5 Routine question: standing policy; old waiting session resolved only by authorized input route+delivery/ack evidence.
+6 Two eligible unchanged checks (parked excluded): different supported action or ONE capability-gap record (operation/error/owner action).
+7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
 8 Unknown effects (not lease contention) block overlapping mutation only; independent work continues. Keep original call/operation/args/bytes/ETags; inspect target first. CAS conflict: reconcile, never substitute ETags.
 9 Ending turn/releasing claim keeps delivery duty; expiry never proves termination.
 10 Denied/missing tools: capability evidence, not task state or workaround license.
-11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved; don't await them.
+11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved/awaited.
 ```
 <!-- recovery-core:end -->
 
@@ -53,7 +53,7 @@ are due now; their timestamps are backfilled additively.
 | Session waits on a routine question | Input | Apply standing policy; deliver only through an available authorized input route and record delivery/ack | Re-ask the owner; claim resolution without delivery evidence |
 | Result exists but no record or receipt | Result publication | Settle that operation's outcome from authoritative state matching the exact intended result | Replay the operation; treat it as executor stop or claim settlement |
 | Result recorded but consumer has not used it | Consumption | Route the exact ref to the consumer; check its next eligible pass | Regenerate the result |
-| Two eligible checks, nothing changed | Unchanged | Take a different supported action, or write one capability-gap record, then park | Rename and resend the same request |
+| Two eligible unparked checks, nothing changed | Unchanged | Take a different supported action, or write one capability-gap record, then park | Rename and resend the same request |
 | Parked, reopen condition unchanged | Parked | One cheap observable check; concise visibility | Probe expensively, re-escalate, bump timestamps |
 | Parked, reopen condition changed | Reopened | Clear parked status; resume due handling with the same `actionId` | Create a new incident or action |
 | Effect of an earlier mutation unknown | Uncertain effect | Block only overlapping mutation in `blockedScope`; inspect the target | Block unrelated work; blind retry |

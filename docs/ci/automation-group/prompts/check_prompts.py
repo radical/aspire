@@ -72,15 +72,36 @@ def parse_obligations(map_text: str) -> list[tuple[str, dict[str, list[str]]]]:
     )
     if match is None:
         raise SystemExit(f"error: obligation markers not found in {OBLIGATIONS}")
+    # Malformed rows are errors, not skips: silently dropping a row (for
+    # example one with a missing role cell) would let a lost safeguard pass.
     rows = []
-    for line in match.group(1).splitlines():
-        if not line.startswith("|") or set(line) <= set("|- "):
+    errors = []
+    for number, line in enumerate(match.group(1).splitlines(), start=1):
+        if not line.strip():
+            continue
+        if not line.startswith("|"):
+            errors.append(f"line {number}: not a table row: {line[:60]!r}")
+            continue
+        if set(line) <= set("|-: "):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if cells[0] == "Obligation" or len(cells) != 5:
+        if cells[0] == "Obligation":
+            continue
+        if len(cells) != 5 or not all(cells):
+            errors.append(f"line {number}: expected 5 non-empty cells, got {len(cells)}: {cells[0][:60]!r}")
             continue
         anchors = {role: re.findall(r"`([^`]+)`", cells[col]) for role, col in MAP_COLUMNS.items()}
+        for role, col in MAP_COLUMNS.items():
+            # Each role cell must name an anchor or give an explicit "n/a: reason".
+            if not anchors[role] and not cells[col].startswith("n/a:"):
+                errors.append(f"line {number}: {role} cell has no anchor or 'n/a:' reason: {cells[0][:60]!r}")
         rows.append((cells[0], anchors))
+    if not rows:
+        errors.append("obligation map has no rows")
+    elif not any(anchor for _, anchors in rows for values in anchors.values() for anchor in values):
+        errors.append("obligation map has no anchors")
+    if errors:
+        raise SystemExit("error: malformed obligation map:\n  " + "\n  ".join(errors))
     return rows
 
 

@@ -97,22 +97,24 @@ The checker:
 - compares the rendered prompts with `candidate/`;
 - reports code points, UTF-16 units and UTF-8 bytes against the 11,400
   authoring target and the 12,000 ceiling;
+- rejects malformed obligation rows, empty role cells, an empty map and a
+  map with no anchors;
 - checks that every mapped anchor is present.
 
 It does not run, simulate or evaluate an automation. A passing check is not
 behavioral evidence.
 
-Latest checker result (exit 0, 49 obligation rows, 223 anchors, RECOVERY CORE
-v2 at 1,852 characters). All four prompts exceed the 11,400 target because the
+Latest checker result (exit 0, 49 obligation rows, 232 anchors, RECOVERY CORE
+v2 at 1,898 characters). All four prompts exceed the 11,400 target because the
 standalone obligations were restored in full; the target is advisory and every
 prompt stays under the 12,000 ceiling:
 
 | Role | Code points | UTF-16 units | UTF-8 bytes |
 | --- | --- | --- | --- |
-| Monitor | 11,846 | 11,846 | 11,846 |
-| Fixer | 11,973 | 11,974 | 11,976 |
-| Reviewer | 11,971 | 11,971 | 11,971 |
-| Supervisor | 11,861 | 11,861 | 11,861 |
+| Monitor | 11,901 | 11,901 | 11,901 |
+| Fixer | 11,987 | 11,988 | 11,990 |
+| Reviewer | 11,989 | 11,989 | 11,989 |
+| Supervisor | 11,907 | 11,907 | 11,907 |
 
 The manager owns deployment. The steps:
 

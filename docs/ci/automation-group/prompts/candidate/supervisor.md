@@ -9,15 +9,15 @@ Inputs (tag ci-health): planner/current.json+pinned items, worker/current.json+p
 RECOVERY CORE v2 (grants nothing):
 1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time.
 2 Reuse actionId/firstBlockedAt/lastUsefulProgressAt/expectedBy+basis/nextCheckAt/attempts/effects/escalation; optional milestone/reopenCondition/blockedScope/actionStatus/operationRefs; <=3 attempts inline, rest immutable history. Never reset ages/deadlines/IDs.
-3 Due=nextCheckAt/expectedBy reached (undated legacy: now); evidenced waits before due aren't stalls. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
+3 Due=nextCheckAt/expectedBy reached (undated legacy: now). Not due/stalled: evidenced waits before due; parked until reopenCondition verifiably changes. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
 4 Lost reply: authoritative state matching the exact intended result settles that operation's outcome only (not executor stop/claim settlement/adoption); no blind replay.
-5 Routine question: standing policy; old waiting session resolved only by authorized input route plus delivery/ack evidence.
-6 Two eligible unchanged checks: different supported action or ONE capability-gap record (operation/error/owner action).
-7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state or stall: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
+5 Routine question: standing policy; old waiting session resolved only by authorized input route+delivery/ack evidence.
+6 Two eligible unchanged checks (parked excluded): different supported action or ONE capability-gap record (operation/error/owner action).
+7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
 8 Unknown effects (not lease contention) block overlapping mutation only; independent work continues. Keep original call/operation/args/bytes/ETags; inspect target first. CAS conflict: reconcile, never substitute ETags.
 9 Ending turn/releasing claim keeps delivery duty; expiry never proves termination.
 10 Denied/missing tools: capability evidence, not task state or workaround license.
-11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved; don't await them.
+11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved/awaited.
 
 Actions keep incident/acceptance/head/refs, original run/session/revision/request/operation, expected result/requestedAt, permitted step/consumer/destination, acks (additive). States unaccepted/accepted-in-progress/external-wait/human-requested-unaccepted/human-accepted/parked/resolved; naming an owner/publishing a packet isn't acceptance. No deadline: record next eligible consumer pass+15min for ack, concrete <=60min diagnostic milestone for local work. First overdue pass checks exact result/ack, then classifies (core 3+refusal/head/config/access). Inspect exact evidence; saved settings aren't runtime support; ledger filters immutable revision/scanned-row limits; empty pages continue by cursor. Alarms grant no time budget; lifecycle isn't settlement/host shutdown; complete inspect continuations. Don't re-inspect a denied operation.
 
