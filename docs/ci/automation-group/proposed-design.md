@@ -100,19 +100,19 @@ Proposed main work table:
 
 | Work | Current state | Responsible actor | Last useful result | Next action | Waiting since |
 | --- | --- | --- | --- | --- | --- |
-| #22287 disposal fix | Branch modification waiting; diagnosis available | Fixer; manager for original-session access | Reviewer finding consumed | Verify original command stopped; independently validate repair | Source timestamp |
-| #22286 release fixture fix | Awaiting human approval | Requested maintainers | GitHub non-draft state verified | Human review and merge | Ready-for-review event |
+| Interrupted repair | Branch modification waiting; diagnosis available | Fixer; manager for original-session access | Reviewer finding consumed | Verify original command stopped; independently validate repair | Source timestamp |
+| Validated change | Awaiting human approval | Requested maintainers | GitHub non-draft state verified | Human review and merge | Ready-for-review event |
 | Windows diagnostic | Destination online; execution not verified | Manager/fixer routing | Environment heartbeat received | Route one authorized named diagnostic and inspect result | Request timestamp |
 
-These are illustrative rows based on historical observations, not live status.
+These are generic illustrations of process states, not live work items.
 
 The event view should show timestamp, actor, action, result, and a source link.
-For example:
+For example, a hypothetical event sequence:
 
 ```text
-04:14:28  Fixer       Started Windows DevTunnels diagnostic, one runner.
-04:17:17  GitHub CI   Finished: four cases passed; failure not reproduced.
-04:37:00  Fixer       Scheduled opportunity to inspect the result.
+09:00:00  Fixer       Started a diagnostic, one runner.
+09:03:00  GitHub CI   Finished: selected cases passed; failure not reproduced.
+09:07:00  Fixer       Scheduled opportunity to inspect the result.
 ```
 
 The third line is a schedule, not a claim the result was consumed. The renderer

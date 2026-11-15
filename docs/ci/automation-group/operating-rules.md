@@ -125,7 +125,7 @@ Bad:
 
 Better:
 
-> The original fixer for #22287 has not provided evidence that its last command
+> The original fixer has not provided evidence that its last command
 > stopped. The new fixer is avoiding changes to the same branch. The supervisor
 > recorded a request, but nobody with access to the original session has confirmed
 > they will handle it. Independent diagnosis can continue.
@@ -135,10 +135,12 @@ Never label admission-to-completion duration as execution or billing time.
 
 ## Learning without accumulating prose
 
-Capture a short actionable note when something goes wrong: observed problem,
-evidence, consequence, proposed remedy, owner, and review date. Repeated notes
-about the same mechanism update one open finding rather than creating a new
-request every pass.
+Capture successful practices and problems in the persisted process notes:
+observation window, evidence, consequence, proposed or applied remedy, responsible
+role, and review date. Distinguish documented, implemented, and demonstrated
+improvements. Repeated observations of the same mechanism update one finding
+rather than creating a new request every pass. Keep specific issue/PR histories
+and individual task state in the runtime ledger, not the process notes.
 
 Turn recurring mechanical problems into tested helpers. Turn recurring procedural
 mistakes into skill improvements. Keep only authority, objectives, and essential

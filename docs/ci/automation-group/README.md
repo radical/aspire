@@ -2,11 +2,14 @@
 
 These documents preserve the investigation and owner decisions from November 15,
 2026. They concern the existing CI-health automation group for `microsoft/aspire`.
-They are a design record, not a live dashboard or executable configuration.
+They are a process-learning and design record, not a live dashboard or executable
+configuration. Focus on what works, coordination and tracking problems, changes
+made, and whether those changes helped. Specific repository issue/PR histories
+belong in the runtime work ledger, not these notes.
 
 | Document | Purpose |
 | --- | --- |
-| [Findings](findings.md) | Observed behavior, evidence, corrections, and unresolved questions |
+| [Process findings](findings.md) | Working practices, recurring problems, remedy status, and follow-up evidence |
 | [Operating rules](operating-rules.md) | Agreed behavior that prompts, skills, and tooling should implement |
 | [Proposed design](proposed-design.md) | A smaller decision loop, reusable procedures, state model, and implementation sequence |
 
@@ -38,9 +41,10 @@ permissions, start a worker, answer an old task's pending input, or deploy a ski
 The newer operating rules below are not automatically available to existing runs.
 
 Do not use this directory as the frequently rewritten work ledger. Runtime state
-belongs in authorized durable storage. Link stable evidence from these documents
-and date corrections rather than silently turning historical observations into
-current claims.
+belongs in authorized durable storage. Preserve the observation window and
+evidence basis for process lessons, and date corrections rather than silently
+turning historical observations into current claims. Distinguish a proposed fix,
+an applied change, and an observed improvement.
 
 ## Reading the evidence
 
