@@ -19,7 +19,9 @@ belong in the runtime work ledger, not these notes.
 
 ## Current position
 
-The group has a monitor, fixer, reviewer, and supervisor. Prompt changes applied
+The group has a monitor, fixer, reviewer, and supervisor. UNAPPLIED 3-role
+candidates fold review into a fixer child and retire the reviewer only after a
+proven replacement (see [prompts/README.md](prompts/README.md)). Prompt changes applied
 around 02:52 UTC on November 15 improved diagnosis and feedback handling, but did
 not resolve every stalled task. The objective remains useful fixes and healthier
 CI, not more automation runs, reports, or acknowledgements.

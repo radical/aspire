@@ -1,12 +1,12 @@
 ---
 name: automation-recovery
-description: Recovery procedure for the CI-health automation group (monitor, fixer, reviewer, supervisor) when owned work is blocked, quiet, interrupted, waiting for input, or has an uncertain external effect. Use when deciding whether work is progressing, classifying a missed milestone, reconciling a lost reply, parking an unchanged blocker, or authoring the shared recovery core of a CI-health prompt. Grants no tools, permissions, or authority.
+description: Recovery procedure for the CI-health automation group (monitor, fixer, supervisor; legacy reviewer) when owned work is blocked, quiet, interrupted, waiting for input, or has an uncertain external effect. Use when deciding whether work is progressing, classifying a missed milestone, reconciling a lost reply, parking an unchanged blocker, or authoring the shared recovery core of a CI-health prompt. Grants no tools, permissions, or authority.
 ---
 
 # CI-health automation recovery
 
-This skill explains the recovery rules shared by the four CI-health automation
-roles. It is a procedure, not a grant: it adds no tools, permissions, models,
+This skill explains the recovery rules shared by the CI-health automation
+roles (the 3-role candidates; the reviewer cron is legacy, pending retirement). It is a procedure, not a grant: it adds no tools, permissions, models,
 schedules, environments, cancellation authority, or replacement executors.
 
 The skill lives in the documentation fork and is **not** deployed with the
@@ -19,7 +19,7 @@ fetching this file. Edit the core here, re-render the prompts with
 
 The checker copies the text inside this fenced block into every prompt where
 `{{RECOVERY_CORE}}` appears. Keep it ASCII and short; every character is paid
-for in all four prompts.
+for in every prompt (three candidates, four archived).
 
 <!-- recovery-core:begin -->
 ```text
@@ -58,10 +58,10 @@ are due now; their timestamps are backfilled additively.
 | Parked, reopen condition changed | Reopened | Clear parked status; resume due handling with the same `actionId` | Create a new incident or action |
 | Effect of an earlier mutation unknown | Uncertain effect | Block only overlapping mutation in `blockedScope`; inspect the target | Block unrelated work; blind retry |
 | Another holder's lease is held and unexpired | Concurrency (contention, not an unknown outcome) | No protected writes, no waiting or polling; end (the fixer skips only that incident) | Wait, take over, write under the other lease, or open an uncertainty record |
-| Fenced reviewer write returns `fence_lost` | Lost exclusion | Stop protected writes for this pass; reconcile on a later pass under a valid lease | Substitute another ETag; retry blindly |
-| Reviewer's exposed `artifact_put` schema has no `fence` | Capability gap | Keep publication blocked; record the exact gap once (configured selection is not runtime attestation) | Publish unfenced as a fallback |
-| Older session published an unfenced or lease-less verdict | Mixed generation | Reconcile it as evidence; publish a superseding verdict if needed | Ignore a blocking verdict; treat last writer as pass |
-| Two current-head verdicts conflict | Conflicting verdict | Resolve from evidence or publish a superseding verdict naming the replaced one | Treat either as a pass; push a new head only to correct it |
+| Legacy (archived 4-role) fenced reviewer write returns `fence_lost` | Lost exclusion | Stop protected writes for this pass; reconcile on a later pass under a valid lease | Substitute another ETag; retry blindly |
+| Legacy (archived 4-role) reviewer `artifact_put` has no `fence` | Capability gap | Keep publication blocked; record the exact gap once (configured selection is not runtime attestation) | Publish unfenced as a fallback |
+| Older session published an unfenced or lease-less verdict | Mixed generation | Reconcile it as read-only evidence; resolve or request a fresh exact-head review | Ignore a blocking verdict; treat last writer as pass |
+| Two current-head verdicts conflict | Conflicting verdict | Resolve from evidence or a fresh exact-head review | Treat either as a pass; push a new head only to correct it |
 | Tool denied, missing or unregistered | Capability gap | Record exact operation, error and owner action once | Infer task state; use another identity or route |
 | Record lacks a new optional field | Legacy record | Read it as legacy; backfill additively when owned | Treat absence as false or resolved; wait for the field |
 
@@ -105,8 +105,8 @@ change, and readers must tolerate the absence of every optional field.
 3. **Queue delay.** A due fixer pass has not been admitted because the schedule
    has not fired. Classify queue/admission, not a stalled worker. Do not start
    another session.
-4. **Duplicate observations.** Monitor, reviewer and supervisor all see the same
-   overdue action. Each references the existing `actionId`; the reviewer keeps
+4. **Duplicate observations.** Monitor and supervisor both see the same
+   overdue action. Each references the existing `actionId`; the supervisor keeps
    its immutable finding until acknowledged rather than publishing a new one.
 5. **Lost successful effect.** A push reply is lost. The branch head equals the
    intended commit, so the push outcome is settled from the branch. That does
@@ -133,6 +133,9 @@ change, and readers must tolerate the absence of every optional field.
     that PR only. The worker still diagnoses another incident and validates
     privately in an isolated workspace.
 
+Examples 12–14 are HISTORICAL (archived 4-role reviewer); the 3-role set
+writes no `verifier/*` records.
+
 12. **Lease held elsewhere.** The reviewer finds `verifier/lease.json` held by
     another unexpired holder. It makes no protected writes and ends without
     polling. Current pointers only point to records; they are not a full
@@ -148,15 +151,18 @@ change, and readers must tolerate the absence of every optional field.
 
 ## Role hooks
 
-- **Monitor:** show actor, last useful result, concrete wait reason, parked
+- **Monitor:** own post-merge outcomes and failure rates; show actor, last useful result, concrete wait reason, parked
   reopen condition and next action in plain language.
 - **Fixer:** record milestones and operation refs before effects; keep delivery
   responsibility across turns; settle its own uncertain effects.
-- **Reviewer:** sample missed work and actual outcomes; keep existing finding
-  identities; audit parked reasons rather than re-escalating them; publish only under the
-  required verifier lease, with the lease ETag as `fence` plus target CAS (older
-  sessions without it remain noncompliant; their verdicts are still evidence).
-- **Supervisor:** classify missed milestones, choose a different supported
+- **Fixer review child:** at most one outstanding per owned incident; an
+  unknown or timed-out create/send holds the slot (no duplicate or
+  replacement); accept only an actual result or explicit reply, then recheck
+  the head.
+- **Legacy reviewer:** pending retirement; its `verifier/*` records are
+  read-only evidence and old blocking feedback cannot vanish.
+- **Supervisor:** verify readiness handoffs, one due blocked item per pass and
+  a daily missed-work sample; classify missed milestones, choose a different supported
   action or one capability-gap record, and never write worker-owned claims or
   lifecycle fields.
 

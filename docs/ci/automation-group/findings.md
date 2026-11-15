@@ -216,7 +216,14 @@ promptly when access prevents independent verification.
 | November 15, documentation pass | Captured rules and simpler operating design | Versioned notes distinguish observations, owner decisions, and proposals | Implemented helpers/procedures and verified configuration changes |
 | November 15, process-notes revision | Refocused persisted findings on operating mechanisms | Added working practices, problem mechanisms, remedy status, and follow-up checks; removed task-specific case histories | Keep subsequent updates equally process-focused |
 | November 15, 06:00-06:03 | Applied unattended, skill-use, branch-selection, readiness, and backport rules | Four prompt-only updates applied; complete current and baseline snapshots verified and saved | New runs use the rules, routine input waits disappear, and release fixes reuse main when appropriate |
-| November 15, recovery candidate pass | Drafted the shared recovery core and compressed candidate prompts | Documented only: skill, obligation map, authoring checker, and four UNAPPLIED candidates under `prompts/candidate/`; deployment is owned by the manager | Applied readback; then the seven-day observations in the recovery playbook |
+| November 15, recovery candidate pass | Drafted the shared recovery core and compressed candidate prompts | Documented only: skill, obligation map, authoring checker, and four UNAPPLIED candidates (now archived under `prompts/archive-4role-9095dd85c/`, never applied) | Superseded by the 3-role candidates |
+| November 15, reviewer migration | Replaced the reviewer cron with a fixer-owned read-only review child; outcomes to monitor, delivery sampling to supervisor | Documented only: three UNAPPLIED candidates under `prompts/candidate/`, transfers table, checker update. Hosted reads aborted again at 18:32 UTC, so nothing was applied or disabled | Applied readback; one actual review result consumed under the new fixer revision; only then disable the reviewer with a fresh CAS |
+
+Rejected suggestions (NOT approved, unsafe): `NuGetAudit=false` weakens
+supply-chain checks to hide failures; a cap-exempt ready PR breaks the 3-PR
+human-review cap; a manager clearing a claim because the head is idle or
+unchanged skips claim settlement (idle is not stopped); replacing a timed-out
+child can duplicate effects, since an unknown create/send holds the slot.
 
 Do not advance a row from "documented" to "implemented" or "effective" without
 new evidence. Editing these notes changes neither running sessions nor saved

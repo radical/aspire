@@ -9,9 +9,11 @@ established by this document.
 The group should deliver correct fixes without routine human input, duplicate
 effects or repeated work that cannot make progress. Preserve accepted work,
 original evidence, branch targeting, independent assessment and human merge.
-Keep the existing four automations for this change. Moving per-PR code review
-into a fixer subagent is a separate design option, not an approved removal of
-later outcome verification or missed-work assessment.
+Update (owner request, November 15): the separate reviewer cron is replaced
+in UNAPPLIED 3-role candidates. The fixer owns a fresh-context read-only
+review child; later outcome verification moves to the monitor and missed-work
+sampling to the supervisor, so no duty is orphaned. See the review record
+below.
 
 This register incorporates the owner's supplied read-only audit of commit
 `d87f87fe8ac8b6a5851862e24be3a1791f6e9c14`. Its F/D identifiers are retained
@@ -103,9 +105,10 @@ Additional suggestions to retain:
 - Clarify `manager/current.json` versus `manager/requests/current.json` through
   existing authorized producer evidence. Until verified, treat each as an
   optional exact legacy input, not a required new writer or schema.
-- A code-review subagent can reduce review latency. Someone must still own
-  post-merge verification, feedback consumption, missed work and future revisits.
-  Do not transfer those duties in this recovery rollout.
+- A code-review subagent reduces review latency. Owners after the 3-role
+  migration: post-merge verification and revisits → monitor; feedback
+  consumption → fixer; missed work → supervisor (see the transfers table in
+  [prompt-obligations.md](prompt-obligations.md)).
 
 ## Non-negotiable recovery and compatibility details
 
@@ -298,3 +301,20 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   readback per role. Candidate digests and rollback predecessors are in
   [prompts/README.md](prompts/README.md#candidate-review-and-deployment-status).
 - Runtime recovery and external notification: not demonstrated.
+- Reviewer-to-fixer migration (owner request after Opus 5.5 medium judgment:
+  the separate review cron delays feedback, and circular audits/censuses are
+  expensive). The reviewed 4-role set `9095dd85c` was never applied and is
+  archived unchanged as NOT FOR ROLLOUT (`--historical` re-renders it). New
+  UNAPPLIED 3-role candidates: fixer owns exact-head child review under
+  `worker/reviews/<pr>/<head>/` and the ready gate; monitor owns
+  `planner/outcomes/` and failure rates; supervisor owns readiness-handoff
+  checks, one due blocked item per pass and a daily missed-work sample, with
+  no audit-of-audit. Checker: exit 0, 54 rows/201 anchors, 27 reviewer
+  transfers (4 retired); sizes 11,984/11,992/11,981 bytes. Not yet
+  independently reviewed; deployment and the reviewer retirement sequence are
+  pending (hosted `automation_get`/list aborted again at 18:32 UTC) and
+  recorded in [prompts/README.md](prompts/README.md#deployment-and-reviewer-retirement-status).
+- Rejected suggestions (judge): `NuGetAudit=false`, a cap-exempt ready PR, a
+  manager clearing a claim because its head is idle or unchanged, and
+  replacing a timed-out child. NOT approved and unsafe; see
+  [findings.md](findings.md).

@@ -60,102 +60,75 @@ These prompts have little room left. Consolidate policy and extract reusable
 procedures before appending more instructions; do not remove safety requirements
 merely to fit another rule.
 
-## Unapplied recovery candidates
+## Unapplied 3-role candidates
 
-`candidate/` holds complete, UNAPPLIED candidate prompts for the four roles.
-They are not live configuration. `current/` remains the exact snapshot of the
-live prompts. Each candidate is rendered from `source/<role>.md` by inserting
-the single shared recovery core from
-[`.agents/skills/automation-recovery/SKILL.md`](../../../../.agents/skills/automation-recovery/SKILL.md).
-The skill exists only on this fork branch and upstream runs cannot fetch it,
-so every candidate embeds the core inline and does not refer to the skill.
+`candidate/` holds complete, UNAPPLIED prompts for three roles: monitor,
+fixer (`worker.md`) and supervisor. They are not live configuration;
+`current/` remains the exact live snapshot. Each candidate is rendered from
+`source/<role>.md` with the shared recovery core from
+[`.agents/skills/automation-recovery/SKILL.md`](../../../../.agents/skills/automation-recovery/SKILL.md),
+embedded inline because the skill exists only on this fork branch.
 
-The candidates:
+They replace the separate reviewer cron, at the owner's request:
 
-- replace the contradictory recovery paragraphs with the core and short role
-  hooks;
-- add a rule for a lease held by another holder: no protected writes and no
-  waiting (the fixer skips only that incident);
-- make the reviewer's verifier lease required;
-- state that a conflicting current-head verdict is not a pass;
-- state that current pointers are not a full inventory.
+- the fixer runs a fresh-context read-only review of each new owned PR head
+  (native task tool if exposed, else `create_session` +
+  `send_session_message` with an explicit reverse reply), persists it under
+  `worker/reviews/<pr>/<head>/`, keeps at most one outstanding review per
+  owned incident apart from the Windows diagnostic slot, and owns the ready
+  gate;
+- the monitor owns post-merge outcomes (`planner/outcomes/<pr>/<window>.json`)
+  and failure-rate measurement;
+- the supervisor verifies readiness handoffs, diagnoses one due blocked item
+  per pass and takes a daily independently selected missed-work sample, with
+  no audit-of-audit;
+- legacy `verifier/*` records stay read-only evidence.
 
-[prompt-obligations.md](../prompt-obligations.md) maps each preserved
-obligation to anchor text and lists the accepted compressions.
+`create_session` has no model or tool parameter, so no child model is
+promised, and the child's read-only limits are prompt instructions, not tool
+enforcement. [prompt-obligations.md](../prompt-obligations.md) maps every
+preserved obligation and every reviewer transfer.
 
-Rebuild and check the candidates:
+The reviewed 4-role candidates (`9095dd85c`, never applied) are archived
+unchanged under [archive-4role-9095dd85c/](archive-4role-9095dd85c/README.md)
+and are NOT FOR ROLLOUT.
 
 ```bash
-python3 docs/ci/automation-group/prompts/check_prompts.py --write  # render
-python3 docs/ci/automation-group/prompts/check_prompts.py          # compare only
+python3 docs/ci/automation-group/prompts/check_prompts.py --write       # render
+python3 docs/ci/automation-group/prompts/check_prompts.py               # compare 3-role set
+python3 docs/ci/automation-group/prompts/check_prompts.py --historical  # archived 4-role set
 ```
 
-The checker:
+The checker verifies core placement, rendering, size and anchor presence
+(obligation map plus reviewer-transfers table). It does not run or evaluate
+an automation; passing is not behavioral evidence. Sizes and SHA-256 digests
+are in [candidate/README.md](candidate/README.md).
 
-- extracts the core;
-- verifies each rendered prompt contains it exactly once;
-- compares the rendered prompts with `candidate/`;
-- reports code points, UTF-16 units and UTF-8 bytes against the 11,400
-  authoring target and the 12,000 ceiling;
-- rejects malformed obligation rows, empty role cells, an empty map and a
-  map with no anchors;
-- checks that every mapped anchor is present.
+## Deployment and reviewer retirement status
 
-It does not run, simulate or evaluate an automation. A passing check is not
-behavioral evidence.
+Status: UNAPPLIED, not yet independently reviewed. Deployment is BLOCKED by
+hosted-tool failures: the 08:00 UTC client failure, a working read at 17:35,
+then fresh `automation_get`/list calls aborted again at 18:32. No
+`automation_upsert` or enable change was attempted for this set, and no
+mutation outcome is unknown. Do not retry through other APIs or the shell.
 
-Latest checker result (exit 0, 49 obligation rows, 232 anchors, RECOVERY CORE
-v2 at 1,898 characters). All four prompts exceed the 11,400 target because the
-standalone obligations were restored in full; the target is advisory and every
-prompt stays under the 12,000 ceiling:
+Pending retirement sequence (nothing below has happened):
 
-| Role | Code points | UTF-16 units | UTF-8 bytes |
-| --- | --- | --- | --- |
-| Monitor | 11,901 | 11,901 | 11,901 |
-| Fixer | 11,987 | 11,988 | 11,990 |
-| Reviewer | 11,989 | 11,989 | 11,989 |
-| Supervisor | 11,907 | 11,907 | 11,907 |
+1. Apply the fixer, monitor and supervisor candidates: fresh `automation_get`
+   per target, compare with `current/`, archive old bytes as
+   `baseline-<UTC>/`, prompt-only CAS `automation_upsert` (`automation_id`,
+   `repository_id` 696529789, `expected_generation`, `prompt`), then read back
+   prompt and unchanged settings.
+2. Observe one actual review result from a fixer review subagent, consumed
+   under the new fixer revision (`worker/reviews/<pr>/<head>/result.json` and
+   `consumption.json`). No manual fault injection.
+3. Only then disable reviewer `62ff16a7-a74c-4c96-a23c-d053c3f35743` with a
+   fresh read and CAS `automation_set_enabled`; verify readback.
+4. Old reviewer sessions stay frozen; their records remain read-only legacy
+   evidence.
 
-The manager owns deployment. The steps:
-
-1. Read each target fresh with `automation_get`.
-2. Compare its prompt with `current/<role>.md`, and reconcile any drift
-   instead of overwriting it.
-3. Archive the authoritative old bytes as `baseline-<UTC>/`.
-4. Send a prompt-only `automation_upsert` with `automation_id`,
-   `repository_id` 696529789, `expected_generation` and `prompt`.
-5. Read back both the prompt and all unchanged settings.
-
-A result may come back as a pending proposal instead of an applied change.
-Until the readback is verified, these files stay candidates. Applied prompts
-affect future runs only; existing sessions keep their frozen prompts.
-
-## Candidate review and deployment status
-
-Status: REVIEWED, UNAPPLIED. GPT-6 Astra's narrow re-review of `9095dd85c`
-passed with no unresolved blocker. It approves a limited prompt rollout within
-the documented limits; it is not runtime proof.
-
-Deployment is BLOCKED and nothing was mutated. The manager's fresh monitor
-`automation_get` was aborted by the client tool. An independent supervisor
-`automation_get` returned "no active client is registered to execute this
-client tool". No `automation_upsert` was invoked, no proposal was created and
-no mutation outcome is unknown.
-
-Next step: restore a connected hosted client. Then run a fresh `automation_get`
-per target, send a prompt-only CAS `automation_upsert` and verify the readback
-(steps above). Do not invent credentials or route writes through the shell or
-an alternative API.
-
-Candidate payloads (SHA-256 of the exact file bytes, for comparison with the
-server prompt digest after readback):
-
-| Role | Candidate | Code points | UTF-16 | Bytes | SHA-256 |
-| --- | --- | --- | --- | --- | --- |
-| Monitor | [candidate/monitor.md](candidate/monitor.md) | 11,901 | 11,901 | 11,901 | `4ceca4f6f9bccf2edb9d1c414552b5065f68f206833aa7cec4dbf836afa2aa1d` |
-| Fixer | [candidate/worker.md](candidate/worker.md) | 11,987 | 11,988 | 11,990 | `7f6e42b9a6717170e6697ae4b7d0a1776163453ffea6a2300f52c99b9baa5acd` |
-| Reviewer | [candidate/reviewer.md](candidate/reviewer.md) | 11,989 | 11,989 | 11,989 | `3f132102328a9635e7ec5640382c57bc89b6472d544919093b9d3b71f1f6cc1f` |
-| Supervisor | [candidate/supervisor.md](candidate/supervisor.md) | 11,907 | 11,907 | 11,907 | `278454213775edad5aa06490f1f872b74eb1f499b887eedfa8eb5f2648039488` |
+A pending proposal is not an applied change. Applied prompts affect future
+runs only.
 
 Rollback predecessors are the live snapshots in `current/`. Their generations are the
 expected `expected_generation` values unless a fresh read shows drift. The
