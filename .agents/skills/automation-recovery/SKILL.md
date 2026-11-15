@@ -24,10 +24,10 @@ for in all four prompts.
 <!-- recovery-core:begin -->
 ```text
 RECOVERY CORE v1 (all ci-health roles; grants nothing):
-1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads. lastUsefulProgressAt=evidence time.
+1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time.
 2 Reuse actionId/firstBlockedAt/lastUsefulProgressAt/expectedBy+basis/nextCheckAt/attempts/effects/escalation; optional milestone/reopenCondition/blockedScope/actionStatus/operationRefs; <=3 attempts inline, rest immutable history. Never reset ages/deadlines/IDs.
-3 Missed milestone: classify queue, execution, input, result publication or consumption. Age prompts diagnosis, never kill/takeover/duplicate.
-4 Lost reply: authoritative state matching the exact intended result settles outcome, not executor stop. No blind replay.
+3 Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
+4 Lost reply: authoritative state matching the exact intended result settles outcome, not executor stop; no blind replay.
 5 Routine question: standing policy; old waiting session resolved only by authorized input route plus delivery/ack evidence.
 6 Two eligible unchanged checks: different supported action or ONE capability-gap record (operation/error/owner action).
 7 Parked (blockedScope+observable reopenCondition): no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp/ID churn.

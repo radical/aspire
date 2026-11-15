@@ -102,15 +102,17 @@ The checker:
 It does not run, simulate or evaluate an automation. A passing check is not
 behavioral evidence.
 
-Latest checker result (exit 0, 37 obligation rows, 166 anchors, core 1,382
-characters):
+Latest checker result (exit 0, 41 obligation rows, 183 anchors, core 1,376
+characters). All four prompts exceed the 11,400 target because the
+standalone obligations were restored in full; the target is advisory and every
+prompt stays under the 12,000 ceiling:
 
 | Role | Code points | UTF-16 units | UTF-8 bytes |
 | --- | --- | --- | --- |
-| Monitor | 11,398 | 11,398 | 11,398 |
-| Fixer | 11,391 | 11,392 | 11,394 |
-| Reviewer | 11,359 | 11,359 | 11,359 |
-| Supervisor | 11,337 | 11,337 | 11,337 |
+| Monitor | 11,639 | 11,639 | 11,639 |
+| Fixer | 11,978 | 11,979 | 11,981 |
+| Reviewer | 11,946 | 11,946 | 11,946 |
+| Supervisor | 11,985 | 11,985 | 11,985 |
 
 The manager owns deployment. The steps:
 
