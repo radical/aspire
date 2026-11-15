@@ -158,6 +158,11 @@ UTF-8 limits both matter; the existing worker emoji consumes extra bytes.
 | Reviewer | 11946 | 11946 | at most 11400 where consolidation permits |
 | Supervisor | 11985 | 11985 | at most 11400 where consolidation permits |
 
+After implementation (core v2), the rendered candidates measure: monitor
+11846/11846, fixer 11973/11976, reviewer 11971/11971, supervisor 11861/11861.
+The per-family costs are in
+[prompt-obligations.md](prompt-obligations.md#size-cost-by-change-family).
+
 The hard limit is 12000; the smaller number is editing margin, not permission
 to delete obligations. Replace redundant text instead of appending. Record
 per-role before/after counts and the net cost of each coherent change family
@@ -250,8 +255,22 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   target CAS and reconciliation are required. Rollback decisions require
   source evidence rather than self-review claims. A recovered result does
   not authorize adoption of someone else's work.
-- Candidate implementation: earlier recovery work exists, unapplied; expanded
-  scope waits for the plan audit.
-- GPT-6 Astra implementation review: not started.
+- Plan re-audit: Opus 5.5 medium approved this plan at `14696ab02` with no
+  remaining blockers.
+- Candidate implementation: the implement-now dispositions are implemented as
+  UNAPPLIED candidates. The changes:
+  - the shared core is now RECOVERY CORE v2 (1,852 characters);
+  - the four sources and rendered candidates are updated;
+  - the skill decision table and worked examples cover `fence_lost`, the
+    missing-fence capability gap, mixed generations and absent optional
+    fields;
+  - the preservation map has 49 rows and 223 anchors, plus a disposition
+    record, per-family size costs and a semantic-consolidation list.
+
+  Rendered sizes (code points / UTF-8 bytes): monitor 11,846/11,846; fixer
+  11,973/11,976; reviewer 11,971/11,971; supervisor 11,861/11,861. All are
+  under the 12,000 hard limit and over the 11,400 target. F18 cadence, tools,
+  configuration and schedules are unchanged. No hosted calls were made.
+- GPT-6 Astra implementation review: pending (manager-launched).
 - Live rollout: not started.
 - Runtime recovery and external notification: not demonstrated.

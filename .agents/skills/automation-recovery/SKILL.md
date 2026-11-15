@@ -23,24 +23,26 @@ for in all four prompts.
 
 <!-- recovery-core:begin -->
 ```text
-RECOVERY CORE v1 (all ci-health roles; grants nothing):
+RECOVERY CORE v2 (grants nothing):
 1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time.
 2 Reuse actionId/firstBlockedAt/lastUsefulProgressAt/expectedBy+basis/nextCheckAt/attempts/effects/escalation; optional milestone/reopenCondition/blockedScope/actionStatus/operationRefs; <=3 attempts inline, rest immutable history. Never reset ages/deadlines/IDs.
-3 Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
-4 Lost reply: authoritative state matching the exact intended result settles outcome, not executor stop; no blind replay.
+3 Due=nextCheckAt/expectedBy reached (undated legacy: now); evidenced waits before due aren't stalls. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
+4 Lost reply: authoritative state matching the exact intended result settles that operation's outcome only (not executor stop/claim settlement/adoption); no blind replay.
 5 Routine question: standing policy; old waiting session resolved only by authorized input route plus delivery/ack evidence.
 6 Two eligible unchanged checks: different supported action or ONE capability-gap record (operation/error/owner action).
-7 Parked (blockedScope+observable reopenCondition): no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp/ID churn.
-8 Unknown effects block overlapping mutation only; independent work continues.
+7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state or stall: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
+8 Unknown effects (not lease contention) block overlapping mutation only; independent work continues. Keep original call/operation/args/bytes/ETags; inspect target first. CAS conflict: reconcile, never substitute ETags.
 9 Ending turn/releasing claim keeps delivery duty; expiry never proves termination.
 10 Denied/missing tools: capability evidence, not task state or workaround license.
+11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved; don't await them.
 ```
 <!-- recovery-core:end -->
 
 ## Decision table
 
 Classify from exact evidence before acting. "Due" means `nextCheckAt` or
-`expectedBy` has passed and the action is not parked.
+`expectedBy` has passed and the action is not parked. Undated legacy blockers
+are due now; their timestamps are backfilled additively.
 
 | Observation | Classification | Next supported action | Never |
 | --- | --- | --- | --- |
@@ -49,15 +51,19 @@ Classify from exact evidence before acting. "Due" means `nextCheckAt` or
 | Work not admitted; capacity or schedule delay | Queue/admission | Record queue evidence; wait for admission or the next eligible pass | Start a duplicate or call it a hang |
 | Admitted command running past its milestone | Execution | Inspect that exact command/dependency with authorized tools; record the result | Kill, take over, or replace |
 | Session waits on a routine question | Input | Apply standing policy; deliver only through an available authorized input route and record delivery/ack | Re-ask the owner; claim resolution without delivery evidence |
-| Result exists but no record or receipt | Result publication | Settle from authoritative state matching the exact intended result | Replay the operation |
+| Result exists but no record or receipt | Result publication | Settle that operation's outcome from authoritative state matching the exact intended result | Replay the operation; treat it as executor stop or claim settlement |
 | Result recorded but consumer has not used it | Consumption | Route the exact ref to the consumer; check its next eligible pass | Regenerate the result |
 | Two eligible checks, nothing changed | Unchanged | Take a different supported action, or write one capability-gap record, then park | Rename and resend the same request |
 | Parked, reopen condition unchanged | Parked | One cheap observable check; concise visibility | Probe expensively, re-escalate, bump timestamps |
 | Parked, reopen condition changed | Reopened | Clear parked status; resume due handling with the same `actionId` | Create a new incident or action |
 | Effect of an earlier mutation unknown | Uncertain effect | Block only overlapping mutation in `blockedScope`; inspect the target | Block unrelated work; blind retry |
-| Another holder's lease is held and unexpired | Concurrency | No protected writes, no waiting or polling; end (the fixer skips only that incident) | Wait, take over, or write under the other lease |
+| Another holder's lease is held and unexpired | Concurrency (contention, not an unknown outcome) | No protected writes, no waiting or polling; end (the fixer skips only that incident) | Wait, take over, write under the other lease, or open an uncertainty record |
+| Fenced reviewer write returns `fence_lost` | Lost exclusion | Stop protected writes for this pass; reconcile on a later pass under a valid lease | Substitute another ETag; retry blindly |
+| Reviewer's exposed `artifact_put` schema has no `fence` | Capability gap | Keep publication blocked; record the exact gap once (configured selection is not runtime attestation) | Publish unfenced as a fallback |
+| Older session published an unfenced or lease-less verdict | Mixed generation | Reconcile it as evidence; publish a superseding verdict if needed | Ignore a blocking verdict; treat last writer as pass |
 | Two current-head verdicts conflict | Conflicting verdict | Resolve from evidence or publish a superseding verdict naming the replaced one | Treat either as a pass; push a new head only to correct it |
 | Tool denied, missing or unregistered | Capability gap | Record exact operation, error and owner action once | Infer task state; use another identity or route |
+| Record lacks a new optional field | Legacy record | Read it as legacy; backfill additively when owned | Treat absence as false or resolved; wait for the field |
 
 ## State guidance
 
@@ -66,6 +72,8 @@ Reuse existing fields: `actionId`, `firstBlockedAt`, `lastUsefulProgressAt`,
 additions are optional: `milestone`, `reopenCondition`, `blockedScope`,
 `actionStatus` (for example `active`, `external-wait`, `parked`, `resolved`),
 and `operationRefs`. Records without them remain valid; there is no migration.
+Parked is action metadata only. Top-level item and work state enums do not
+change, and readers must tolerate the absence of every optional field.
 
 - Keep hot records plus a transition reserve of at least 4096 bytes within
   32768 bytes. Keep at most three recent attempts inline; move older ones to
@@ -78,7 +86,11 @@ and `operationRefs`. Records without them remain valid; there is no migration.
 - `blockedScope` names the exact resources an unknown effect can touch, such as
   one PR branch or one artifact. Work outside that scope proceeds.
 - Claims keep `settle-expire-v1`: expiry or release alone never proves the
-  original executor stopped or its effects settled.
+  original executor stopped or its effects settled. Each role keeps its own
+  exact settlement gate; outcome reconciliation never substitutes for it.
+- New prompts bind only runs that start after deployment. Running sessions keep
+  the rules they started with; that is an adoption gap, not a refusal, and
+  nothing drains or stops them.
 
 ## Worked examples
 
@@ -125,6 +137,14 @@ and `operationRefs`. Records without them remain valid; there is no migration.
     another unexpired holder. It makes no protected writes and ends without
     polling. Current pointers only point to records; they are not a full
     inventory, so the next holder still lists the records.
+13. **Fence lost.** The reviewer renews its lease (the ETag changes), then a
+    publication carrying the old ETag returns `fence_lost` with no effect. It
+    stops protected writes for this pass and does not retry with a guessed
+    ETag. A later pass reconciles under a valid lease.
+14. **Mixed generations.** An older reviewer session publishes an unfenced
+    `changes-needed` verdict for the current head while a newer one passed.
+    Neither is treated as a pass; the current holder resolves the evidence or
+    publishes a superseding verdict that names the replaced one.
 
 ## Role hooks
 
@@ -134,7 +154,8 @@ and `operationRefs`. Records without them remain valid; there is no migration.
   responsibility across turns; settle its own uncertain effects.
 - **Reviewer:** sample missed work and actual outcomes; keep existing finding
   identities; audit parked reasons rather than re-escalating them; publish only under the
-  required verifier lease (older sessions without it remain noncompliant).
+  required verifier lease, with the lease ETag as `fence` plus target CAS (older
+  sessions without it remain noncompliant; their verdicts are still evidence).
 - **Supervisor:** classify missed milestones, choose a different supported
   action or one capability-gap record, and never write worker-owned claims or
   lifecycle fields.
@@ -146,7 +167,7 @@ catalog's original-session reconnect, where selected, only reconciles work that
 is already idle or settled. Missing or denied controls are capability gaps to
 report, not authority to improvise another route.
 
-Artifact CAS is not atomic with GitHub side effects, and prompt bounds are not
-runtime-enforced caps. These rules reduce duplicate effects; they cannot
+Artifact CAS and the `artifact_put` fence are atomic only for artifact writes,
+not for GitHub side effects, and prompt bounds are not runtime-enforced caps. These rules reduce duplicate effects; they cannot
 guarantee their absence. There is no watchdog, notification route or shared
 backoff ledger.

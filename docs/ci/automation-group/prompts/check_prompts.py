@@ -49,7 +49,7 @@ def extract_core(skill_text: str) -> str:
     # The skill holds the core as:
     #   <!-- recovery-core:begin -->
     #   ```text
-    #   RECOVERY CORE v1 ...
+    #   RECOVERY CORE v2 ...
     #   ```
     #   <!-- recovery-core:end -->
     match = re.search(
