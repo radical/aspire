@@ -68,6 +68,21 @@ New prompts apply prospectively; already-admitted sessions retain old rules.
 
 ## Decisions and unresolved capability work
 
+These dispositions separate changes deliverable now from unimplemented runtime
+features. "Implement-now" includes preserving or clarifying an existing rule;
+it does not assert that the whole failure mode is eliminated.
+
+| Disposition | Findings and decisions |
+| --- | --- |
+| implement-now | F1, F3, F4 (preserve), F5 (outcome/settlement distinction only), F6, F7, F8, F10, F12, F13 (age/coordination only), F14 (ownership/reconciliation only), F17 (preserve), D1 (document), D4 |
+| deferred-capability | F2 crash exercise, F9 host stop/time/token enforcement, F11 shared backoff, F15 notification transport, F16 external outage detector, D3 new cancellation/takeover authority |
+| discuss | F18 changing report publication frequency, D2 exact notification route and permission |
+
+Implemented items reduce risk; they do not fix missing controls or detection
+in F2, F9, F11, F15 or F16. F18 remains unchanged in the live/candidate
+publication contract during this iteration; proposed material-change
+publication is not silently activated.
+
 | Audit | Decision | Default for this implementation |
 | --- | --- | --- |
 | D1 | Same-role concurrency | Preserve saved configuration; document verified settings and write safe contention behavior for queued or overlapping runs. Do not guess supervisor's missing limit. |
@@ -91,6 +106,66 @@ Additional suggestions to retain:
 - A code-review subagent can reduce review latency. Someone must still own
   post-merge verification, feedback consumption, missed work and future revisits.
   Do not transfer those duties in this recovery rollout.
+
+## Non-negotiable recovery and compatibility details
+
+An authoritative result can establish one operation's outcome and allow its
+existing result to be consumed. It does not permit adopting someone else's PR
+or treating the executor as stopped. Fresh mutation of a claimed incident
+still needs the existing verified settled checkpoint plus authoritative
+release or confirmed server expiry. The alternative remains a pinned manager
+decision, explicit owner/platform authority and independently verified
+settlement evidence. F5 and D3 relax none of these requirements.
+
+Use one group-wide `verifier/lease.json` for new reviewer publication, not a
+new per-PR lock hierarchy. A reviewer encountering another unexpired holder
+does not write protected records or poll; it can report the skip in its local
+final response. Publication retries occur on a later eligible pass. Confirmed
+server expiry permits reacquiring this artifact-publication lease with a
+distinct nonce; it does not settle workers. Every protected artifact write by
+new reviewers must carry the lease fence checked atomically with that write,
+in addition to the target's compare-and-swap precondition. Reconcile previous
+publication outcomes, current target ETags and conflicting verdicts first.
+Do not claim that this prevents legacy reviewers from writing without fences.
+Legacy writes remain evidence to reconcile, not permission to ignore blockers
+or wait forever for old writers to produce new fields.
+
+All new readers accept absent optional fields in legacy records, preserve
+existing states and distinguish absence from false or resolved. New `parked`
+semantics remain additive recovery-action metadata, not a replacement for
+the existing top-level item/work lifecycle enums. New consumers must not
+wait for fields legacy producers cannot publish. New-to-new deployment order
+is therefore not a correctness dependency; mixed old consumers can still
+repeat obsolete behavior and must be reported as adoption gaps. Never claim
+an atomic rollout, forcibly drain sessions or retroactively change their rules.
+
+Notification discovery is read-only. Manager attention tools are not proof
+of automation access or an out-of-band alert. Verify each target's actual
+selection, host support, recipient and delivery behavior before proposing
+any addition. No added tools, triggers or grants are authorized by this plan.
+Five admitted runs can multiply per-pass reads; a PR cap does not bound that
+cost. Supervisor's omitted concurrency field remains unknown.
+
+## Prompt size and preservation budget
+
+The latest pre-expansion candidate checkpoint is `6f17c3dd0`. Code-point and
+UTF-8 limits both matter; the existing worker emoji consumes extra bytes.
+
+| Role | Candidate characters | Candidate UTF-8 bytes | Editing target |
+| --- | --- | --- | --- |
+| Monitor | 11639 | 11639 | at most 11400 where consolidation permits |
+| Fixer | 11978 | 11981 | at most 11400 where consolidation permits |
+| Reviewer | 11946 | 11946 | at most 11400 where consolidation permits |
+| Supervisor | 11985 | 11985 | at most 11400 where consolidation permits |
+
+The hard limit is 12000; the smaller number is editing margin, not permission
+to delete obligations. Replace redundant text instead of appending. Record
+per-role before/after counts and the net cost of each coherent change family
+(contention/verdicts, recovery/parking, compatibility and unchanged rules) in
+the preservation map. Map every substantive cut to its equivalent retained
+rule. If a required safeguard cannot fit, stop that target's deployment and
+report the unmet requirement rather than dropping it or hiding it in a file
+the runtime cannot read.
 
 ## Implementation sequence
 
@@ -119,6 +194,25 @@ Additional suggestions to retain:
 8. Observe naturally admitted executions for adoption and useful results.
    No manual production dispatch, cancellation or fault injection is included.
 
+## Rollback and partial rollout
+
+Keep exact authoritative predecessor prompts and their revision identities.
+An observed new duplicate effect, false ready verdict, lost accepted work or
+publication blocked by the new protocol requires immediate diagnosis against
+source evidence. A worker's self-review alone is not proof of regression.
+If a prompt regression is confirmed, propose restoring only affected targets
+through the same owner-scoped prompt-only compare-and-swap path. Owner approval
+of this rollout does not imply arbitrary runtime cancellation, settings
+changes or removal of concurrent configuration updates. Reconcile current
+generation/content and the original mutation outcome before rollback; require
+the applicable approval if the platform returns a proposal.
+
+Verify exact restored bytes and unchanged unrelated configuration. Record
+partial rollback explicitly; already-admitted runs keep their pinned revision.
+Do not revert the source history or erase the failed candidate/evidence. The
+implementation must leave an exact restoration artifact ready even if no
+rollback is needed.
+
 ## Acceptance and actual proof
 
 Immediate completion means every finding above has an explicit disposition,
@@ -126,6 +220,9 @@ all supported edits preserve standalone constraints, the candidate source and
 assembled text agree, review findings are resolved or explicitly retained, and
 each live target is either verified applied or accurately identified as pending.
 No unsupported runtime feature is a hidden prerequisite of the deployed prompts.
+Verify the complete candidate source renders to the exact submitted body and
+that authoritative readback matches its bytes/digest; character counts and
+anchor matches alone are not equivalence checks.
 
 Evaluate the first seven covered days after adoption against all eligible
 overdue actions, including unselected work and old-generation consumers:
@@ -144,7 +241,15 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
 
 ## Review and rollout record
 
-- Plan: pending Opus 5.5 medium audit.
+- First expanded-plan audit: Opus 5.5 medium requested explicit dispositions,
+  prompt budget, unchanged settlement requirements, reviewer lease scope,
+  legacy-reader tolerance, rollback and read-only notification discovery.
+  This revision incorporates those corrections and awaits re-audit.
+- Audit corrections: a reviewer lease cannot constrain legacy writers, so
+  expiry is not a blanket safety guarantee; new fenced artifact writes plus
+  target CAS and reconciliation are required. Rollback decisions require
+  source evidence rather than self-review claims. A recovered result does
+  not authorize adoption of someone else's work.
 - Candidate implementation: earlier recovery work exists, unapplied; expanded
   scope waits for the plan audit.
 - GPT-6 Astra implementation review: not started.
