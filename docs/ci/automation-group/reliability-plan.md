@@ -314,11 +314,15 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   reviews to per-`<reviewId>` subdirectories (fresh same-head review after
   settlement), consumes native results immediately and adds the fixer's
   boundary checkpoint. A later owner-authorized supervisor STALE rule
-  handles 12h/24h idle or unresponsive sessions (evidence first; stop/close
-  only through an exposed authorized control, else record the missing control
+  handles 2h/3h idle or unresponsive sessions (evidence first; stop/close/restart
+  only through an actual exposed authorized tool, else record the missing control
   once and park; no such control is in today's catalog), and the fixer ready
-  gate again verifies maintainer requests. Sizes now 11,984/11,995/11,993; 212
-  anchors. Not yet
+  gate again verifies maintainer requests. Logical retirement records
+  (`supervision/` or `manager/retired-sessions/<sessionId>.json`) are exact
+  per-session observations for all three roles, not termination. Sizes now
+  11,995/11,987/11,996; 222 anchors. Fixer proposal
+  `c81855b7-e2a2-502c-8787-2948f8a61a0c` (candidate `c62d016c…`) is pending,
+  NOT applied and SUPERSEDED. Not yet
   independently reviewed; deployment and the reviewer retirement sequence are
   pending (hosted `automation_get`/list aborted again at 18:32 UTC) and
   recorded in [prompts/README.md](prompts/README.md#deployment-and-reviewer-retirement-status).

@@ -5,15 +5,15 @@ v2 (1,898 characters) inline. Not live configuration; see
 [../README.md](../README.md) for the pending deployment and reviewer
 retirement sequence.
 
-Checker result: exit 0, 54 obligation rows / 212 anchors, 27 reviewer
+Checker result: exit 0, 55 obligation rows / 222 anchors, 27 reviewer
 transfers (33 anchors, 4 retired). All three exceed the advisory 11,400
 target and stay under the 12,000 ceiling.
 
 | Role | Candidate | Code points | UTF-16 | Bytes | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
-| Monitor | [monitor.md](monitor.md) | 11,984 | 11,984 | 11,984 | `92609437cc1fbc5320950a8628323e377d0ae7d866f53b383ebecf65e53e72a4` |
-| Fixer | [worker.md](worker.md) | 11,992 | 11,993 | 11,995 | `c62d016ca92ecc241b384156aaff4b63c984456db93bac4bbe30c002611afdd7` |
-| Supervisor | [supervisor.md](supervisor.md) | 11,993 | 11,993 | 11,993 | `7d42220c2c2f308db6de1b79bcecf1b833ad9797b859b2205942dbf649841112` |
+| Monitor | [monitor.md](monitor.md) | 11,995 | 11,995 | 11,995 | `ed48db6a92b2f52961a82546ef058d612f3b80c4123319c10621397c7a1f5672` |
+| Fixer | [worker.md](worker.md) | 11,984 | 11,985 | 11,987 | `c0583cdc16780bc5f36a58fc9df1448169d398184e9f5b4ea4c63734d1b0bffc` |
+| Supervisor | [supervisor.md](supervisor.md) | 11,996 | 11,996 | 11,996 | `2853ca0cc5b0480ae7a160256794fd1cd316fa4bac253bc7e7e1bd249e8873e4` |
 
-Headroom is 6–16 characters per prompt; any addition needs an equal
+Headroom is 4–15 characters per prompt; any addition needs an equal
 consolidation first.

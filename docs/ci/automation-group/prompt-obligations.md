@@ -55,15 +55,15 @@ the obligation does not belong to that role.
 | Shared recovery core embedded inline | `RECOVERY CORE v2` | `RECOVERY CORE v2` | `RECOVERY CORE v2` |
 | Parked: not due/overdue and excluded from unchanged-check escalation until reopenCondition verifiably changes; ages/due kept; cheap reopen check only | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `Two eligible unparked passes`; `core-7 parking`; `parked shows reopen condition` | `parked until reopenCondition verifiably changes`; `one cheap reopen check`; `Parked own work resumes on core-3 reopen` | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `one cheap reopen check`; `Never reset ages/deadlines/IDs` |
 | Missed milestone: classify, never kill | `Age prompts diagnosis, never kill/takeover/duplicate` | `Age prompts diagnosis, never kill/takeover/duplicate`; `no duplicate/replacement (core 8)` | `concrete <=60min diagnostic milestone` |
-| Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement`; `STALE (owner-authorized, this recovery only; no workflow/host kills)`; `completed idle awaiting legitimate input isn't hung`; `verify termination+outcomes before ONE replacement (no concurrent duplicate)`; `record exact missing control+UI owner action once`; `reconnect/disable/expiry never kill` |
+| Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement`; `STALE (owner-authorized, this recovery only; no workflow/host kills)`; `completed idle awaiting legitimate input isn't hung`; `verify termination+outcomes before ONE replacement (no concurrent duplicate)`; `record missing control+UI owner action once`; `2h without useful progress`; `Stop/close/restart only via actual exposed authorized tool`; `reconnect/disable/expiry never kill` |
 | Windows environment and diagnostic slot | `ab8cd228-635c-48f4-861c-a5d77c81e5ba` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `worker/diagnostic-slot.json is the sole claimless non-expiring probe lock` | `ab8cd228-635c-48f4-861c-a5d77c81e5ba`; `no second child/name/operation` |
 | Review findings private; legacy reviewer findings consumed | `ack exact supervisor/legacy reviewer findings` | `Review findings stay private in artifacts` | `Consume legacy reviewer critique as evidence` |
 | Seven-day observation, not self-grading | `Judged on missed/deferred work and later CI recovery`; `You own later failure-rate outcomes` | `Judge useful progress/later CI outcomes` | `Seven-day observation, ALL due blockers`; `you own delivery` |
 | Only monitor edits #22241 | `only mutate #22241 ISSUE DESCRIPTION` | `Never edit #22241 body` | `only monitor writes #22241` |
 | Shared host safety | n/a: monitor does not build | `Shared host: no broad cleanup/unrelated kills/global installs` | `no shared cleanup/global installs/kills` |
 | Scoped GitHub read credentials | `credentials_issue github-read` | `credentials_issue github-read` | `credentials_issue github-read` |
-| Author-code bugs separate from CI goals | `Author-code bugs aren't shared failures` | `genuine author-code bugs tracked separately, not CI-goal failures` | `author bugs separate` |
-| Applicable AGENTS.md and skills for fixes | `Read AGENTS.md/applicable skills` | `following applicable AGENTS.md/skills` | `Read AGENTS.md` |
+| Author-code bugs separate from CI goals | `Author-code bugs aren't shared failures` | `author bugs separate; unknown isn't zero` | `author bugs separate` |
+| Applicable AGENTS.md and skills for fixes | `Read AGENTS.md/applicable skills` | `per AGENTS.md/skills` | `Read AGENTS.md` |
 | Installed CLI/package identity for smoke evidence | `Smoke needs installed CLI/package version/commit/channel`; `installed identity for smoke` | n/a: monitor owns post-merge outcome records | `installed identity for smoke` |
 | Publication is not notification; no automatic manager wake | `Body edits notify nobody` | n/a: fixer gives monitor status only | `publication doesn't notify anyone or prove acceptance`; `Manager has no automatic wake`; `Don't claim prompts fix missing notification transport` |
 | Lost reply settles the operation outcome only, not executor stop or claim (core 4) | `settles that operation's outcome only` | `settles that operation's outcome only` | `settles that operation's outcome only` |
@@ -78,6 +78,7 @@ the obligation does not belong to that role.
 | Legacy reviewer records read-only | `legacy reviewer verifier/* read-only`; `Legacy verifier outcomes: read-only evidence` | `LEGACY read-only verifier/current.json+reviews/verdicts`; `Legacy blocking feedback never vanishes without consumption` | `LEGACY verifier/*`; `(retiring; read-only evidence)` |
 | Post-merge outcome records | `planner/outcomes/<pr>/<window>.json`; `eligible later push/scheduled runs containing the fix (attempt1), seven-day revisit, unknown exposure` | `merged isn't recovered (monitor owns outcomes)` | `monitor owns CI recovery` |
 | Compact supervision without audit-of-audit | n/a: monitor does not supervise | n/a: fixer does not supervise | `diagnose ONE due blocked item by rotating cursor`; `daily missed-work sample, independently selected from run inventory/intake`; `no full artifact census; record unknown coverage`; `No audit-of-audit; no reviewer ack required` |
+| Logical session retirement (not termination) | `{supervision,manager}/retired-sessions/<sessionId>.json lookups are observations: no stale-executor block/census; unresolved tasks/unknown scope stay` | `{supervision,manager}/retired-sessions/<sessionId>.json lookups (observations, no stale-executor block/census; unresolved tasks/unknown scope stay)` | `RETIRED (logical, not termination): own supervision/retired-sessions/<sessionId>.json`; `read manager/retired-sessions/<sessionId>.json too (exact lookups)`; `unresolvedScope, continuation owner/refs, reactivationCondition`; `no mutation vs unknown live writer`; `Not work state/claim-lease overwrite/PR closure/cap or routing release`; `no proof polling/lifetime blacklist` |
 <!-- obligations:end -->
 
 ## Reviewer obligation transfers
@@ -169,7 +170,7 @@ changes adds authority.
 - Monitor: "backfill missing nextCheckAt" → core 3; "Refusals citing old
   prompt/tool limits are adoption mismatches" → core 11; legacy oversize
   detail → "Legacy oversize migration needs separate lossless approval".
-- Owner-authorized STALE addition (supervisor): 12h/24h idle or unresponsive
+- Owner-authorized STALE addition (supervisor, thresholds later set to 2h/3h): idle or unresponsive
   sessions get exact evidence checks, then stop/close only through an exposed
   authorized control, with verified termination before one replacement;
   without such a control, the missing control and owner UI action are recorded
@@ -178,6 +179,13 @@ changes adds authority.
   isn't settlement" and "lost receipt" lines, which RECOVERY CORE 4 and the
   claims rules cover). The fixer ready gate restores "verify requests" for
   maintainer review requests.
+- Logical retirement (all three): exact `{supervision,manager}/retired-sessions/<sessionId>.json`
+  lookups. Room came from prose shortening and from dropping worker-side
+  detail the supervisor repeated (child create/send rules, the 30-minute
+  offline retry, build-resource evidence, the ledger empty-page tip and the
+  "manager acks pin" line); the worker and monitor prompts keep those rules.
+  Monitor/fixer wording: "collect/diagnose" → "diagnose", "(evidence/attempt/
+  impact/nextAction)" friction detail dropped, "author bugs separate".
 - Supervisor: "diagnose <=3 executable actions deeply" → ONE due blocked item
   by rotating cursor, as the owner directed; the reviewer correctness
   consumer is removed; post-merge detail (manual/skipped green, canceled

@@ -85,11 +85,23 @@ They replace the separate reviewer cron, at the owner's request:
 - the supervisor verifies readiness handoffs, diagnoses one due blocked item
   per pass and takes a daily independently selected missed-work sample, with
   no audit-of-audit, and (owner-authorized for this recovery only) handles
-  12h/24h idle or unresponsive sessions: exact evidence first, stop/close only
-  through an exposed authorized control with verified termination before one
-  replacement, otherwise one recorded missing-control/UI owner action and park.
-  The current catalog has no stop/close/restart tool, so today this records
-  the gap; reconnect, disable and lease expiry are never treated as a kill;
+  2h/3h idle or unresponsive sessions: exact evidence first, stop/close/restart
+  only through an actual exposed authorized tool with verified termination
+  before one replacement, otherwise one recorded missing-control/UI owner
+  action and park. The current catalog has no stop/close/restart tool, so today
+  this records the gap; reconnect, disable and lease expiry are never treated
+  as a kill;
+- logical session retirement (not termination): the supervisor owns
+  `supervision/retired-sessions/<sessionId>.json` and the manager may write
+  `manager/retired-sessions/<sessionId>.json` (for example the completed
+  PR #22292 turn of session `8203bb54-5e99-4cd7-a8f8-c716238682fd`). All three
+  roles read them by exact per-session lookup, never by census, as
+  observations: a retired session leaves routine polling and executor capacity,
+  but unresolved tasks and unknown effects stay in their own blocked scope. It
+  does not change work state, overwrite claims or leases, close PRs, free the
+  PR cap or release routing; new independent evidence, input or activity
+  reactivates it. Frozen live prompts do not consume these records; only these
+  pending candidates will;
 - legacy `verifier/*` records stay read-only evidence.
 
 `create_session` has no model or tool parameter, so no child model is
@@ -114,7 +126,14 @@ are in [candidate/README.md](candidate/README.md).
 
 ## Deployment and reviewer retirement status
 
-Status: UNAPPLIED, not yet independently reviewed. Deployment is BLOCKED by
+Status: UNAPPLIED, not yet independently reviewed. The manager submitted the
+earlier fixer candidate `c62d016c…` by `automation_upsert` and got PENDING
+proposal `c81855b7-e2a2-502c-8787-2948f8a61a0c` (reason `autonomy_L3`,
+expected generation 22, present field `prompt`); it was NOT applied. That
+candidate is SUPERSEDED by the current fixer bytes, but the server proposal
+stays pending until the owner dismisses it (no edit/cancel tool exists). The
+three current candidates are to be submitted together for owner approval, with
+no policy or autonomy change. Deployment is BLOCKED by
 hosted-tool failures: the 08:00 UTC client failure, a working read at 17:35,
 then fresh `automation_get`/list calls aborted again at 18:32. No
 `automation_upsert` or enable change was attempted for this set, and no
