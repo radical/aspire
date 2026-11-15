@@ -72,8 +72,8 @@ the obligation does not belong to that role.
 | Denied/missing tools are capability evidence, not workaround license (core 10) | `not task state or workaround license` | `not task state or workaround license` | `not task state or workaround license` |
 | Overlapping monitor issue-body race (F3) | `overlapping monitors can race: reconcile the actual body, never assume one edit` | n/a: never edits #22241 | n/a: never edits #22241 |
 | Evidence attributed to producers; roles/models aren't independence (F8) | n/a: monitor aggregates producer evidence | n/a: fixer produces evidence | `attribute evidence to producers` |
-| Fresh-context exact-head review owned by fixer | n/a: worker owns review | `REVIEW: before ready`; `via native task tool if actually exposed, else child`; `upstream code-review skill`; `Accept only an actual native result (consume now) or the child's authoritative explicit reply`; `recheck head (moved=stale)` | `<=1 outstanding review child per owned incident` |
-| Review persistence and slot | n/a: worker owns review | `worker/reviews/<pr>/<head>/<reviewId>/{request,child,send,result,consumption}.json`; `new same-head reviewId only after prior settles (not while unknown)`; `<=1 outstanding per owned incident, apart from diagnostic slot`; `CAS bounded worker/reviews/<pr>/current.json` | `worker/reviews/<pr>/current.json` |
+| Fresh-context exact-head review owned by fixer | n/a: worker owns review | `REVIEW: fresh-context read-only exact-head review`; `via exposed native task, else child`; `upstream code-review skill`; `Accept only an actual native result (consume now) or child's explicit reply`; `recheck head (moved=stale)` | `<=1 outstanding review child per owned incident` |
+| Review persistence and slot | n/a: worker owns review | `worker/reviews/<pr>/<head>/<reviewId>/{request,child,send,result,consumption}.json`; `CAS reuse only after prior settles, unknowns retain it`; `<=1 outstanding per owned incident`; `BEFORE either launch, create-only/CAS-reserve worker/reviews/<pr>/current.json`; `nonce/owner/head/reviewId; verify readback`; `losers skip, never choose another ID` | `worker/reviews/<pr>/current.json` |
 | Child create/send identity and no duplicate | n/a: monitor creates no children | `save operationId (accepted isn't delivered)`; `explicit reverse send AND final text (no child artifact access assumed)`; `never waits on child transport`; `no model/tool grant assumed`; `Unknown/timed-out create/send holds the slot` | `no second child/name/operation` |
 | Legacy reviewer records read-only | `legacy reviewer verifier/* read-only`; `Legacy verifier outcomes: read-only evidence` | `LEGACY read-only verifier/current.json+reviews/verdicts`; `Legacy blocking feedback never vanishes without consumption` | `LEGACY verifier/*`; `(retiring; read-only evidence)` |
 | Post-merge outcome records | `planner/outcomes/<pr>/<window>.json`; `eligible later push/scheduled runs containing the fix (attempt1), seven-day revisit, unknown exposure` | `merged isn't recovered (monitor owns outcomes)` | `monitor owns CI recovery` |
@@ -102,9 +102,9 @@ model is promised.
 <!-- transfers:begin -->
 | Reviewer obligation | New owner | Anchors |
 |---|---|---|
-| Independent exact-head review of owned PRs | worker | `fresh-context read-only review of each new owned PR head`; `upstream code-review skill` |
+| Independent exact-head review of owned PRs | worker | `fresh-context read-only exact-head review`; `upstream code-review skill` |
 | Review brief: diff, source failure, acceptance, validation commands/results | worker | `Brief PR URL/head/base, source failure, acceptance, validation commands+results, release evidence` |
-| Verdict per exact head (pass/changes-needed/blocked) | worker | `blocked+findings for that head` |
+| Verdict per exact head (pass/changes-needed/blocked) | worker | `blocked+findings` |
 | Deliver findings privately; consumption is action/refusal | worker | `Review findings stay private in artifacts`; `consumption=action/refusal per finding` |
 | Never recreate duplicate findings or reviews | worker | `<=1 outstanding per owned incident`; `no duplicate/replacement (core 8)` |
 | Conflicting current-head verdicts are not a pass | worker | `Conflicting current-head verdicts aren't a pass: resolve evidence or fresh exact-head review` |

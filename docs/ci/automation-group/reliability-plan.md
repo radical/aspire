@@ -355,8 +355,8 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
     [prompts/README.md](prompts/README.md#public-report-freeze-22241)).
 
   Sizes and digests are in [prompts/candidate/README.md](prompts/candidate/README.md)
-  (11,885/11,930/11,895 bytes; the 10,500 advisory target is not met).
-  The checker has 62 rows / 264 anchors; `test_check_prompts.py` covers
+  (11,885/11,958/11,895 bytes; the 10,500 advisory target is not met).
+  The checker has 62 rows / 266 anchors; `test_check_prompts.py` covers
   placeholder and block-extraction negatives. These are authoring checks,
   not runtime behavior.
 
