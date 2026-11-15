@@ -158,14 +158,20 @@ server prompt digest after readback):
 | Supervisor | [candidate/supervisor.md](candidate/supervisor.md) | 11,907 | 11,907 | 11,907 | `278454213775edad5aa06490f1f872b74eb1f499b887eedfa8eb5f2648039488` |
 
 Rollback predecessors are the live snapshots in `current/`. Their generations are the
-expected `expected_generation` values unless a fresh read shows drift:
+expected `expected_generation` values unless a fresh read shows drift. The
+manager's `automation_get` read all four earlier on 2026-11-15 and the server
+generation, revision and prompt digest matched these values; a local
+`sha256sum` of each `current/` file matched independently. None was
+revalidated at the attempted deployment: the immediate pre-deployment refresh
+failed (monitor aborted, supervisor no active client), so a fresh read is still
+required before any upsert.
 
 | Role | Automation ID | Generation | Revision | `current/` SHA-256 |
 | --- | --- | --- | --- | --- |
-| Monitor | `5bd0ec02-21b4-4f5a-bf7a-41859226a236` | 24 | `db64382c-49dc-479a-9bb3-4b3995b230dd` | `8dec9d63d1402f1d90dcd10e900b834858715e96a48d555397e16aabfb599e35` (server digest re-verified by the manager) |
-| Fixer | `9e82784d-ed3c-4188-b081-db683e2d3635` | 22 | `f36dd33d-4c41-434d-a92a-a80571d306e5` | `9fa8c2f19691f31b8ed8b440223bbed53bda57557b9b218be02188556bd8629a` (verified at application) |
-| Reviewer | `62ff16a7-a74c-4c96-a23c-d053c3f35743` | 19 | `e6361b59-93dc-4284-9832-ae0040faccd2` | `db2c93bd59c9dcde3df90e5a4e35213eed0133e09cfba2329c273581eb621c04` (server digest re-verified by the manager) |
-| Supervisor | `cbc3a8c3-743e-4d4e-a1de-cc3501ed419b` | 17 | `bd247502-388e-4b76-95fe-917ba1e7c705` | `2dac3d62ee838282cfd131a98ad1f901b0661016491c875812df3fcd635f43d0` (local snapshot; refresh failed) |
+| Monitor | `5bd0ec02-21b4-4f5a-bf7a-41859226a236` | 24 | `db64382c-49dc-479a-9bb3-4b3995b230dd` | `8dec9d63d1402f1d90dcd10e900b834858715e96a48d555397e16aabfb599e35` |
+| Fixer | `9e82784d-ed3c-4188-b081-db683e2d3635` | 22 | `f36dd33d-4c41-434d-a92a-a80571d306e5` | `9fa8c2f19691f31b8ed8b440223bbed53bda57557b9b218be02188556bd8629a` |
+| Reviewer | `62ff16a7-a74c-4c96-a23c-d053c3f35743` | 19 | `e6361b59-93dc-4284-9832-ae0040faccd2` | `db2c93bd59c9dcde3df90e5a4e35213eed0133e09cfba2329c273581eb621c04` |
+| Supervisor | `cbc3a8c3-743e-4d4e-a1de-cc3501ed419b` | 17 | `bd247502-388e-4b76-95fe-917ba1e7c705` | `2dac3d62ee838282cfd131a98ad1f901b0661016491c875812df3fcd635f43d0` |
 
 ## Earlier baseline
 
