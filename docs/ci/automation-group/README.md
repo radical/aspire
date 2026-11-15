@@ -13,6 +13,7 @@ belong in the runtime work ledger, not these notes.
 | [Operating rules](operating-rules.md) | Agreed behavior that prompts, skills, and tooling should implement |
 | [Proposed design](proposed-design.md) | A smaller decision loop, reusable procedures, state model, and implementation sequence |
 | [Complete prompt snapshots](prompts/README.md) | Applied prompts, earlier baseline, exact revisions, proposal receipts, and adoption limits |
+| [Recovery playbook](recovery-playbook.md) | Proposed progress checks, interrupted-command recovery, stuck-agent handling, and required runtime capabilities |
 
 ## Current position
 

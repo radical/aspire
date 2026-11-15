@@ -76,6 +76,27 @@ missing route plainly. Repeatedly rewriting the request is not progress.
 **Status:** unresolved. The proposed design explains the remedy, but no general
 working original-session recovery path has been demonstrated.
 
+### Reconnection was mistaken for a general stuck-agent recovery control
+
+**Observed, November 15, around 06:30 UTC:** the current hosted catalog's original
+session resume requires idle or settled commands and permits only fixed
+reconciliation. Persisted session lifecycle is explicitly not live activity.
+A separately discovered task-status read failed because its tool was not
+registered; that failure says nothing about the task's state.
+
+**Mechanism:** the supervisor can diagnose and request finalization in some cases,
+but lacks a demonstrated way to inspect, stop and safely replace a hung executor.
+Adding another deadline cannot supply those controls.
+
+**Change:** the [recovery playbook](recovery-playbook.md) separates useful progress,
+input waits, completed-but-unconsumed results, hangs, inaccessible execution and
+unknown remote effects. It specifies a bounded recovery decision path and the
+runtime controls needed to cross a safe replacement boundary.
+
+**Status:** proposed and documented, not deployed. No cancellation grant,
+general stop primitive, replacement execution, or recovered legacy task is
+established by this investigation.
+
 ### Action-specific safety checks became broad blockers
 
 **Observed:** original-command uncertainty and missing access to one environment
