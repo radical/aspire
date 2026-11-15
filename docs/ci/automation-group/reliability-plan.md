@@ -274,7 +274,7 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   configuration and schedules are unchanged. No hosted calls were made.
 - GPT-6 Astra implementation review of `1ccb4a05e`: two deployment blockers
   and one checker defect. All three are fixed as UNAPPLIED candidates; the
-  same reviewer's re-review is pending (manager-launched).
+  same reviewer's re-review is recorded below.
 
   | Finding | Severity | Disposition |
   | --- | --- | --- |
@@ -286,5 +286,15 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   ("reproduction" → "repro", "directory" → "dir", article removals), the
   fixer parked hook now cites core 3, and the core uses "+" and
   "/awaited" in items 5 and 11. No safeguard was removed.
-- Live rollout: not started.
+- GPT-6 Astra final re-review of `9095dd85c`: APPROVED. No unresolved
+  blocker; all three findings are fixed; the normal checker run and seven
+  negative cases are verified. It is safe for the documented limited prompt
+  rollout; it is not runtime proof. The final reviewed commit is `9095dd85c`.
+- Live rollout: BLOCKED before any mutation. The manager's monitor
+  `automation_get` was aborted by the client tool, and the supervisor
+  `automation_get` returned "no active client is registered to execute this
+  client tool". No upsert, no proposal and no unknown mutation. Next: restore a
+  connected hosted client, then a fresh get, prompt-only CAS upsert and
+  readback per role. Candidate digests and rollback predecessors are in
+  [prompts/README.md](prompts/README.md#candidate-review-and-deployment-status).
 - Runtime recovery and external notification: not demonstrated.

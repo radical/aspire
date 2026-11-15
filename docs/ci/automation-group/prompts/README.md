@@ -130,6 +130,43 @@ A result may come back as a pending proposal instead of an applied change.
 Until the readback is verified, these files stay candidates. Applied prompts
 affect future runs only; existing sessions keep their frozen prompts.
 
+## Candidate review and deployment status
+
+Status: REVIEWED, UNAPPLIED. GPT-6 Astra's narrow re-review of `9095dd85c`
+passed with no unresolved blocker. It approves a limited prompt rollout within
+the documented limits; it is not runtime proof.
+
+Deployment is BLOCKED and nothing was mutated. The manager's fresh monitor
+`automation_get` was aborted by the client tool. An independent supervisor
+`automation_get` returned "no active client is registered to execute this
+client tool". No `automation_upsert` was invoked, no proposal was created and
+no mutation outcome is unknown.
+
+Next step: restore a connected hosted client. Then run a fresh `automation_get`
+per target, send a prompt-only CAS `automation_upsert` and verify the readback
+(steps above). Do not invent credentials or route writes through the shell or
+an alternative API.
+
+Candidate payloads (SHA-256 of the exact file bytes, for comparison with the
+server prompt digest after readback):
+
+| Role | Candidate | Code points | UTF-16 | Bytes | SHA-256 |
+| --- | --- | --- | --- | --- | --- |
+| Monitor | [candidate/monitor.md](candidate/monitor.md) | 11,901 | 11,901 | 11,901 | `4ceca4f6f9bccf2edb9d1c414552b5065f68f206833aa7cec4dbf836afa2aa1d` |
+| Fixer | [candidate/worker.md](candidate/worker.md) | 11,987 | 11,988 | 11,990 | `7f6e42b9a6717170e6697ae4b7d0a1776163453ffea6a2300f52c99b9baa5acd` |
+| Reviewer | [candidate/reviewer.md](candidate/reviewer.md) | 11,989 | 11,989 | 11,989 | `3f132102328a9635e7ec5640382c57bc89b6472d544919093b9d3b71f1f6cc1f` |
+| Supervisor | [candidate/supervisor.md](candidate/supervisor.md) | 11,907 | 11,907 | 11,907 | `278454213775edad5aa06490f1f872b74eb1f499b887eedfa8eb5f2648039488` |
+
+Rollback predecessors are the live snapshots in `current/`. Their generations are the
+expected `expected_generation` values unless a fresh read shows drift:
+
+| Role | Automation ID | Generation | Revision | `current/` SHA-256 |
+| --- | --- | --- | --- | --- |
+| Monitor | `5bd0ec02-21b4-4f5a-bf7a-41859226a236` | 24 | `db64382c-49dc-479a-9bb3-4b3995b230dd` | `8dec9d63d1402f1d90dcd10e900b834858715e96a48d555397e16aabfb599e35` (server digest re-verified by the manager) |
+| Fixer | `9e82784d-ed3c-4188-b081-db683e2d3635` | 22 | `f36dd33d-4c41-434d-a92a-a80571d306e5` | `9fa8c2f19691f31b8ed8b440223bbed53bda57557b9b218be02188556bd8629a` (verified at application) |
+| Reviewer | `62ff16a7-a74c-4c96-a23c-d053c3f35743` | 19 | `e6361b59-93dc-4284-9832-ae0040faccd2` | `db2c93bd59c9dcde3df90e5a4e35213eed0133e09cfba2329c273581eb621c04` (server digest re-verified by the manager) |
+| Supervisor | `cbc3a8c3-743e-4d4e-a1de-cc3501ed419b` | 17 | `bd247502-388e-4b76-95fe-917ba1e7c705` | `2dac3d62ee838282cfd131a98ad1f901b0661016491c875812df3fcd635f43d0` (local snapshot; refresh failed) |
+
 ## Earlier baseline
 
 The complete approximately 02:52 UTC baseline is retained for comparison:
