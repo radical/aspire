@@ -186,27 +186,64 @@ platform control still needs implementation or configuration.
 
 ## 7. Teach the procedure and implement the mechanics separately
 
-Create one reusable `automation-recovery` skill from this playbook, with the
-decision table, operation-specific checks and worked examples. Prompt hooks
-should stay short:
+The [`automation-recovery` skill](../../../.agents/skills/automation-recovery/SKILL.md)
+holds the canonical ten-rule recovery core, the decision table, state guidance
+and worked examples. The examples cover:
 
-- Fixer: record resumable state, classify effects, and follow the skill when
-  interrupted; keep delivery responsibility after ending a turn.
+- quiet progress and noisy non-progress;
+- queue delay and duplicate observations;
+- a lost successful effect;
+- a stopped worker with pending external effects;
+- an expired lease;
+- unavailable input or inspection;
+- reopening a parked item;
+- changed heads and concurrency;
+- independent work.
+
+The skill exists only on the fork branch, and upstream automation runs cannot
+fetch it. So each complete candidate prompt embeds the core inline, followed by
+short role hooks:
+
+- Fixer: record resumable state and classify effects. Skip only an incident
+  whose lease is held by another holder. Keep delivery responsibility after
+  ending a turn.
 - Supervisor: inspect overdue or non-progressing work, choose a supported
-  recovery action, and verify resumption; no repeated unchanged requests.
-- Reviewer: sample recoveries, mistaken hang classifications and missed stalled
-  work; privately report the mechanism and whether the remedy worked.
-- Monitor: show the actual actor, last useful result, concrete wait reason and
-  next action, not internal jargon.
+  recovery action or record one capability gap, and verify resumption. Never
+  write worker-owned claim or lifecycle fields.
+- Reviewer: sample recoveries, mistaken hang classifications and missed
+  stalled work, and keep finding IDs instead of recreating them. Publish only
+  under the required verifier lease.
+- Monitor: show the actual actor, last useful result, concrete wait reason,
+  next action, and the reopen condition for parked work.
 
-Deploy the skill where workers actually run and pin/verify its version before
-shortening live prompts around it. A file on this documentation fork branch
-is not automatically available to microsoft/aspire automation runs.
+There is deliberately no runtime decision or rendering engine. It would not be
+available to upstream sessions, it would add upkeep, and its tests would give
+false confidence about automation behavior.
+[`prompts/check_prompts.py`](prompts/check_prompts.py) is only an authoring
+check. It confirms consistent core embedding, sizes and preserved obligation
+anchors (see [prompt-obligations.md](prompt-obligations.md)). Authorized tools
+perform all I/O; do not invent shell-accessible hosted APIs or credentials.
 
-Keep classification, deadline arithmetic and display rendering in small
-behaviorally tested helpers over supplied data. Let authorized tools perform
-I/O; do not invent shell-accessible hosted APIs or credentials. Before adding
-helpers, check for existing equivalents and the repository's test conventions.
+Capability and design gaps that the prompts cannot close:
+
+- **No duplicate-effect guarantee.** Artifact CAS is not atomic with GitHub
+  side effects.
+- **Bounds are not enforced at runtime.** Prompt read and write bounds are
+  instructions, not runtime caps.
+- **No independent wake mechanism.** There is no watchdog, notification
+  route or manager wake, and a parked or human-requested item depends on
+  scheduled readers.
+- **No remote control of sessions.** There is no remote command inspection,
+  kill or cancel. Reconnect covers only reconciliation of an already-idle
+  original session.
+- **No shared backoff ledger** across roles.
+- **Mixed reviewer generations.** Sessions on an old reviewer generation may
+  still publish without the now-required verifier lease, and are noncompliant
+  until they adopt the new configuration.
+
+Adding any of these needs separate approval. This change does not add a
+wall-clock kill, terminal abandonment, or automatic claim takeover based on
+silence, an unchanged head or an expired lease.
 
 Required runtime capabilities to demonstrate or build:
 
@@ -224,7 +261,8 @@ or cancellation of another contributor's work.
 
 ## Proof and improvement
 
-Exercise the behavior before depending on it:
+The skill's worked examples describe the expected decision for each case. They
+are guidance, not evidence. Exercise the behavior before depending on it:
 
 | Case | Required result |
 | --- | --- |
@@ -239,14 +277,15 @@ Exercise the behavior before depending on it:
 | Unchanged inaccessible original result | No repeated expensive retry; incident remains visible |
 | Changed head or concurrent state update | Reconcile rather than overwrite |
 
-Pure helper tests cannot prove cancellation, revocation or original-session
+Authoring checks and helper tests cannot prove cancellation, revocation or original-session
 continuation. Verify those with an explicitly approved disposable worker:
 first a successful completion with a dropped result, then an intentional hang.
 Confirm actual process/effect state and resumed work, not merely a green tool
 response. Do not use a production incident as the first cancellation experiment.
 
-Over seven covered days, assess all group-owned work whose milestone was missed,
-including unselected cases. Report detected, investigated, actually resumed,
+Proposed seven-day observation after any candidate is applied. Track resumption,
+duplicate effects, unchanged retries and missed work. Assess all group-owned
+work whose milestone was missed, including unselected cases. Report detected, investigated, actually resumed,
 still unavailable, and false-positive interventions separately. Measure time
 since last useful result, detection-to-action, action-to-resumption, and repeated
 unchanged attempts. Acknowledgements, packets and restarted-agent counts are

@@ -60,6 +60,72 @@ These prompts have little room left. Consolidate policy and extract reusable
 procedures before appending more instructions; do not remove safety requirements
 merely to fit another rule.
 
+## Unapplied recovery candidates
+
+`candidate/` holds complete, UNAPPLIED candidate prompts for the four roles.
+They are not live configuration. `current/` remains the exact snapshot of the
+live prompts. Each candidate is rendered from `source/<role>.md` by inserting
+the single shared recovery core from
+[`.agents/skills/automation-recovery/SKILL.md`](../../../../.agents/skills/automation-recovery/SKILL.md).
+The skill exists only on this fork branch and upstream runs cannot fetch it,
+so every candidate embeds the core inline and does not refer to the skill.
+
+The candidates:
+
+- replace the contradictory recovery paragraphs with the core and short role
+  hooks;
+- add a rule for a lease held by another holder: no protected writes and no
+  waiting (the fixer skips only that incident);
+- make the reviewer's verifier lease required;
+- state that a conflicting current-head verdict is not a pass;
+- state that current pointers are not a full inventory.
+
+[prompt-obligations.md](../prompt-obligations.md) maps each preserved
+obligation to anchor text and lists the accepted compressions.
+
+Rebuild and check the candidates:
+
+```bash
+python3 docs/ci/automation-group/prompts/check_prompts.py --write  # render
+python3 docs/ci/automation-group/prompts/check_prompts.py          # compare only
+```
+
+The checker:
+
+- extracts the core;
+- verifies each rendered prompt contains it exactly once;
+- compares the rendered prompts with `candidate/`;
+- reports code points, UTF-16 units and UTF-8 bytes against the 11,400
+  authoring target and the 12,000 ceiling;
+- checks that every mapped anchor is present.
+
+It does not run, simulate or evaluate an automation. A passing check is not
+behavioral evidence.
+
+Latest checker result (exit 0, 37 obligation rows, 166 anchors, core 1,382
+characters):
+
+| Role | Code points | UTF-16 units | UTF-8 bytes |
+| --- | --- | --- | --- |
+| Monitor | 11,398 | 11,398 | 11,398 |
+| Fixer | 11,391 | 11,392 | 11,394 |
+| Reviewer | 11,359 | 11,359 | 11,359 |
+| Supervisor | 11,337 | 11,337 | 11,337 |
+
+The manager owns deployment. The steps:
+
+1. Read each target fresh with `automation_get`.
+2. Compare its prompt with `current/<role>.md`, and reconcile any drift
+   instead of overwriting it.
+3. Archive the authoritative old bytes as `baseline-<UTC>/`.
+4. Send a prompt-only `automation_upsert` with `automation_id`,
+   `repository_id` 696529789, `expected_generation` and `prompt`.
+5. Read back both the prompt and all unchanged settings.
+
+A result may come back as a pending proposal instead of an applied change.
+Until the readback is verified, these files stay candidates. Applied prompts
+affect future runs only; existing sessions keep their frozen prompts.
+
 ## Earlier baseline
 
 The complete approximately 02:52 UTC baseline is retained for comparison:
