@@ -6,6 +6,14 @@ characters, from `.agents/skills/ci-health-report/SKILL.md`) inline in the
 monitor only. Not live configuration; see [../README.md](../README.md) for
 the pending deployment and reviewer retirement sequence.
 
+Deployment checkpoint, November 15 at 19:45 UTC: the manager's fresh fixer
+`automation_get` failed with "no active client is registered to execute this
+client tool". No final v2 proposal or configuration write was attempted.
+Reconnect the hosted client before fresh reads and superseding proposals.
+The older pending fixer proposal `c81855b7-e2a2-502c-8787-2948f8a61a0c`
+does not contain these candidates and must not be used for this rollout.
+The report-edit freeze is candidate behavior, not a verified live freeze.
+
 Checker result: exit 0, 62 obligation rows / 264 anchors, 27 reviewer
 transfers (33 anchors, 4 retired); `--historical` exit 0. All three exceed
 the advisory 10,500-byte target (warning) and stay under the 12,000 hard
