@@ -14,6 +14,25 @@ The older pending fixer proposal `c81855b7-e2a2-502c-8787-2948f8a61a0c`
 does not contain these candidates and must not be used for this rollout.
 The report-edit freeze is candidate behavior, not a verified live freeze.
 
+The connection recovered at 20:04 UTC. Fresh reads found the earlier fixer
+prompt `c62d016c...` already live at generation 24; monitor was generation 25
+with its earlier prompt, and supervisor remained generation 17. The final
+reviewed prompt-only writes returned these **pending** proposals because of
+`autonomy_L3`, despite the definitions' direct configuration policy:
+
+| Role | Proposal | Expected generation |
+| --- | --- | --- |
+| Fixer | `fcf52558-1ef3-5864-b40c-363bc98c0c5d` | 24 |
+| Monitor | `70bffe51-536d-5186-b386-7478aaae30ee` | 25 |
+| Supervisor | `fc0a907d-61b3-57b2-82c6-36b7fb7bb76a` | 17 |
+
+Authoritative proposal comparisons report only `prompt` changed; all three
+complete after-values match the candidate bytes below. Apply these in
+Automation proposals; conversation approval does not bypass the platform
+gate. No final candidate is reported as applied. An attempted run-event
+subscription was rejected with `automation_subscriptions_disabled`; watching
+requires bounded ledger checks after application, not a promised event wake.
+
 GPT-6 Astra's review found a non-atomic review reservation. The corrected
 fixer reserves its shared non-expiring PR review record before either launch;
 losing contenders skip, and unknown outcomes retain the reservation. Astra
