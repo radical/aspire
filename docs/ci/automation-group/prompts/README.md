@@ -104,6 +104,37 @@ They replace the separate reviewer cron, at the owner's request:
   pending candidates will;
 - legacy `verifier/*` records stay read-only evidence.
 
+The jointly approved v2 operating plan (GPT-6 Astra planner plus Opus audit,
+two rounds) is applied to these candidates:
+
+- the fixer owns delivery continuously: a delivered review or diagnostic
+  reply is consumed in the same turn and the fixer proceeds to repair,
+  validation or the ready transition, with no monitor requeue or supervisor
+  approval; queued or accepted is not delivered;
+- narrowed passes: monitor (CI/intake deltas, changed worker outcomes,
+  highest-impact new failure, baseline continuation), fixer (owned PR deltas
+  and replies, changed/due incidents with P1 first, one due probe),
+  supervisor (new readiness handoffs, one due blocked item, daily missed-work
+  sample); owner inventories are paged only at bootstrap, on a cursor
+  gap/conflict or in one bounded daily sweep;
+- a cheap no-op path (all inbox pages plus at most 8 more metadata lookups,
+  no logs or captured histories; an incomplete scan is a continuation), no
+  mandatory self-review narrative, ceilings are not spending targets, and a
+  rate limit is a checkpoint, not a poll;
+- STALE ages use the exact `lastUsefulProgressAt`, never `updatedAt`
+  (RECOVERY CORE v3); at 3h the concrete intervention is prioritized at the
+  next admitted pass, with no exact-timer promise;
+- the #22241 report follows REPORT CONTRACT v1 from the fork-only
+  [ci-health-report skill](../../../../.agents/skills/ci-health-report/SKILL.md),
+  embedded inline in the monitor. Body edits are FROZEN (see below).
+
+Cadence is unchanged: monitor every 15 minutes, fixer at :07/:37. An hourly
+supervisor is an owner option only. Documented cron opportunities per day
+are 240 today (96+48+48+48); retiring the reviewer gives 192 and an hourly
+supervisor 168. The plan's "240→168→144" sequence does not match this
+arithmetic; 144 would need a further cadence change no one has approved.
+These are cron opportunities, not measured runs or cost.
+
 `create_session` has no model or tool parameter, so no child model is
 promised and no child tool grant is assumed; the child's read-only limits are prompt instructions, not tool
 enforcement. [prompt-obligations.md](../prompt-obligations.md) maps every
@@ -126,14 +157,18 @@ are in [candidate/README.md](candidate/README.md).
 
 ## Deployment and reviewer retirement status
 
-Status: UNAPPLIED, not yet independently reviewed. The manager submitted the
+Status: UNAPPLIED. These bytes implement the jointly approved v2 plan; they
+have not been re-reviewed after implementation. The manager submitted the
 earlier fixer candidate `c62d016c…` by `automation_upsert` and got PENDING
 proposal `c81855b7-e2a2-502c-8787-2948f8a61a0c` (reason `autonomy_L3`,
 expected generation 22, present field `prompt`); it was NOT applied. That
 candidate is SUPERSEDED by the current fixer bytes, but the server proposal
 stays pending until the owner dismisses it (no edit/cancel tool exists). The
-three current candidates are to be submitted together for owner approval, with
-no policy or autonomy change. Deployment is BLOCKED by
+manager is to submit three SUPERSEDING prompt-only proposals for the
+current candidate digests (candidate/README.md) through the owner-scoped
+API after a fresh get/CAS, preserving unrelated settings and without
+bypassing owner approval or policy. `current/` stays unchanged until an
+authoritative readback shows a new revision applied. Deployment is BLOCKED by
 hosted-tool failures: the 08:00 UTC client failure, a working read at 17:35,
 then fresh `automation_get`/list calls aborted again at 18:32. No
 `automation_upsert` or enable change was attempted for this set, and no
@@ -172,6 +207,27 @@ required before any upsert.
 | Fixer | `9e82784d-ed3c-4188-b081-db683e2d3635` | 22 | `f36dd33d-4c41-434d-a92a-a80571d306e5` | `9fa8c2f19691f31b8ed8b440223bbed53bda57557b9b218be02188556bd8629a` |
 | Reviewer | `62ff16a7-a74c-4c96-a23c-d053c3f35743` | 19 | `e6361b59-93dc-4284-9832-ae0040faccd2` | `db2c93bd59c9dcde3df90e5a4e35213eed0133e09cfba2329c273581eb621c04` |
 | Supervisor | `cbc3a8c3-743e-4d4e-a1de-cc3501ed419b` | 17 | `bd247502-388e-4b76-95fe-917ba1e7c705` | `2dac3d62ee838282cfd131a98ad1f901b0661016491c875812df3fcd635f43d0` |
+
+## Public report freeze (#22241)
+
+All #22241 body edits, including appends, are FROZEN until the owner and
+generated regions are established. Evidence (read-only, November 15): 78
+body edits, all by `radical`, so the editor cannot identify the owner. The
+last owner-format revision is 05:57:12Z (18,236 characters); the first
+drift edit is 07:58:53Z (23,459). The live body was 46,681 characters at
+18:42:12Z of the 65,536 limit, growing an estimated 2.6K/h (from two edits,
+not a forecast). The one permitted read of
+`assessment/2026-11-14/owner-report-reconciliation-complete.json` aborted
+("Client tool aborted") and was not retried, so the boundary is not
+established and no ownership is guessed. Intake and repair continue.
+
+Before any migration, the manager or the live automation (with approval)
+archives the exact current body losslessly: chunked transport only if a
+chunk tool is actually exposed, otherwise verified parts of at most 32,768
+bytes plus a manifest with part and whole-body SHA-256. No oversize put and
+no truncation. This implementation made no public edit or migration. A
+renderer is not installed; the monitor's inline contract plus full
+post-write verification is the operative path.
 
 ## Earlier baseline
 

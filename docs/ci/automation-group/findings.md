@@ -207,6 +207,29 @@ promptly when access prevents independent verification.
 
 **Status:** limitation disclosed; procedure improvement proposed, not yet measured.
 
+### The public report outgrew its owner format
+
+**Observed:** issue #22241's body grew from the owner's 05:57:12Z format
+(18,236 characters) to 46,681 characters by 18:42:12Z on November 15, of a
+65,536 limit. Generated assessments were appended rather than replaced
+from 07:58:53Z on. All 78 edits show the same editor, so the history cannot
+separate owner text from generated text.
+
+**Mechanism:** the prompts named the target but not a region boundary, a
+fixed shape or a size cap, and freshness edits followed the material-change
+path.
+
+**Change:** REPORT CONTRACT v1 (canonical in the fork-only ci-health-report
+skill, inline in the monitor candidate): a marked region that is replaced,
+never appended; a fixed table/human-attention/next shape; a 15,000-character
+region cap; a 3h freshness floor with an actual reassessment; full post-write
+verification. Edits stay FROZEN until the boundary is established; the
+existing body is archived losslessly before any migration.
+
+**Status:** documented and rendered in UNAPPLIED candidates; no public edit
+was made. The reconciliation artifact read aborted, so the boundary is
+unknown.
+
 ## Changes made and evidence still needed
 
 | Date (UTC) | Change | What was actually completed | Follow-up evidence needed |
@@ -218,6 +241,7 @@ promptly when access prevents independent verification.
 | November 15, 06:00-06:03 | Applied unattended, skill-use, branch-selection, readiness, and backport rules | Four prompt-only updates applied; complete current and baseline snapshots verified and saved | New runs use the rules, routine input waits disappear, and release fixes reuse main when appropriate |
 | November 15, recovery candidate pass | Drafted the shared recovery core and compressed candidate prompts | Documented only: skill, obligation map, authoring checker, and four UNAPPLIED candidates (now archived under `prompts/archive-4role-9095dd85c/`, never applied) | Superseded by the 3-role candidates |
 | November 15, reviewer migration | Replaced the reviewer cron with a fixer-owned read-only review child; outcomes to monitor, delivery sampling to supervisor | Documented only: three UNAPPLIED candidates under `prompts/candidate/`, transfers table, checker update. Hosted reads aborted again at 18:32 UTC, so nothing was applied or disabled | Applied readback; one actual review result consumed under the new fixer revision; only then disable the reviewer with a fresh CAS |
+| November 15, joint v2 plan | Continuous fixer delivery, narrowed passes, no-op path, core v3, report contract and freeze | Documented only: three UNAPPLIED candidates, report skill, checker placeholder and tests. No hosted mutation or public edit | Three superseding proposals approved and read back; 24h and seven-day runtime acceptance in reliability-plan.md |
 
 Rejected suggestions (NOT approved, unsafe): `NuGetAudit=false` weakens
 supply-chain checks to hide failures; a cap-exempt ready PR breaks the 3-PR

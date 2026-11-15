@@ -19,22 +19,26 @@ fetching this file. Edit the core here, re-render the prompts with
 
 The checker copies the text inside this fenced block into every prompt where
 `{{RECOVERY_CORE}}` appears. Keep it ASCII and short; every character is paid
-for in every prompt (three candidates, four archived).
+for in every prompt (three candidates). The archived 4-role set renders with
+the pinned RECOVERY CORE v2 copy in
+`docs/ci/automation-group/prompts/archive-4role-9095dd85c/recovery-core-v2.txt`.
+v3 differs from v2 only in wording plus item 1: stall ages use
+`lastUsefulProgressAt` (evidence time), never a record's `updatedAt`.
 
 <!-- recovery-core:begin -->
 ```text
-RECOVERY CORE v2 (grants nothing):
-1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time.
+RECOVERY CORE v3 (grants nothing):
+1 Progress=new evidence (phase/result/narrowed cause/verified effect), not heartbeats/renewals/logs/retries/rereads; lastUsefulProgressAt=evidence time, never updatedAt.
 2 Reuse actionId/firstBlockedAt/lastUsefulProgressAt/expectedBy+basis/nextCheckAt/attempts/effects/escalation; optional milestone/reopenCondition/blockedScope/actionStatus/operationRefs; <=3 attempts inline, rest immutable history. Never reset ages/deadlines/IDs.
-3 Due=nextCheckAt/expectedBy reached (undated legacy: now). Not due/stalled: evidenced waits before due; parked until reopenCondition verifiably changes. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
+3 Due=nextCheckAt/expectedBy reached (undated legacy: now); parked until reopenCondition verifiably changes. Missed milestone: classify queue/execution/input/result publication/consumption. Age prompts diagnosis, never kill/takeover/duplicate.
 4 Lost reply: authoritative state matching the exact intended result settles that operation's outcome only (not executor stop/claim settlement/adoption); no blind replay.
-5 Routine question: standing policy; old waiting session resolved only by authorized input route+delivery/ack evidence.
+5 Routine question: standing policy; an old waiting session is resolved only by authorized input route+delivery evidence.
 6 Two eligible unchanged checks (parked excluded): different supported action or ONE capability-gap record (operation/error/owner action).
-7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state: no costly probes/new escalation; one cheap reopen check, concise visibility, no timestamp churn.
+7 Parked=action metadata (blockedScope+observable reopenCondition), not item/work state: one cheap reopen check; no costly probes/new escalation/timestamp churn.
 8 Unknown effects (not lease contention) block overlapping mutation only; independent work continues. Keep original call/operation/args/bytes/ETags; inspect target first. CAS conflict: reconcile, never substitute ETags.
 9 Ending turn/releasing claim keeps delivery duty; expiry never proves termination.
 10 Denied/missing tools: capability evidence, not task state or workaround license.
-11 New prompts bind new runs only; old sessions keep frozen rules (adoption gap, not refusal). Absent optional fields=legacy, not false/resolved/awaited.
+11 New prompts bind new runs only; old sessions keep frozen rules. Absent optional fields=legacy, not false/resolved/awaited.
 ```
 <!-- recovery-core:end -->
 

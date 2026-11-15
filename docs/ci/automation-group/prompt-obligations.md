@@ -52,7 +52,7 @@ the obligation does not belong to that role.
 | Human merge | `merge` | `Approval/merge stay human`; `Human shiproom required` | `Humans merge` |
 | Recovery needs later scheduled/push CI | `Recovery needs scheduled/push CI containing the fix` | `merged isn't recovered (monitor owns outcomes)` | `Recovery needs later scheduled/push CI containing the fix` |
 | Budgets | `<=60 metadata reads/10 logs per pass` | `Limits <=40 metadata reads/5 logs` | `Bounds <=6 ledger pages, <=2 captured-run inspections, <=20 extra GitHub metadata reads, <=3 original-session inspections, <=1 new original resume/pass` |
-| Shared recovery core embedded inline | `RECOVERY CORE v2` | `RECOVERY CORE v2` | `RECOVERY CORE v2` |
+| Shared recovery core embedded inline | `RECOVERY CORE v3` | `RECOVERY CORE v3` | `RECOVERY CORE v3` |
 | Parked: not due/overdue and excluded from unchanged-check escalation until reopenCondition verifiably changes; ages/due kept; cheap reopen check only | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `Two eligible unparked passes`; `core-7 parking`; `parked shows reopen condition` | `parked until reopenCondition verifiably changes`; `one cheap reopen check`; `Parked own work resumes on core-3 reopen` | `parked until reopenCondition verifiably changes`; `Two eligible unchanged checks (parked excluded)`; `one cheap reopen check`; `Never reset ages/deadlines/IDs` |
 | Missed milestone: classify, never kill | `Age prompts diagnosis, never kill/takeover/duplicate` | `Age prompts diagnosis, never kill/takeover/duplicate`; `no duplicate/replacement (core 8)` | `concrete <=60min diagnostic milestone` |
 | Supervisor original-binding reconnect limits | n/a: no reconnect tool | `Reconciliation-only resume: no replay/new claim/PR` | `ONE lifetime resume per binding`; `Persist UUID/args/target BEFORE effect`; `no resume/kill/replacement`; `STALE (owner-authorized, this recovery only; no workflow/host kills)`; `completed idle awaiting legitimate input isn't hung`; `verify termination+outcomes before ONE replacement (no concurrent duplicate)`; `record missing control+UI owner action once`; `2h without useful progress`; `Stop/close/restart only via actual exposed authorized tool`; `reconnect/disable/expiry never kill` |
@@ -79,6 +79,13 @@ the obligation does not belong to that role.
 | Post-merge outcome records | `planner/outcomes/<pr>/<window>.json`; `eligible later push/scheduled runs containing the fix (attempt1), seven-day revisit, unknown exposure` | `merged isn't recovered (monitor owns outcomes)` | `monitor owns CI recovery` |
 | Compact supervision without audit-of-audit | n/a: monitor does not supervise | n/a: fixer does not supervise | `diagnose ONE due blocked item by rotating cursor`; `daily missed-work sample, independently selected from run inventory/intake`; `no full artifact census; record unknown coverage`; `No audit-of-audit; no reviewer ack required` |
 | Logical session retirement (not termination) | `{supervision,manager}/retired-sessions/<sessionId>.json lookups are observations: no stale-executor block/census; unresolved tasks/unknown scope stay` | `{supervision,manager}/retired-sessions/<sessionId>.json lookups (observations, no stale-executor block/census; unresolved tasks/unknown scope stay)` | `RETIRED (logical, not termination): own supervision/retired-sessions/<sessionId>.json`; `read manager/retired-sessions/<sessionId>.json too (exact lookups)`; `unresolvedScope, continuation owner/refs, reactivationCondition`; `no mutation vs unknown live writer`; `Not work state/claim-lease overwrite/PR closure/cap or routing release`; `no proof polling/lifetime blacklist` |
+| Narrowed per-pass duties | `PASS: (1) CI/intake deltas since cursor`; `(4) baseline continuation` | `PASS: (1) owned PR deltas`; `owned P1 first; (3) highest-impact DUE authorized probe` | `verify each new ready handoff against Ready`; `diagnose ONE due blocked item by rotating cursor` |
+| Cheap no-op pass; incomplete scan is not empty | `ALL inbox pages plus <=8 more metadata lookups`; `no logs/captured histories/inventories/narratives`; `scan is a continuation, not empty` | `ALL inbox pages plus <=8 more metadata lookups`; `no logs/captured histories/inventories/narratives`; `scan is a continuation, not empty` | `ALL inbox pages plus <=8 more metadata lookups`; `no logs/captured histories/inventories/narratives`; `scan is a continuation, not empty` |
+| Owner inventories only on bootstrap, cursor gap or daily sweep | `only at bootstrap, cursor gap/conflict or one bounded daily sweep` | `only at bootstrap, cursor gap/conflict or one bounded daily sweep`; `keep cursors+unknown coverage` | `only at bootstrap, cursor gap/conflict or one bounded daily sweep`; `keep cursors+unknown coverage` |
+| Ceilings are not spending targets; rate limit is a checkpoint | `ceilings aren't targets`; `Retry-After: checkpoint, end, no polling` | `(not targets); Retry-After: checkpoint, no polling` | `ceilings aren't targets. Retry-After: checkpoint, no polling` |
+| Fixer owns delivery continuously | n/a: monitor reads worker outcomes only | `DELIVERY is continuous`; `never record-and-end awaiting cron, monitor requeue or supervisor approval`; `Read-only is a task restriction, not isolation: validate findings, verify no unauthorized effects` | `never gate its owned work on your approval or monitor requeue`; `flag a delivered result left unconsumed` |
+| Stall age uses evidence time | `lastUsefulProgressAt=evidence time, never updatedAt` | `lastUsefulProgressAt=evidence time, never updatedAt` | `from exact lastUsefulProgressAt (core 1)`; `no timer promise`; `get_session is persisted, not live` |
+| Public report contract and freeze | `REPORT CONTRACT v1`; `never append past assessments`; `FREEZE all body edits incl. appends`; `freshness-only needs an actual reassessment and >=3h since last edit`; `no oversize put/truncation`; `owner bytes unchanged` | `Never edit #22241 body` | `only monitor writes #22241` |
 <!-- obligations:end -->
 
 ## Reviewer obligation transfers
@@ -130,7 +137,7 @@ Each candidate must stand alone. A prompt may not rely on another role's
 prompt or on fork-only documents for its own obligations. None of these
 changes adds authority.
 
-- Recovery paragraphs are replaced by the shared core v2, embedded inline in
+- Recovery paragraphs are replaced by the shared core (now v3), embedded inline in
   every candidate; role remnants stay as short hooks. The supervisor's
   default deadline (next eligible consumer pass + 15 min, 60-minute
   diagnostic milestone) is unchanged.
@@ -191,6 +198,31 @@ changes adds authority.
   consumer is removed; post-merge detail (manual/skipped green, canceled
   runs) → monitor outcomes; legacy oversize detail → "Legacy oversize needs
   separate lossless approval".
+- Joint v2 plan (core v3, report contract v1):
+  - Removed as mandatory: the end-of-pass `<=120-word selfReview`/`<=3
+    friction facts` in all roles; no-op passes skip logs, captured histories
+    and inventories.
+  - Fixer wording only: "Claimless acks are additive", "long commands within
+    margin", "Reactivate work before renewal/effects" (claim renewal and the
+    lease recheck before effects still cover these), "(even nonflaky)",
+    "main-breaking flakes first" (planner priority covers it), "fan-out
+    beyond children below" (the children paragraph bounds fan-out),
+    "acceptedItem kept", "Missing/empty/denied/conflicted differ" (core 10
+    and 11), "reassess new head/base/checks" (`recheck head (moved=stale)`
+    and the current-head gate). Build-resource detail was merged into the
+    fixes paragraph.
+  - Supervisor: per-pass `paginated work/claims/pr-slots` became the
+    inventory cadence; "Alarms grant no time…finish inspect continuations",
+    the duplicate claim-renewal clause in external waits, "Local matching
+    Windows valid", ".NET permission isn't extension/script/ARM64" (fixer
+    keeps the workflow limits), "Failed monitor publication stays overdue
+    for manager", "only original sender may wait_for_session_reply" (the
+    fixer owns its child transport) and "quarantine-only low" (planner
+    priority) were shortened or dropped. The recommendation line now also
+    forbids cadence changes, so the hourly supervisor stays an owner option.
+  - Monitor: the public-report paragraph now points to the inline REPORT
+    CONTRACT v1, which adds the region markers, fixed shape, 15,000-char
+    region cap, 3h freshness floor, freeze and lossless archive rules.
 
 Known obligation losses: the reviewer's independent audits of monitor rate
 slices and supervisor packets are retired by design (see transfers). No other

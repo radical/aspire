@@ -330,3 +330,59 @@ an observable effect/alert. Local prompt checks cannot prove these outcomes.
   manager clearing a claim because its head is idle or unchanged, and
   replacing a timed-out child. NOT approved and unsafe; see
   [findings.md](findings.md).
+- Joint v2 operating plan (GPT-6 Astra planner `37465844-7a2a-4260-9193-44cae5d96013`
+  and Opus audit `ae465c84-3649-42bd-b64b-147c3b1fda30`, approved after two
+  rounds): implemented as UNAPPLIED candidates by a fresh implementer, with
+  no new planning or audit agents. It keeps the existing mechanisms (three
+  roles, 2h/3h STALE, logical retirement, unknown-effects safety, scope
+  exclusions, human merge and shiproom, upstream draft PRs, private
+  findings, main-fix-first backports, the 3-PR cap, NuGet audit, models) and
+  changes:
+  - RECOVERY CORE v3 (1,820 characters): wording plus "lastUsefulProgressAt
+    = evidence time, never updatedAt". The archive pins v2;
+  - continuous fixer delivery, narrowed passes, the inventory cadence, the
+    no-op path, no mandatory self-review, ceilings that are not targets,
+    and rate limits as checkpoints (see
+    [prompts/README.md](prompts/README.md#unapplied-3-role-candidates));
+  - REPORT CONTRACT v1 in the fork-only
+    [ci-health-report skill](../../../.agents/skills/ci-health-report/SKILL.md),
+    rendered into the monitor by `check_prompts.py` (`{{REPORT_CONTRACT}}`,
+    monitor only). The upstream runtime cannot read the skill; shipping it
+    upstream needs a separate PR and human merge and does not block the
+    inline rollout;
+  - #22241 body edits FROZEN: the reconciliation artifact read aborted and
+    the editor history cannot identify the owner (see
+    [prompts/README.md](prompts/README.md#public-report-freeze-22241)).
+
+  Sizes and digests are in [prompts/candidate/README.md](prompts/candidate/README.md)
+  (11,885/11,930/11,895 bytes; the 10,500 advisory target is not met).
+  The checker has 62 rows / 264 anchors; `test_check_prompts.py` covers
+  placeholder and block-extraction negatives. These are authoring checks,
+  not runtime behavior.
+
+  Deployment (manager, owner-scoped APIs only): three SUPERSEDING
+  prompt-only proposals after a fresh get/CAS; pending fixer proposal
+  `c81855b7-e2a2-502c-8787-2948f8a61a0c` stays pending but superseded. The
+  reviewer is disabled only after the new duties are active and ONE actual
+  new review result has been consumed, under existing user retirement
+  authority; no old session is forcibly stopped. The hourly supervisor and
+  the upstream skill PR are separate owner options. Manager retirement
+  record `manager/retired-sessions/8203bb54-5e99-4cd7-a8f8-c716238682fd.json`
+  @ r2 (etag `sa1-47110692ac441615a160f3508eddb647589442a27390a02722fdeb0268f8d7cc`)
+  retires only the completed 07:07 turn; it releases no PR slot or routing.
+  PR #22287's unknown command blocks overlapping work only.
+
+  Runtime acceptance (not yet observed):
+  - First 24h: adoption of the new revisions; no-op read counts; duplicate
+    inventories; report edit counts (zero while frozen); delay from a
+    delivered result to its consumption, reported separately from queue
+    delay.
+  - The next two natural report edits after the freeze lifts: format, size,
+    privacy and byte-identical owner content.
+  - No reviews of changed heads, no duplicate unknowns, no repeated probes
+    of a retired session and no lost unfinished work.
+  - Seven days: due-action coverage including unselected work, validated
+    ready fixes, later affected CI, recurrence and cost if available.
+    Missing denominators are reported as unknown; the 95 earlier runs are
+    not a productivity baseline. Zero tests, a green PR or a merge is not
+    recovery.

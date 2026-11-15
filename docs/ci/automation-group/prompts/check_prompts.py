@@ -3,11 +3,14 @@
 
 What it does (deterministic, local, no network):
   * extracts the canonical recovery core from
-    .agents/skills/automation-recovery/SKILL.md;
+    .agents/skills/automation-recovery/SKILL.md and the canonical public
+    report contract from .agents/skills/ci-health-report/SKILL.md;
   * renders prompts/source/<role>.md by replacing the single
-    {{RECOVERY_CORE}} placeholder, and compares the result with the rendered
-    files in the output directory (or writes them with --write);
-  * checks that every rendered prompt contains the identical core exactly once;
+    {{RECOVERY_CORE}} placeholder (every role) and the single
+    {{REPORT_CONTRACT}} placeholder (monitor only; other roles must not
+    carry it), and compares the result with the rendered files in the output
+    directory (or writes them with --write);
+  * checks that every rendered prompt contains each of its blocks exactly once;
   * measures Unicode code points, UTF-16 code units and UTF-8 bytes against
     the authoring target and hard ceiling;
   * checks that every anchor phrase listed in the obligation preservation map
@@ -15,8 +18,9 @@ What it does (deterministic, local, no network):
     that every retired-reviewer obligation in the transfers table names a new
     owner whose prompt holds its anchors (or an explicit retired:/n/a: reason);
   * with --historical, re-renders the archived 4-role set (never rolled out)
-    and checks it is unchanged; the archived map is in git history only, so
-    anchors are not checked in that mode.
+    with its pinned RECOVERY CORE v2 copy and checks it is unchanged; the
+    archived map is in git history only, so anchors are not checked in that
+    mode.
 
 What it does NOT do: it does not run, simulate or evaluate an automation.
 Passing means the text is consistently assembled and within size limits and
@@ -36,14 +40,22 @@ MAP_COLUMNS = {"monitor": 1, "worker": 2, "supervisor": 3}
 HISTORICAL_DIR = "archive-4role-9095dd85c"
 HISTORICAL_ROLES = ("monitor", "worker", "reviewer", "supervisor")
 PLACEHOLDER = "{{RECOVERY_CORE}}"
-TARGET = 11400
+REPORT_PLACEHOLDER = "{{REPORT_CONTRACT}}"
+REPORT_ROLES = ("monitor",)
+# Advisory authoring target and hard ceiling, applied to the largest of code
+# points, UTF-16 code units and UTF-8 bytes.
+TARGET = 10500
 CEILING = 12000
 
 PROMPTS_DIR = Path(__file__).resolve().parent
 GROUP_DIR = PROMPTS_DIR.parent
 REPO_ROOT = GROUP_DIR.parents[2]
 SKILL = REPO_ROOT / ".agents" / "skills" / "automation-recovery" / "SKILL.md"
+REPORT_SKILL = REPO_ROOT / ".agents" / "skills" / "ci-health-report" / "SKILL.md"
 OBLIGATIONS = GROUP_DIR / "prompt-obligations.md"
+# The archived set was rendered with core v2; the skill now holds a newer core,
+# so the archive keeps its own exact copy and stays byte-for-byte reproducible.
+HISTORICAL_CORE = PROMPTS_DIR / HISTORICAL_DIR / "recovery-core-v2.txt"
 
 
 def read_text(path: Path) -> str:
@@ -52,21 +64,45 @@ def read_text(path: Path) -> str:
         return handle.read()
 
 
-def extract_core(skill_text: str) -> str:
-    # The skill holds the core as:
-    #   <!-- recovery-core:begin -->
+def extract_block(skill_text: str, marker: str, source: Path) -> str:
+    # Each skill holds its canonical block as:
+    #   <!-- <marker>:begin -->
     #   ```text
-    #   RECOVERY CORE v2 ...
+    #   RECOVERY CORE v3 ...      (or REPORT CONTRACT v1 ...)
     #   ```
-    #   <!-- recovery-core:end -->
-    match = re.search(
-        r"<!-- recovery-core:begin -->\n```text\n(.*?)\n```\n<!-- recovery-core:end -->",
-        skill_text,
-        re.DOTALL,
-    )
-    if match is None:
-        raise SystemExit(f"error: recovery core markers not found in {SKILL}")
-    return match.group(1)
+    #   <!-- <marker>:end -->
+    # Exactly one block is allowed so the prompts cannot silently pick one of
+    # two diverging copies.
+    pattern = rf"<!-- {re.escape(marker)}:begin -->\n```text\n(.*?)\n```\n<!-- {re.escape(marker)}:end -->"
+    matches = re.findall(pattern, skill_text, re.DOTALL)
+    if len(matches) != 1:
+        raise SystemExit(f"error: expected exactly one {marker} block in {source}, found {len(matches)}")
+    return matches[0]
+
+
+def extract_core(skill_text: str) -> str:
+    return extract_block(skill_text, "recovery-core", SKILL)
+
+
+def render_role(role: str, source: str, blocks: dict[str, str], block_roles: dict[str, tuple[str, ...]]) -> tuple[str, list[str]]:
+    # Replace each placeholder the role must carry; a role outside a block's
+    # roles must not carry that placeholder (for example the report contract
+    # belongs only to the monitor, which alone edits #22241).
+    failures: list[str] = []
+    rendered = source
+    for placeholder, text in blocks.items():
+        count = source.count(placeholder)
+        if role in block_roles[placeholder]:
+            if count != 1:
+                failures.append(f"{role}: source must contain {placeholder} exactly once")
+                continue
+            rendered = rendered.replace(placeholder, text)
+        elif count:
+            failures.append(f"{role}: source must not contain {placeholder}")
+    for placeholder, text in blocks.items():
+        if role in block_roles[placeholder] and not failures and rendered.count(text) != 1:
+            failures.append(f"{role}: rendered prompt must contain the {placeholder} block exactly once")
+    return rendered, failures
 
 
 def parse_obligations(map_text: str) -> list[tuple[str, dict[str, list[str]]]]:
@@ -168,7 +204,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    core = extract_core(read_text(SKILL))
+    if args.historical:
+        core = read_text(HISTORICAL_CORE).removesuffix("\n")
+    else:
+        core = extract_core(read_text(SKILL))
+    blocks = {PLACEHOLDER: core}
+    block_roles: dict[str, tuple[str, ...]] = {PLACEHOLDER: HISTORICAL_ROLES}
     if args.historical:
         roles = HISTORICAL_ROLES
         source_dir = PROMPTS_DIR / HISTORICAL_DIR / "source"
@@ -182,18 +223,21 @@ def main() -> int:
         map_text = read_text(OBLIGATIONS)
         obligations = parse_obligations(map_text)
         transfers = parse_transfers(map_text)
+        blocks[REPORT_PLACEHOLDER] = extract_block(read_text(REPORT_SKILL), "report-contract", REPORT_SKILL)
+        block_roles[REPORT_PLACEHOLDER] = REPORT_ROLES
     rendered_by_role: dict[str, str] = {}
     failures: list[str] = []
     warnings: list[str] = []
 
-    print(f"core: {sizes(core)[0]} chars, {sizes(core)[2]} bytes")
+    for placeholder, text in blocks.items():
+        print(f"{placeholder}: {sizes(text)[0]} chars, {sizes(text)[2]} bytes")
     print(f"{'role':<11}{'codepoints':>11}{'utf16':>8}{'bytes':>8}  status")
     for role in roles:
         source = read_text(source_dir / f"{role}.md")
-        if source.count(PLACEHOLDER) != 1:
-            failures.append(f"{role}: source must contain {PLACEHOLDER} exactly once")
+        rendered, role_failures = render_role(role, source, blocks, block_roles)
+        if role_failures:
+            failures.extend(role_failures)
             continue
-        rendered = source.replace(PLACEHOLDER, core)
         rendered_by_role[role] = rendered
         target_path = out_dir / f"{role}.md"
         if args.write:
@@ -202,9 +246,6 @@ def main() -> int:
                 handle.write(rendered)
         elif not target_path.exists() or read_text(target_path) != rendered:
             failures.append(f"{role}: {target_path.relative_to(REPO_ROOT)} differs from rendered source")
-
-        if rendered.count(core) != 1:
-            failures.append(f"{role}: rendered prompt must contain the recovery core exactly once")
 
         measured = sizes(rendered)
         largest = max(measured)

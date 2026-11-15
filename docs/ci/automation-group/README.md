@@ -15,6 +15,7 @@ belong in the runtime work ledger, not these notes.
 | [Complete prompt snapshots](prompts/README.md) | Applied prompts, earlier baseline, exact revisions, proposal receipts, and adoption limits |
 | [Recovery playbook](recovery-playbook.md) | Proposed progress checks, interrupted-command recovery, stuck-agent handling, and required runtime capabilities |
 | [Automation recovery skill](../../../.agents/skills/automation-recovery/SKILL.md) | Canonical recovery core, decision table, and worked examples (fork-only; embedded inline in prompts) |
+| [CI health report skill](../../../.agents/skills/ci-health-report/SKILL.md) | Canonical #22241 report contract, freeze and lossless-archive rules (fork-only; the monitor embeds the contract inline) |
 | [Prompt obligation map](prompt-obligations.md) | Where each live-prompt obligation survives in the unapplied candidates, and accepted compressions |
 
 ## Current position

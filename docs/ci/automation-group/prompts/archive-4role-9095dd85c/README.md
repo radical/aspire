@@ -15,6 +15,8 @@ the separate reviewer cron. Do not deploy anything in this directory.
   reviewer `3f132102328a9635e7ec5640382c57bc89b6472d544919093b9d3b71f1f6cc1f`,
   supervisor `278454213775edad5aa06490f1f872b74eb1f499b887eedfa8eb5f2648039488`.
 - `source/` holds the templates that rendered them with RECOVERY CORE v2.
+  `recovery-core-v2.txt` pins that exact core, so the skill can move to v3
+  without changing this archive.
 - `python3 ../check_prompts.py --historical` re-renders and compares this set
   without the current obligation map. The 4-role map is in git history at
   `1584d3607:docs/ci/automation-group/prompt-obligations.md`.
