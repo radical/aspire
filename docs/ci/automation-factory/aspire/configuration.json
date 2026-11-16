@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Prompts applied at generation 3; owner applied enablement proposals at generation 4 on 2026-11-16. Baseline is retained for comparison; runtime validation pending.",
+  "status": "Prompts applied at generation 3; enabled at generation 4 on 2026-11-16. Scout source includes a later pending prompt correction, not yet deployed. Baseline retained; runtime validation incomplete.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -19,6 +19,7 @@
         "enabled": true,
         "activatedAt": "2026-11-16T05:56:30.914294175Z"
       },
+      "pendingPromptProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "tools": [

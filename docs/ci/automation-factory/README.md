@@ -117,6 +117,25 @@ inspection and captured execution evidence for follow-up checks. Runtime
 claims, routing, concurrency, timeout and crash recovery remain unvalidated.
 Concurrency recommendations have not been applied as saved owner settings.
 
+## Initial execution observations
+
+The 06:00 UTC scout run started and wrote its start record and discovery cursor.
+It used `claims/scout` rather than the authored `scout/lease` singleton name.
+The source correction now specifies the exact name and checks the legacy alias
+and prior run records before admitting more intake. Prompt-only proposal
+`0ee41569-fc15-51bc-9378-8c3aa565cc8d` is pending owner application under L3;
+the current scout source therefore differs from the enabled generation-4 prompt.
+This correction does not change an already admitted execution or release its lease.
+Messaging that execution from this manager was rejected as outside its coordination
+grant. No lease was taken over or removed.
+
+The 06:05 UTC worker run finished its initial pass, reporting no eligible queued
+issues or CIF PRs and no GitHub mutations; its durable end record exists.
+This is not evidence that fix, handoff or recovery paths work. The supervisor's
+first cron tick is 06:40 UTC. GitHub notifications for CIF-labelled work were
+successfully subscribed as a limited observation path; they do not detect runs
+that fail before publishing GitHub effects.
+
 CI Insights, Azure DevOps and retired ci-health claim/run access are not proven.
 Retired work stays deferred if old writers cannot be ruled out; do not broaden
 credentials or touch `fbd`. The old report issue is explicitly excluded.
