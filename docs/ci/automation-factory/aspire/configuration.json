@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Routing redesign (scout detect/screen/correlate/route; producer-issue adoption; worker dismissed outcome) applied and read back at scout15/worker9; supervisor routing-check proposal 124df7a6-0af5-5802-b4de-87f3349e9a4f pending owner approval (live supervisor10 still has previous prompt).",
+  "status": "Routing redesign (scout detect/screen/correlate/route; producer-issue adoption; worker dismissed outcome; supervisor routing checks) applied and read back at scout15/worker9/supervisor11. Existing runs retain their pinned revisions.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -83,10 +83,10 @@
       },
       "prompt": "prompts/supervisor.md",
       "deployment": {
-        "generation": 10,
-        "revisionId": "8e80561b-a77e-4c03-869e-cf0f7a29dc4b",
+        "generation": 11,
+        "revisionId": "5b433de9-f00b-428a-abd6-bee119c3d07f",
         "enabled": true,
-        "activatedAt": "2026-11-16T17:06:11.369672169Z",
+        "activatedAt": "2026-11-16T19:46:58.743884781Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
@@ -95,6 +95,7 @@
       "appliedAuditProposal": "7e09274e-7b83-57ce-badc-13f850d5e2b4",
       "appliedLifecycleProposal": "1999f002-f581-5432-98af-4bf9c2d66e32",
       "appliedPaginationProposal": "fdc52a3d-d2ab-51f4-a790-4e460e0e6178",
+      "appliedRoutingProposal": "124df7a6-0af5-5802-b4de-87f3349e9a4f",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
       "requiredTools": [
