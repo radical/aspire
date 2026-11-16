@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Candidate prompts; observed generation-2 configuration below is not a deployment request",
+  "status": "Prompts applied at generation 3; owner applied enablement proposals at generation 4 on 2026-11-16. Baseline is retained for comparison; runtime validation pending.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -13,6 +13,12 @@
         "enabled": false
       },
       "prompt": "prompts/scout.md",
+      "deployment": {
+        "generation": 4,
+        "revisionId": "235c672d-1f57-4f50-a28e-b9fb0929aa61",
+        "enabled": true,
+        "activatedAt": "2026-11-16T05:56:30.914294175Z"
+      },
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "tools": [
@@ -30,6 +36,12 @@
         "enabled": false
       },
       "prompt": "prompts/worker.md",
+      "deployment": {
+        "generation": 4,
+        "revisionId": "b9241cff-b249-4792-85fb-dbbc47839f51",
+        "enabled": true,
+        "activatedAt": "2026-11-16T05:56:28.783867276Z"
+      },
       "responsibilityTargets": ["issue", "pull_request"],
       "triggers": [
         {"event": "cron", "cron": "5,25,45 * * * *"},
@@ -56,6 +68,12 @@
         "enabled": false
       },
       "prompt": "prompts/supervisor.md",
+      "deployment": {
+        "generation": 4,
+        "revisionId": "aaec3385-ff3e-4fb1-9c63-2cbe55da0749",
+        "enabled": true,
+        "activatedAt": "2026-11-16T05:56:25.309358108Z"
+      },
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
       "tools": [

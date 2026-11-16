@@ -1,9 +1,9 @@
 # Aspire CI automation group
 
-Candidate prompts for the existing CIF automations in `microsoft/aspire`.
+Deployed prompt sources for the existing CIF automations in `microsoft/aspire`.
 Published on branch `cif/aspire-ci-group` in the user's `radical/aspire` fork
 after `radical/self-workflow` proved inaccessible. This is a prompt-source bundle,
-not an Aspire product/runtime change and not a deployment. The automation target
+not an Aspire product/runtime change or an executable deployment tool. The automation target
 remains `microsoft/aspire`; the fork's repository identity must not be substituted
 in automation configuration.
 
@@ -41,7 +41,8 @@ coverage is unknown, not success.
 `docs/ci/automation-factory/aspire/common.md` plus each lane fragment produces a
 standalone file under `docs/ci/automation-factory/aspire/prompts/`.
 `configuration.json` records observed disabled generation-2
-IDs, immutable revisions, triggers and tool selections; its concurrency values
+IDs, immutable revisions, triggers and tool selections, plus the observed deployment;
+its concurrency values
 are recommendations, not saved settings. It is not an executable API payload.
 Runtime model choices are deliberately unspecified.
 
@@ -54,7 +55,10 @@ git diff --check
 
 The generator checks the 12,000-character prompt limit, 32,768-byte inline limit
 and exact generated output consistency. It never deploys, enables or runs an
-automation. Production still has the older generation-2 prompts.
+automation. The reviewed prompts were applied with generation compare-and-swap at
+generation 3, preserving tools, triggers and responsibility targets. The owner
+applied the three enablement proposals, producing enabled generation-4 revisions
+on 2026-11-16 at 05:56 UTC. The original disabled baseline is retained separately.
 
 Local validation before publishing: both generator commands passed; the unittest command passed
 5 tests (current output, stale-output repair, exact character boundary, overflow
@@ -101,13 +105,17 @@ The following are design scenarios to exercise, not executed production results:
 | Current state reaches its size budget | Stop affected admissions; preserve lossless history |
 | Source/provider coverage is incomplete | Pending denominator and explicit coverage gap |
 
-Before activation: finish candidate review and publish source; read current
-automation generations, apply approved prompt-only updates by compare-and-swap
-and verify authoritative readback. Preserve unrelated settings. Separately set
-owner concurrency, confirm artifact claims/responsibility routing and dispatch
-behavior, and authorize a bounded test run. Validate controlled conflict, timeout
-and crash recovery before broad operation. No automatic enablement or live CI
-mutation is authorized by this bundle.
+The owner authorized applying, reviewing, enabling and observing these automations,
+and correcting issues found within this scope. Prompt application and enablement
+were confirmed by authoritative readback. No manual run was launched. Initial
+cron ticks after enablement are scout 06:00 UTC, worker 06:05 UTC and supervisor
+06:40 UTC. These due times are not proof of dispatch or completion.
+
+Run-event subscription was rejected with `automation_subscriptions_disabled`;
+this manager cannot rely on automatic run notifications. Use persisted run
+inspection and captured execution evidence for follow-up checks. Runtime
+claims, routing, concurrency, timeout and crash recovery remain unvalidated.
+Concurrency recommendations have not been applied as saved owner settings.
 
 CI Insights, Azure DevOps and retired ci-health claim/run access are not proven.
 Retired work stays deferred if old writers cannot be ruled out; do not broaden
