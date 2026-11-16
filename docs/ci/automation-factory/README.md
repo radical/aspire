@@ -163,6 +163,17 @@ This differs from artifact content paging (`nextOffset`). Generated prompts
 contain the correction; saved deployments below remain unchanged until the
 owner applies prompt-only proposals. Later execution must establish adoption.
 
+| Lane | Pending proposal | Expected generation |
+|---|---|---|
+| Scout | `eabae92f-d5e4-5156-8835-a84383f83fdd` | 11 |
+| Worker | `d5732dec-fac1-5bed-872a-51abe8c79a40` | 7 |
+| Supervisor | `fdc52a3d-d2ab-51f4-a790-4e460e0e6178` | 9 |
+
+Authoritative comparisons report only `prompt` changed. Each complete prompt
+after-value's digest matches its published generated file. All three proposals
+are pending (`autonomy_L3`), not applied; saved settings remain the baseline for
+application. Prompts are 11,984 / 11,491 / 11,994 characters respectively.
+
 Every prompt ends with a self-audit: at most three reusable guidance, process or
 tooling gaps, with impact, source and suggestion. Item-specific debugging and
 routine discovery do not belong there. Audits are stored in end records and

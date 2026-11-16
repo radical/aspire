@@ -26,6 +26,7 @@
       "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "appliedAuditProposal": "8bfd72f5-05f4-5c48-8cd4-5cdc435bc472",
       "appliedReceiptProposal": "d75d15de-d04d-535c-bec8-9a5d5fdba287",
+      "pendingPaginationProposal": "eabae92f-d5e4-5156-8835-a84383f83fdd",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "requiredTools": [
@@ -54,6 +55,7 @@
         "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "merge_pull_request", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "fetch_url"]
       },
       "appliedAuditProposal": "1d8a7bd1-dd61-5767-80b0-07bd30e94a8a",
+      "pendingPaginationProposal": "d5732dec-fac1-5bed-872a-51abe8c79a40",
       "responsibilityTargets": ["issue", "pull_request"],
       "triggers": [
         {"event": "cron", "cron": "5,25,45 * * * *"},
@@ -92,6 +94,7 @@
       },
       "appliedAuditProposal": "7e09274e-7b83-57ce-badc-13f850d5e2b4",
       "appliedLifecycleProposal": "1999f002-f581-5432-98af-4bf9c2d66e32",
+      "pendingPaginationProposal": "fdc52a3d-d2ab-51f4-a790-4e460e0e6178",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
       "requiredTools": [
