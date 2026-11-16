@@ -146,6 +146,23 @@ both control execution.
 
 ## Reusable process monitoring
 
+### Artifact-list pagination correction
+
+Worker run `9fc167729f6482492cf64d55260aa20041010e864eb80631f112805ee8efd997`
+(11:25 UTC, revision `533c3262-6b4f-4dd1-b1f5-f377258ee851`) made one
+`artifact_list` call. Its complete captured response contained a nonempty
+`cursor`, but its end-log write claimed "Artifacts (tag cif, no cursor): no
+claims/ or handoff/". The captured turn lists no continuation call.
+This proves an incomplete scan and inaccurate completeness claim, not an actual
+missed claim, handoff or queue item.
+
+The shared correction requires following `artifact_list`'s returned `cursor`
+until absent before claiming absence. A bounded partial scan saves the cursor
+and reports incomplete evidence; known records should use exact-name reads.
+This differs from artifact content paging (`nextOffset`). Generated prompts
+contain the correction; saved deployments below remain unchanged until the
+owner applies prompt-only proposals. Later execution must establish adoption.
+
 Every prompt ends with a self-audit: at most three reusable guidance, process or
 tooling gaps, with impact, source and suggestion. Item-specific debugging and
 routine discovery do not belong there. Audits are stored in end records and

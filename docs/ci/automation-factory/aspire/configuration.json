@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "All lanes enabled. Supervisor lifecycle follow-up applied at generation 9; scout receipt correction applied at generation 11. Runtime recovery is blocked on owner inspection of a restricted retained reply; no verified handoff or replacement worker.",
+  "status": "All lanes enabled at observed scout11/worker7/supervisor9. Generated sources add artifact-list cursor exhaustion; deployment awaits prompt-only approval. Scout restricted-reply recovery and two worker command-delivery failures require owner/platform reconciliation; no replay or replacement.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
