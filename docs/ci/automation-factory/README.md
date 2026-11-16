@@ -240,3 +240,23 @@ which does not reconcile the earlier run. Its final captured tools are reads,
 not a completion handoff; why it stopped remains unknown. No original-session
 recovery or session closure is claimed. The next saved supervisor due time is
 07:40 UTC, an opportunity for recovery inspection, not proof it will succeed.
+
+## Recovery follow-up at 08:49 UTC
+
+The supervisor admitted one reconciliation-only resume of original scout
+session `05983453-fc32-45e0-b166-ffb749571578` using operation
+`07ffb82e-0903-4a9d-846e-aa7df63f23a8`. The controller reported delivery
+at 07:46, then `resumeStatus=reply_available` at 08:40:45. The latter result
+also returned `recovery_reply_restricted`: cross-session reply text was not
+exposed. The supervisor reports no new original end/handoff artifact.
+This is not verified recovery, permission to retry the resume, or proof of a
+session-release fix. Do not seek the restricted reply through another route.
+The owner recovery ask is tracked in
+https://github.com/microsoft/aspire/issues/22302#issuecomment-6911747022.
+
+The owner applied the scout receipt proposal at 08:48:07. Enabled generation 11,
+revision `85bfed82-204c-4058-8229-5affe494fb88`, retains concurrency 1 and
+the existing tools/triggers. The proposal's complete after-value matches the
+published 11,907-byte prompt; application is not evidence that the historical
+receipts have already been corrected. Previously admitted executions do not
+gain the new instructions.

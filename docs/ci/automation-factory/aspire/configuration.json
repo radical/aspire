@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "All lanes enabled. Supervisor lifecycle follow-up applied at generation 9; scout receipt correction awaits owner application. Prompt-only proposals exactly match published sources at 1ac56ca0f. Baseline retained; runtime recovery remains unvalidated.",
+  "status": "All lanes enabled. Supervisor lifecycle follow-up applied at generation 9; scout receipt correction applied at generation 11. Runtime recovery is blocked on owner inspection of a restricted retained reply; no verified handoff or replacement worker.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -14,10 +14,10 @@
       },
       "prompt": "prompts/scout.md",
       "deployment": {
-        "generation": 10,
-        "revisionId": "fe1f4665-acb8-4708-a5bc-43cd3f02b5c9",
+        "generation": 11,
+        "revisionId": "85bfed82-204c-4058-8229-5affe494fb88",
         "enabled": true,
-        "activatedAt": "2026-11-16T07:04:39.896378354Z",
+        "activatedAt": "2026-11-16T08:48:07.645363928Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
@@ -25,7 +25,7 @@
       },
       "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "appliedAuditProposal": "8bfd72f5-05f4-5c48-8cd4-5cdc435bc472",
-      "pendingReceiptProposal": "d75d15de-d04d-535c-bec8-9a5d5fdba287",
+      "appliedReceiptProposal": "d75d15de-d04d-535c-bec8-9a5d5fdba287",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "requiredTools": [
