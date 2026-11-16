@@ -38,12 +38,13 @@ coverage is unknown, not success.
 
 ## Sources and generation
 
-`docs/ci/automation-factory/aspire/common.md` plus each lane fragment produces a
+`docs/ci/automation-factory/aspire/common.md` plus each lane fragment and the final
+`self-audit.md` suffix produces a
 standalone file under `docs/ci/automation-factory/aspire/prompts/`.
 `configuration.json` records observed disabled generation-2
-IDs, immutable revisions, triggers and tool selections, plus the observed deployment;
-its concurrency values
-are recommendations, not saved settings. It is not an executable API payload.
+IDs and immutable revisions, plus observed deployments and required tools.
+Concurrency recommendations are separate from observed owner settings.
+It is not an executable API payload.
 Runtime model choices are deliberately unspecified.
 
 ```bash
@@ -61,7 +62,7 @@ applied the three enablement proposals, producing enabled generation-4 revisions
 on 2026-11-16 at 05:56 UTC. The original disabled baseline is retained separately.
 
 Local validation before publishing: both generator commands passed; the unittest command passed
-5 tests (current output, stale-output repair, exact character boundary, overflow
+6 tests (current output, stale-output repair, final self-audit propagation, exact character boundary, overflow
 without partial writes, multibyte byte overflow); `git diff --check` passed.
 These validate authoring mechanics, not automation behavior.
 
@@ -115,16 +116,17 @@ Run-event subscription was rejected with `automation_subscriptions_disabled`;
 this manager cannot rely on automatic run notifications. Use persisted run
 inspection and captured execution evidence for follow-up checks. Runtime
 claims, routing, concurrency, timeout and crash recovery remain unvalidated.
-Concurrency recommendations have not been applied as saved owner settings.
+The owner set worker `maxConcurrentRuns` to 5; this differs from the original
+recommendation of 3 and must be preserved. It does not change the prompt's
+three-active-investigation admission rule.
 
 ## Initial execution observations
 
 The 06:00 UTC scout run started and wrote its start record and discovery cursor.
 It used `claims/scout` rather than the authored `scout/lease` singleton name.
-The source correction now specifies the exact name and checks the legacy alias
-and prior run records before admitting more intake. Prompt-only proposal
-`0ee41569-fc15-51bc-9378-8c3aa565cc8d` is pending owner application under L3;
-the current scout source therefore differs from the enabled generation-4 prompt.
+The correction specifies the exact name and checks the legacy alias
+and prior run records before admitting more intake. The owner applied proposal
+`0ee41569-fc15-51bc-9378-8c3aa565cc8d` at generation 5.
 This correction does not change an already admitted execution or release its lease.
 Messaging that execution from this manager was rejected as outside its coordination
 grant. No lease was taken over or removed.
@@ -141,3 +143,34 @@ Retired work stays deferred if old writers cannot be ruled out; do not broaden
 credentials or touch `fbd`. The old report issue is explicitly excluded.
 The independent deployment execution gate and each definition's enabled state
 both control execution.
+
+## Reusable process monitoring
+
+Every prompt ends with a self-audit: at most three reusable guidance, process or
+tooling gaps, with impact, source and suggestion. Item-specific debugging and
+routine discovery do not belong there. Audits are stored in end records and
+reported as a final response section; an empty audit is valid.
+
+The supervisor collects these audits and samples captured execution evidence
+across all three lanes: at most two runs and ten selected tool records per turn.
+It rotates with saved continuation and reports incomplete evidence explicitly.
+This is part of monitoring, not another automation. Findings recommend changes;
+they never authorize configuration edits, permission changes or merges.
+`automation_run_inspect` is in the default tool selection, retained by `tools:null`.
+The owner's added tools and direct-update policies are preserved.
+
+Bounded initial samples found:
+
+| Evidence | Finding and response |
+|---|---|
+| Scout run `95fb8f26f1860bf890986a0969fd818d3b2cdb811638f60f1be4d33cdb99b9e9`, tool `call_Djfr4vR51vNwNu7r3YZoybby` | GraphQL `search` was nested under `Repository` and rejected. Scout guidance now specifies root-level search or paginated direct REST listing, excluding PR entries. |
+| Worker run `6ddb796e56977fb879cb48aee01351955da099510b29026cdee80440290fd27b`, tool `call_3d91U3ZXQ5f59eMfLqSSg5Gz` | A different GitHub automation service returned `automations_enabled:false`. Prompts identify this group's owner-scoped tools and prohibit redundant activation-gate discovery. |
+| Worker run `a8cb136528ecda7f93b57f2da57540f854eceb24a65ff8418056d1851b4cf347`, tool `call_CD24D7maOxR9bNAyY108qVoI` | `github-read` issuance still returned `credential_not_bound`. Tool selection alone does not bind a credential. Authorized existing reads remain the explicit fallback; no repeated failed issuance within one run. Owner binding remains unresolved. |
+
+These are selected records, not an exhaustive historical audit. The later
+worker sample no longer included the unrelated settings lookup, but that does
+not validate the updated prompts. No recurring script with enough demonstrated
+reuse was established, so no speculative helper was extracted.
+Run-event subscription was retried after the tool changes and still returned
+`automation_subscriptions_disabled`; this is a server feature gate, not a missing
+automation tool. Scheduled supervisor monitoring remains the fallback.

@@ -37,10 +37,20 @@ class BundleTests(unittest.TestCase):
         self.run_builder()
         self.assertEqual(expected, destination.read_bytes())
 
+    def test_self_audit_is_appended_to_every_prompt(self):
+        audit = "# Self-audit\nReusable guidance gap.\n"
+        (self.builder.ROOT / "self-audit.md").write_text(audit, encoding="utf-8")
+        self.run_builder()
+        for lane in self.builder.LANES:
+            text = (self.builder.ROOT / "prompts" / f"{lane}.md").read_text(encoding="utf-8")
+            self.assertTrue(text.endswith("\n\n" + audit))
+        self.run_builder(check=True)
+
     def test_exact_character_limit_is_allowed(self):
         self.set_common("")
+        (self.builder.ROOT / "self-audit.md").write_text("", encoding="utf-8")
         for lane in self.builder.LANES:
-            (self.builder.ROOT / f"{lane}.md").write_text("x" * 11998, encoding="utf-8")
+            (self.builder.ROOT / f"{lane}.md").write_text("x" * 11996, encoding="utf-8")
         self.run_builder()
         self.run_builder(check=True)
 

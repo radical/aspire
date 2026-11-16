@@ -17,12 +17,13 @@ def build(check: bool) -> None:
         raise ValueError("Configuration must describe exactly the three CIF lanes")
 
     common = (ROOT / "common.md").read_text(encoding="utf-8").rstrip("\n")
+    audit = (ROOT / "self-audit.md").read_text(encoding="utf-8")
     outputs = {}
     for lane in LANES:
         settings = config["automations"][lane]
         if settings["baseline"]["enabled"] is not False:
             raise ValueError(f"{lane}: baseline must explicitly remain disabled")
-        text = common + "\n\n" + (ROOT / f"{lane}.md").read_text(encoding="utf-8")
+        text = common + "\n\n" + (ROOT / f"{lane}.md").read_text(encoding="utf-8").rstrip("\n") + "\n\n" + audit
         size = len(text.encode("utf-8"))
         if len(text) > MAX_CHARACTERS or size > MAX_INLINE_BYTES:
             raise ValueError(f"{lane}: ceiling exceeded: {len(text)} characters, {size} bytes")

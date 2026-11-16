@@ -1,0 +1,2 @@
+# Self-audit
+Record selfAudit in end log (<=3 reusable gaps); end response with Self-audit. Include problems, guidance sought, ambiguities: gap/impact/clarification+source/suggestion/lane/run/revision. Exclude item-specific debugging, routine lookups, secrets; no audit-only investigation. None -> []/"None observed"; never invent. Respect log limits; link overflow. Supervisor: collect new end-log audits with fair continuation; group recurring gaps under Self-audit in status report, link evidence/recommendations for @radical. No authority to change goals/prompts/grants.

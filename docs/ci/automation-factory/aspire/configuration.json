@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Prompts applied at generation 3; enabled at generation 4 on 2026-11-16. Scout source includes a later pending prompt correction, not yet deployed. Baseline retained; runtime validation incomplete.",
+  "status": "Enabled; owner applied scout lease correction and changed all lanes to direct policy with additional tools. Self-audit/process-monitoring source update prepared for deployment. Baseline retained; runtime validation incomplete.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -14,15 +14,18 @@
       },
       "prompt": "prompts/scout.md",
       "deployment": {
-        "generation": 4,
-        "revisionId": "235c672d-1f57-4f50-a28e-b9fb0929aa61",
+        "generation": 8,
+        "revisionId": "3d319a1e-a96b-4fb2-885c-188bd3243000",
         "enabled": true,
-        "activatedAt": "2026-11-16T05:56:30.914294175Z"
+        "activatedAt": "2026-11-16T06:33:08.317309661Z",
+        "configUpdatePolicy": "direct",
+        "tools": null,
+        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "fetch_url", "credentials_issue"]
       },
-      "pendingPromptProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
+      "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
-      "tools": [
+      "requiredTools": [
         "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
         "credentials_issue", "report_agent_output", "dispatch_automation_run"
       ],
@@ -38,10 +41,14 @@
       },
       "prompt": "prompts/worker.md",
       "deployment": {
-        "generation": 4,
-        "revisionId": "b9241cff-b249-4792-85fb-dbbc47839f51",
+        "generation": 6,
+        "revisionId": "0a0f66c6-3988-484c-9d5e-3e1089bfbe76",
         "enabled": true,
-        "activatedAt": "2026-11-16T05:56:28.783867276Z"
+        "activatedAt": "2026-11-16T06:32:04.606890569Z",
+        "configUpdatePolicy": "direct",
+        "maxConcurrentRuns": 5,
+        "tools": null,
+        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "merge_pull_request", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "fetch_url"]
       },
       "responsibilityTargets": ["issue", "pull_request"],
       "triggers": [
@@ -54,7 +61,7 @@
         {"event": "pull_request.closed", "merged": true, "itemLabels": [["cif-pr"]]},
         {"event": "pull_request.closed", "merged": false, "itemLabels": [["cif-pr"]]}
       ],
-      "tools": [
+      "requiredTools": [
         "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
         "credentials_issue", "report_agent_output", "resolve_github_image"
       ],
@@ -70,16 +77,19 @@
       },
       "prompt": "prompts/supervisor.md",
       "deployment": {
-        "generation": 4,
-        "revisionId": "aaec3385-ff3e-4fb1-9c63-2cbe55da0749",
+        "generation": 5,
+        "revisionId": "44f447f9-a027-490a-bf16-2ba3b347838d",
         "enabled": true,
-        "activatedAt": "2026-11-16T05:56:25.309358108Z"
+        "activatedAt": "2026-11-16T06:30:36.3926717Z",
+        "configUpdatePolicy": "direct",
+        "tools": null,
+        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "fetch_url", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue"]
       },
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
-      "tools": [
+      "requiredTools": [
         "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
-        "automation_runs_list", "automation_run_get", "credentials_issue",
+        "automation_runs_list", "automation_run_get", "automation_run_inspect", "credentials_issue",
         "report_agent_output", "dispatch_automation_run"
       ],
       "ownerConcurrencyRecommendation": 1
