@@ -1,0 +1,69 @@
+{
+  "repository": "microsoft/aspire",
+  "repositoryId": "696529789",
+  "tag": "cif",
+  "status": "Candidate prompts; observed generation-2 configuration below is not a deployment request",
+  "automations": {
+    "scout": {
+      "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
+      "name": "CIF scout",
+      "baseline": {
+        "generation": 2,
+        "revisionId": "eeb1c247-e07d-4d7d-b82a-6cd2fad88228",
+        "enabled": false
+      },
+      "prompt": "prompts/scout.md",
+      "responsibilityTargets": ["repository"],
+      "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
+      "tools": [
+        "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
+        "credentials_issue", "report_agent_output", "dispatch_automation_run"
+      ],
+      "ownerConcurrencyRecommendation": 1
+    },
+    "worker": {
+      "id": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
+      "name": "CIF worker",
+      "baseline": {
+        "generation": 2,
+        "revisionId": "dd449b7a-8edd-45e8-b234-0f7536cd30d9",
+        "enabled": false
+      },
+      "prompt": "prompts/worker.md",
+      "responsibilityTargets": ["issue", "pull_request"],
+      "triggers": [
+        {"event": "cron", "cron": "5,25,45 * * * *"},
+        {"event": "issues.labeled", "labels": ["cif:ready"], "itemLabels": [["cif:p0"]]},
+        {"event": "pull_request_review.submitted", "itemLabels": [["cif-pr"]]},
+        {"event": "pull_request_review_comment.created", "itemLabels": [["cif-pr"]]},
+        {"event": "issue_comment.created", "itemLabels": [["cif-pr"]]},
+        {"event": "pull_request.required_checks_completed", "conclusions": ["failure", "success"], "itemLabels": [["cif-pr"]]},
+        {"event": "pull_request.closed", "merged": true, "itemLabels": [["cif-pr"]]},
+        {"event": "pull_request.closed", "merged": false, "itemLabels": [["cif-pr"]]}
+      ],
+      "tools": [
+        "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
+        "credentials_issue", "report_agent_output", "resolve_github_image"
+      ],
+      "ownerConcurrencyRecommendation": 3
+    },
+    "supervisor": {
+      "id": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
+      "name": "CIF supervisor",
+      "baseline": {
+        "generation": 2,
+        "revisionId": "e509e138-f444-4152-829a-d9888f6c4131",
+        "enabled": false
+      },
+      "prompt": "prompts/supervisor.md",
+      "responsibilityTargets": ["repository"],
+      "triggers": [{"event": "cron", "cron": "40 * * * *"}],
+      "tools": [
+        "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
+        "automation_runs_list", "automation_run_get", "credentials_issue",
+        "report_agent_output", "dispatch_automation_run"
+      ],
+      "ownerConcurrencyRecommendation": 1
+    }
+  }
+}
