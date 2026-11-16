@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "All lanes enabled with artifact-list pagination correction applied and read back at scout12/worker8/supervisor10. Existing scout restricted-reply recovery and two worker command-delivery failures still require owner/platform reconciliation; no replay or replacement.",
+  "status": "Routing redesign (scout detect/screen/correlate/route; producer-issue adoption; worker dismissed outcome) applied and read back at scout15/worker9; supervisor routing-check proposal 124df7a6-0af5-5802-b4de-87f3349e9a4f pending owner approval (live supervisor10 still has previous prompt).",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -14,14 +14,14 @@
       },
       "prompt": "prompts/scout.md",
       "deployment": {
-        "generation": 12,
-        "revisionId": "db91fe2d-d45b-45a6-baf2-92ed85e9ede6",
+        "generation": 15,
+        "revisionId": "c6290695-daf1-42a7-9b9b-0fec961c9ad4",
         "enabled": true,
-        "activatedAt": "2026-11-16T17:06:08.628870242Z",
+        "activatedAt": "2026-11-16T18:53:29.628967869Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
-        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "fetch_url", "credentials_issue"]
+        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "fetch_url", "credentials_issue", "automation_upsert"]
       },
       "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "appliedAuditProposal": "8bfd72f5-05f4-5c48-8cd4-5cdc435bc472",
@@ -45,10 +45,10 @@
       },
       "prompt": "prompts/worker.md",
       "deployment": {
-        "generation": 8,
-        "revisionId": "2f89b8c1-ec00-466c-a287-e5919aae2dc2",
+        "generation": 9,
+        "revisionId": "ac51befd-d539-4762-820e-87310d71ddcf",
         "enabled": true,
-        "activatedAt": "2026-11-16T17:06:05.322481754Z",
+        "activatedAt": "2026-11-16T18:55:35.437188959Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 5,
         "tools": null,
