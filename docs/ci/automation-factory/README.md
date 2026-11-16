@@ -174,3 +174,51 @@ reuse was established, so no speculative helper was extracted.
 Run-event subscription was retried after the tool changes and still returned
 `automation_subscriptions_disabled`; this is a server feature gate, not a missing
 automation tool. Scheduled supervisor monitoring remains the fallback.
+
+The owner applied the three self-audit proposals. Authoritative comparisons
+showed only `prompt` changed and the complete after-values matched the published
+files exactly. Enabled readback confirmed scout generation 9, worker generation 7
+and supervisor generation 7. The owner's later concurrency edits produced scout
+generation 10 and supervisor generation 8: saved limits are **1 / 5 / 1** for
+scout / worker / supervisor. These are execution-admission limits, not session
+closure or artifact-claim cleanup.
+
+## Follow-up: receipt correctness and session lifecycle
+
+The supervisor created the status issue at
+https://github.com/microsoft/aspire/issues/22302 and detected four incorrect
+first-attempt success dispositions in the initial scout's PR coverage artifact.
+Direct `/actions/runs/<id>/attempts/1` reads independently confirmed three
+failures and one `action_required`; the old 55% claim is not reliable.
+For run `43725765894`, captured tool `call_IleB3J9TWqthDjpjl0Zb3kZX`
+queried `/attempts/1/jobs` without pagination and returned `[]` after filtering
+for failures. A paginated read found 451 jobs and four failed jobs; the first
+failed job was outside the default 30-entry page. This establishes a concrete
+failure mode, without claiming it explains every incorrect row.
+
+The scout follow-up requires the attempt-specific run receipt for conclusions,
+complete job pagination for causes, code-derived counts and append-only
+corrections after checking supervisor assessments. An empty failed-job page
+must never become a successful-run conclusion.
+
+| UTC | Observed scout evidence | Interpretation |
+|---|---|---|
+| 06:30 | Run `e338383dd84372a58705e9ba65a8615255bb3029eb80fd14c86cd8cff2eb29a1`, session `05983453-fc32-45e0-b166-ffb749571578`; captured turn ended at about 06:45:52 | Its `scout/lease` remained held until 07:12:26; no clean completion handoff established |
+| 06:45 | Another scout run admitted before the earlier turn ended | Brief overlapping execution records; not proof of simultaneous GitHub writers |
+| 07:00 | Run `bca48c13477e1cc1e321eed49cca2048e616a2ef936b40c432326ee73f1c8fb7` deferred; captured response reports no GitHub work and a reusable self-audit | The lease guard prevented intake; expiry alone cannot resolve the predecessor |
+
+Do not confuse finishing a turn, releasing a lane lease, releasing an item
+routing responsibility and closing a session. The supervisor follow-up
+distinguishes unfinished handoff recovery from genuinely finished idle-session
+cleanup, retaining owners needed for PR feedback. Where selected and eligible,
+`reconnect_session` may request one reconciliation-only resume of the original
+idle/settled worker, retaining its operation UUID and verifying the resulting
+handoff artifact. It must not replay business effects or dispatch a replacement.
+Denied or ambiguous recovery goes to the owner.
+
+Catalog discovery found `get_session` (coordination-scoped persisted lifecycle
+status) and `reconnect_session`, but no session-close capability. The manager
+cannot directly inspect or close arbitrary automation sessions with its frozen
+tools. Cleanup candidates must therefore be reported, not called closed.
+Neither idle UI state nor persisted run completion establishes a live resource
+leak, successful release, or permission to kill a process.
