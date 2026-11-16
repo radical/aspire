@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "All lanes enabled at observed scout11/worker7/supervisor9. Generated sources add artifact-list cursor exhaustion; deployment awaits prompt-only approval. Scout restricted-reply recovery and two worker command-delivery failures require owner/platform reconciliation; no replay or replacement.",
+  "status": "All lanes enabled with artifact-list pagination correction applied and read back at scout12/worker8/supervisor10. Existing scout restricted-reply recovery and two worker command-delivery failures still require owner/platform reconciliation; no replay or replacement.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -14,10 +14,10 @@
       },
       "prompt": "prompts/scout.md",
       "deployment": {
-        "generation": 11,
-        "revisionId": "85bfed82-204c-4058-8229-5affe494fb88",
+        "generation": 12,
+        "revisionId": "db91fe2d-d45b-45a6-baf2-92ed85e9ede6",
         "enabled": true,
-        "activatedAt": "2026-11-16T08:48:07.645363928Z",
+        "activatedAt": "2026-11-16T17:06:08.628870242Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
@@ -26,7 +26,7 @@
       "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "appliedAuditProposal": "8bfd72f5-05f4-5c48-8cd4-5cdc435bc472",
       "appliedReceiptProposal": "d75d15de-d04d-535c-bec8-9a5d5fdba287",
-      "pendingPaginationProposal": "eabae92f-d5e4-5156-8835-a84383f83fdd",
+      "appliedPaginationProposal": "eabae92f-d5e4-5156-8835-a84383f83fdd",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "requiredTools": [
@@ -45,17 +45,17 @@
       },
       "prompt": "prompts/worker.md",
       "deployment": {
-        "generation": 7,
-        "revisionId": "533c3262-6b4f-4dd1-b1f5-f377258ee851",
+        "generation": 8,
+        "revisionId": "2f89b8c1-ec00-466c-a287-e5919aae2dc2",
         "enabled": true,
-        "activatedAt": "2026-11-16T06:45:59.129169458Z",
+        "activatedAt": "2026-11-16T17:06:05.322481754Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 5,
         "tools": null,
         "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "merge_pull_request", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "fetch_url"]
       },
       "appliedAuditProposal": "1d8a7bd1-dd61-5767-80b0-07bd30e94a8a",
-      "pendingPaginationProposal": "d5732dec-fac1-5bed-872a-51abe8c79a40",
+      "appliedPaginationProposal": "d5732dec-fac1-5bed-872a-51abe8c79a40",
       "responsibilityTargets": ["issue", "pull_request"],
       "triggers": [
         {"event": "cron", "cron": "5,25,45 * * * *"},
@@ -83,10 +83,10 @@
       },
       "prompt": "prompts/supervisor.md",
       "deployment": {
-        "generation": 9,
-        "revisionId": "7d3b6782-aea4-4473-9e00-43adaac34d17",
+        "generation": 10,
+        "revisionId": "8e80561b-a77e-4c03-869e-cf0f7a29dc4b",
         "enabled": true,
-        "activatedAt": "2026-11-16T07:20:21.295253472Z",
+        "activatedAt": "2026-11-16T17:06:11.369672169Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
@@ -94,7 +94,7 @@
       },
       "appliedAuditProposal": "7e09274e-7b83-57ce-badc-13f850d5e2b4",
       "appliedLifecycleProposal": "1999f002-f581-5432-98af-4bf9c2d66e32",
-      "pendingPaginationProposal": "fdc52a3d-d2ab-51f4-a790-4e460e0e6178",
+      "appliedPaginationProposal": "fdc52a3d-d2ab-51f4-a790-4e460e0e6178",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
       "requiredTools": [

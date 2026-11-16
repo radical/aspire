@@ -159,20 +159,19 @@ missed claim, handoff or queue item.
 The shared correction requires following `artifact_list`'s returned `cursor`
 until absent before claiming absence. A bounded partial scan saves the cursor
 and reports incomplete evidence; known records should use exact-name reads.
-This differs from artifact content paging (`nextOffset`). Generated prompts
-contain the correction; saved deployments below remain unchanged until the
-owner applies prompt-only proposals. Later execution must establish adoption.
+This differs from artifact content paging (`nextOffset`).
 
-| Lane | Pending proposal | Expected generation |
+| Lane | Applied proposal | Read-back generation / revision |
 |---|---|---|
-| Scout | `eabae92f-d5e4-5156-8835-a84383f83fdd` | 11 |
-| Worker | `d5732dec-fac1-5bed-872a-51abe8c79a40` | 7 |
-| Supervisor | `fdc52a3d-d2ab-51f4-a790-4e460e0e6178` | 9 |
+| Scout | `eabae92f-d5e4-5156-8835-a84383f83fdd` | 12 / `db91fe2d-d45b-45a6-baf2-92ed85e9ede6` |
+| Worker | `d5732dec-fac1-5bed-872a-51abe8c79a40` | 8 / `2f89b8c1-ec00-466c-a287-e5919aae2dc2` |
+| Supervisor | `fdc52a3d-d2ab-51f4-a790-4e460e0e6178` | 10 / `8e80561b-a77e-4c03-869e-cf0f7a29dc4b` |
 
-Authoritative comparisons report only `prompt` changed. Each complete prompt
-after-value's digest matches its published generated file. All three proposals
-are pending (`autonomy_L3`), not applied; saved settings remain the baseline for
-application. Prompts are 11,984 / 11,491 / 11,994 characters respectively.
+All three proposals changed only `prompt`; exact saved readback hashes match the
+published generated files. The definitions remain enabled with saved
+concurrency 1 / 5 / 1 and existing tool/triggers selections intact. Prompts are
+11,984 / 11,491 / 11,994 characters respectively. Application affects future
+executions; already admitted sessions retain their pinned revision.
 
 Every prompt ends with a self-audit: at most three reusable guidance, process or
 tooling gaps, with impact, source and suggestion. Item-specific debugging and
