@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Routing redesign applied and read back at scout15/worker10/supervisor11. Worker merge tool removed in generation 10; existing runs retain their pinned revisions.",
+  "status": "Scout18, worker11 and supervisor11 applied and read back. Worker11 escalates workflow runs requiring human action; existing runs retain their pinned revisions.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -14,10 +14,10 @@
       },
       "prompt": "prompts/scout.md",
       "deployment": {
-        "generation": 15,
-        "revisionId": "c6290695-daf1-42a7-9b9b-0fec961c9ad4",
+        "generation": 18,
+        "revisionId": "17f0ece3-ce41-41df-94c5-eabd54ac6437",
         "enabled": true,
-        "activatedAt": "2026-11-16T18:53:29.628967869Z",
+        "activatedAt": "2026-11-16T22:13:11.934689385Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
@@ -45,10 +45,10 @@
       },
       "prompt": "prompts/worker.md",
       "deployment": {
-        "generation": 10,
-        "revisionId": "78d5f816-a94f-44f5-b9ee-0f699a5ee1b2",
+        "generation": 11,
+        "revisionId": "5dff5f80-1e9a-436d-9d41-a61be11586e3",
         "enabled": true,
-        "activatedAt": "2026-11-16T19:52:51.050025103Z",
+        "activatedAt": "2026-11-16T22:55:02.029783335Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 5,
         "tools": null,
@@ -56,6 +56,7 @@
       },
       "appliedAuditProposal": "1d8a7bd1-dd61-5767-80b0-07bd30e94a8a",
       "appliedPaginationProposal": "d5732dec-fac1-5bed-872a-51abe8c79a40",
+      "appliedHumanActionProposal": "58132c92-302a-5a4e-9829-8e69fff9a7a4",
       "responsibilityTargets": ["issue", "pull_request"],
       "triggers": [
         {"event": "cron", "cron": "5,25,45 * * * *"},
