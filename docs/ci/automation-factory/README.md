@@ -222,3 +222,21 @@ cannot directly inspect or close arbitrary automation sessions with its frozen
 tools. Cleanup candidates must therefore be reported, not called closed.
 Neither idle UI state nor persisted run completion establishes a live resource
 leak, successful release, or permission to kill a process.
+
+The follow-ups were published in `1ac56ca0f`. Both authoritative proposal
+comparisons were complete, changed only `prompt`, and exactly matched the
+published bytes. The owner applied supervisor proposal
+`1999f002-f581-5432-98af-4bf9c2d66e32`; enabled generation 9 readback
+confirmed the lifecycle instructions with concurrency 1 unchanged. Scout
+proposal `d75d15de-d04d-535c-bec8-9a5d5fdba287` remains pending owner
+application; saved generation 10 has not yet adopted the receipt correction.
+These changes affect newly admitted runs, not existing executions.
+
+At 07:22 UTC the capacity endpoint reported no active or queued executions for
+the three lanes, so increasing concurrency would not address the observed
+stall. The 07:15 scout's captured turn again reported deferring for the 06:30
+predecessor. A fresh lease read returned absent after its recorded expiry,
+which does not reconcile the earlier run. Its final captured tools are reads,
+not a completion handoff; why it stopped remains unknown. No original-session
+recovery or session closure is claimed. The next saved supervisor due time is
+07:40 UTC, an opportunity for recovery inspection, not proof it will succeed.

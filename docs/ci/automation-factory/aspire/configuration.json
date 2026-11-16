@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Self-audit/process-monitoring prompts applied and all lanes enabled. Scout receipt correction and supervisor lifecycle follow-up prepared for deployment. Baseline retained; runtime validation incomplete.",
+  "status": "All lanes enabled. Supervisor lifecycle follow-up applied at generation 9; scout receipt correction awaits owner application. Prompt-only proposals exactly match published sources at 1ac56ca0f. Baseline retained; runtime recovery remains unvalidated.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -25,6 +25,7 @@
       },
       "appliedLeaseProposal": "0ee41569-fc15-51bc-9378-8c3aa565cc8d",
       "appliedAuditProposal": "8bfd72f5-05f4-5c48-8cd4-5cdc435bc472",
+      "pendingReceiptProposal": "d75d15de-d04d-535c-bec8-9a5d5fdba287",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "*/15 * * * *"}],
       "requiredTools": [
@@ -80,16 +81,17 @@
       },
       "prompt": "prompts/supervisor.md",
       "deployment": {
-        "generation": 8,
-        "revisionId": "64d649b6-7c24-46d5-a382-d99ad4e89bd5",
+        "generation": 9,
+        "revisionId": "7d3b6782-aea4-4473-9e00-43adaac34d17",
         "enabled": true,
-        "activatedAt": "2026-11-16T07:08:31.834880343Z",
+        "activatedAt": "2026-11-16T07:20:21.295253472Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 1,
         "tools": null,
         "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "fetch_url", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "automation_upsert"]
       },
       "appliedAuditProposal": "7e09274e-7b83-57ce-badc-13f850d5e2b4",
+      "appliedLifecycleProposal": "1999f002-f581-5432-98af-4bf9c2d66e32",
       "responsibilityTargets": ["repository"],
       "triggers": [{"event": "cron", "cron": "40 * * * *"}],
       "requiredTools": [
