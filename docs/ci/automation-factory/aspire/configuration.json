@@ -2,7 +2,7 @@
   "repository": "microsoft/aspire",
   "repositoryId": "696529789",
   "tag": "cif",
-  "status": "Routing redesign (scout detect/screen/correlate/route; producer-issue adoption; worker dismissed outcome; supervisor routing checks) applied and read back at scout15/worker9/supervisor11. Existing runs retain their pinned revisions.",
+  "status": "Routing redesign applied and read back at scout15/worker10/supervisor11. Worker merge tool removed in generation 10; existing runs retain their pinned revisions.",
   "automations": {
     "scout": {
       "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
@@ -45,14 +45,14 @@
       },
       "prompt": "prompts/worker.md",
       "deployment": {
-        "generation": 9,
-        "revisionId": "ac51befd-d539-4762-820e-87310d71ddcf",
+        "generation": 10,
+        "revisionId": "78d5f816-a94f-44f5-b9ee-0f699a5ee1b2",
         "enabled": true,
-        "activatedAt": "2026-11-16T18:55:35.437188959Z",
+        "activatedAt": "2026-11-16T19:52:51.050025103Z",
         "configUpdatePolicy": "direct",
         "maxConcurrentRuns": 5,
         "tools": null,
-        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "merge_pull_request", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "fetch_url"]
+        "toolAdditions": ["automation_set_enabled", "dispatch_automation_run", "wait_for_session_reply", "automation_claim_responsibility", "automation_release_responsibility", "reconnect_session", "credentials_issue", "fetch_url", "automation_upsert"]
       },
       "appliedAuditProposal": "1d8a7bd1-dd61-5767-80b0-07bd30e94a8a",
       "appliedPaginationProposal": "d5732dec-fac1-5bed-872a-51abe8c79a40",
