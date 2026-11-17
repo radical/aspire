@@ -1,0 +1,42 @@
+{
+  "repository": "microsoft/aspire",
+  "repositoryId": "696529789",
+  "automations": {
+    "scout": {
+      "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
+      "state": "saved",
+      "generation": 27,
+      "revisionId": "5ae75232-6a45-410e-bd66-2073eb8c0fbf",
+      "enabled": false,
+      "changes": ["prompt", "triggers: include cif on issues.labeled and issues.opened"],
+      "source": "prompts/scout.md",
+      "sourceMatchesReadback": true
+    },
+    "worker": {
+      "id": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
+      "state": "pending owner approval",
+      "proposalId": "20bc0860-46c9-52fc-96d3-43f10aac9fc3",
+      "proposalReason": "autonomy_L3",
+      "generation": 17,
+      "revisionId": "b2cd89da-9a16-43e1-b7de-d3b4b1741084",
+      "enabled": true,
+      "changes": ["prompt"],
+      "source": "prompts/worker.md",
+      "sourceMatchesReadback": false
+    },
+    "supervisor": {
+      "id": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
+      "state": "saved",
+      "generation": 19,
+      "revisionId": "88316bd8-2a3e-49c6-b550-b54632e86cea",
+      "enabled": false,
+      "changes": ["prompt"],
+      "source": "prompts/supervisor.md",
+      "sourceMatchesReadback": true
+    }
+  },
+  "publisher": "unchanged",
+  "activationChanged": false,
+  "manualRunsRequested": false,
+  "adoption": "Saved changes apply to future runs, not already admitted executions."
+}

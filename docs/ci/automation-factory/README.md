@@ -1,18 +1,31 @@
 # Aspire CI automation group
 
-Deployed prompt sources for the existing CIF automations in `microsoft/aspire`.
+Prompt sources for the existing CIF automations in `microsoft/aspire`.
 Published on branch `cif/aspire-ci-group` in the user's `radical/aspire` fork
 after `radical/self-workflow` proved inaccessible. This is a prompt-source bundle,
 not an Aspire product/runtime change or an executable deployment tool. The automation target
 remains `microsoft/aspire`; the fork's repository identity must not be substituted
 in automation configuration.
 
-## Operation
+## Issue-first pilot
 
-| Lane | Contribution | Wake-up | Capacity recommendation |
+The [deployment record](aspire/issue-first-deployment.json) distinguishes saved
+prompts from the pending Worker proposal. Scout and Supervisor remain paused;
+the enabled Worker still uses its previous prompt until the owner applies the
+proposal. Publishing these files does not enable or run any automation.
+
+A maintainer adds `cif` to route the original issue. Scout verifies intake and
+adds `cif:ready` after triage; recurring CI trackers remain signals unless
+explicitly admitted. Scout recommends dedicated issues rather than creating
+them during the pilot. Removing `cif` or closing the issue pauses new writes.
+The 25-minute lease includes a five-minute cleanup reserve; expiry does not
+authorize takeover of unresolved work. Supervisor reports missed pickups and
+recommends closure only after verifying the fix. The queue publisher is unchanged.
+
+| Lane | Contribution | Saved triggers | Saved concurrency |
 |---|---|---|---|
-| Scout | Classify failures, deduplicate issues, rank work | Every 15 minutes | 1 run |
-| Worker | Investigate, fix, open drafts, address feedback and backports | Every 20 minutes plus scoped P0/PR events | 3 runs |
+| Scout | Screen failures, triage maintainer-labeled issues | Every 15 minutes plus issue-open and label-added filters | 1 run |
+| Worker | Investigate, fix, open drafts, address feedback and backports | `cif:ready` added and scoped PR events | 1 run |
 | Supervisor | Check missed work, liveness and later results; report human asks | Hourly | 1 run |
 
 GitHub issues are the queue, one edited issue comment is each item's checkpoint,
@@ -38,14 +51,11 @@ coverage is unknown, not success.
 
 ## Sources and generation
 
-`docs/ci/automation-factory/aspire/common.md` plus each lane fragment and the final
-`self-audit.md` suffix produces a
+`docs/ci/automation-factory/aspire/common.md` plus each lane fragment produces a
 standalone file under `docs/ci/automation-factory/aspire/prompts/`.
-`configuration.json` records observed disabled generation-2
-IDs and immutable revisions, plus observed deployments and required tools.
-Concurrency recommendations are separate from observed owner settings.
-It is not an executable API payload.
-Runtime model choices are deliberately unspecified.
+The generator does not append the historical `self-audit.md` suffix. The
+`configuration.json` baseline and earlier observations below are historical,
+not the current pilot configuration or an executable API payload.
 
 ```bash
 python3 docs/ci/automation-factory/aspire/build.py
@@ -61,12 +71,9 @@ generation 3, preserving tools, triggers and responsibility targets. The owner
 applied the three enablement proposals, producing enabled generation-4 revisions
 on 2026-11-16 at 05:56 UTC. The original disabled baseline is retained separately.
 
-Local validation before publishing: both generator commands passed; the unittest command passed
-6 tests (current output, stale-output repair, final self-audit propagation, exact character boundary, overflow
-without partial writes, multibyte byte overflow); `git diff --check` passed.
-These validate authoring mechanics, not automation behavior.
+These checks validate authoring mechanics, not automation behavior.
 
-## Validation and activation boundary
+## Historical validation and activation
 
 Parallel Claude Opus 5.5 medium and GPT-6 Astra reviews examined generation 2 and
 the first corrected candidate.
