@@ -9,10 +9,9 @@ in automation configuration.
 
 ## Issue-first pilot
 
-The [deployment record](aspire/issue-first-deployment.json) distinguishes saved
-prompts from the pending Worker proposal. Scout and Supervisor remain paused;
-the enabled Worker still uses its previous prompt until the owner applies the
-proposal. Publishing these files does not enable or run any automation.
+The [deployment record](aspire/issue-first-deployment.json) identifies the saved
+prompt revisions. Scout and Supervisor remain paused; future Worker runs use
+the approved prompt. Publishing these files does not enable or run any automation.
 
 A maintainer adds `cif` to route the original issue. Scout verifies intake and
 adds `cif:ready` after triage; recurring CI trackers remain signals unless

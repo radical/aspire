@@ -14,15 +14,15 @@
     },
     "worker": {
       "id": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
-      "state": "pending owner approval",
+      "state": "saved",
       "proposalId": "20bc0860-46c9-52fc-96d3-43f10aac9fc3",
       "proposalReason": "autonomy_L3",
-      "generation": 17,
-      "revisionId": "b2cd89da-9a16-43e1-b7de-d3b4b1741084",
+      "generation": 18,
+      "revisionId": "70b4ae15-001a-4565-89bf-ddd17c0fbe41",
       "enabled": true,
       "changes": ["prompt"],
       "source": "prompts/worker.md",
-      "sourceMatchesReadback": false
+      "sourceMatchesReadback": true
     },
     "supervisor": {
       "id": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
