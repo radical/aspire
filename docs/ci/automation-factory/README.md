@@ -28,6 +28,8 @@ Models, grants, concurrency, responsibility routing and root settings are
 preserved. The [charter deployment record](aspire/zero-charter-deployment.json)
 retains the earlier rollout; the [intake correction record](aspire/intake-deployment.json)
 records the subsequent applied revisions and runtime-validation gaps.
+The bounded restart checkpoint is [`aspire/recovery/current.json`](aspire/recovery/current.json);
+re-read its referenced artifacts at current ETags before acting.
 The zero-rolling-failure, zero-flake and PR first-attempt failure-rate
 target (<40%) prompts are applied and enabled.
 Two identical Scout proposals were created against the same base generation;

@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "recordType": "current-recovery-checkpoint",
+  "recordedAt": "2026-11-18T19:57:56Z",
+  "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
+  "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
+  "repository": {
+    "automationTarget": "microsoft/aspire",
+    "publicationRepository": "radical/aspire",
+    "publicationBranch": "cif/aspire-ci-group",
+    "branchTipBeforeCheckpoint": "f1b4c52c89a4c593d96e2d2045d6abf47ea32e98",
+    "sourcePromptCommit": "8c5d55478a07f639cc1eab36b3770086703cc3a6",
+    "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
+  },
+  "charter": {
+    "outcomes": [
+      "0% rolling-build failures on main and the latest numeric release branch",
+      "zero flaky-test failures in rolling and PR CI",
+      "PR first-attempt failure rate below 40%"
+    ],
+    "guardrails": [
+      "Transient-network failures count but receive no fix attempts; retries do not erase original failures.",
+      "No rolling workflow reruns, cancellations, or dispatches; no merges without a human.",
+      "A new issue requires exact title/body review and explicit owner approval.",
+      "Unknown or incomplete coverage is not success; preserve all prior effects and history."
+    ]
+  },
+  "automationRevisions": {
+    "scout": {
+      "generation": 35,
+      "revisionId": "49f16e60-f9c5-4034-9ef2-0e9c1b5189c4",
+      "scheduleUtc": "*/15 * * * *",
+      "enabled": true
+    },
+    "worker": {
+      "generation": 24,
+      "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+      "scheduleUtc": "5,25,45 * * * *",
+      "enabled": true,
+      "maxConcurrentRuns": 1
+    },
+    "supervisor": {
+      "generation": 24,
+      "revisionId": "c7812ff8-42ab-4280-a4af-4933295550c4",
+      "scheduleUtc": "40 * * * *",
+      "enabled": true
+    },
+    "publisher": {
+      "generation": 3,
+      "revisionId": "502ca13a-8923-46ae-960e-b56f0dad4d41",
+      "scheduleUtc": "*/10 * * * *",
+      "enabled": true
+    }
+  },
+  "lastVerifiedPass": {
+    "supervisorRun": "db97d66b3e83f5164538c1e4f771c2c459d15d992efde64820223370a2756342",
+    "serverSession": "6243adfd-93be-4115-951e-8d50de9fa30f",
+    "revisionId": "c7812ff8-42ab-4280-a4af-4933295550c4",
+    "scheduledFor": "2026-11-18T19:40:00Z",
+    "completedRecord": "cif:runs/supervisor/2026-11-18T1940Z-db97d66b3e83f5164538c1e4f771c2c459d15d992efde64820223370a2756342-end.json",
+    "result": "Inputs exhausted. Worker and Scout completed read-only passes; Publisher enumerated all 9 issues and made no write. One status update was verified by independent readback at 19:53:39Z. Current external effects are settled; historical uncertainties remain preserved.",
+    "queue": {
+      "asOf": "2026-11-18T19:40:00Z",
+      "openItems": 9,
+      "ready": [
+        20513,
+        20750,
+        21665,
+        21775,
+        21776,
+        21829
+      ],
+      "inPullRequest": [
+        {
+          "issue": 22191,
+          "pullRequest": 22345,
+          "head": "683f7dca733ca17ce44c2289658d2beaaa7b061f",
+          "state": "open, non-draft, review required, rollup success; success was attempt 2 after approval gates"
+        },
+        {
+          "issue": 22347,
+          "pullRequest": 22348,
+          "head": "014fc591cafcd2f5fca46cdb80451db718482759",
+          "state": "open, non-draft, review required, rollup success; success was attempt 2 after approval gates"
+        }
+      ],
+      "needsHuman": [
+        22116
+      ],
+      "notEstablished": "No merge or verified fix; do not infer a full PR denominator, complete seven-day baseline, zero rolling failures, or zero flakes."
+    },
+    "recentRuns": {
+      "worker": {
+        "run": "6ffeb21ddeb7d3f85f94d9684616302fe7058350c52e4043069a68ea379fa2864",
+        "session": "784e41c7-365a-4929-854f-4f1a015c7dea",
+        "result": "19:26 pass; complete 9-item inventory; no new work because both non-P0 investigation slots were occupied."
+      },
+      "scout": {
+        "run": "3efe6dce972da221206450db3eff484388010cf73bea7526f58934af47eaeb67",
+        "session": "b8392897-bd37-4d1c-b986-f288886a89fe",
+        "result": "19:30 pass; label pages exhausted, 77 distinct issues, six dispositions, no admission; continuation preserved."
+      },
+      "publisher": {
+        "run": "237cc34ce557c8db80fa79b2c574d76c3e168e5c2838320007bb81a7a262f732f",
+        "session": "82562b4f-d215-4534-b44a-ab3f9c12cfdc",
+        "result": "19:40 pass; all 9 issues enumerated, read-only, no write."
+      }
+    }
+  },
+  "ownershipAndLeases": {
+    "scoutLease": {
+      "artifact": "cif:scout/lease",
+      "revision": 162,
+      "etag": "sa1-9ee0b28336dd03dedab5ec6fe785823d0fbbc995cbb30e5c439723cc7873718c",
+      "expiresAt": "2026-11-18T20:26:48Z",
+      "session": "unknown",
+      "action": "Treat as held. Do not start a duplicate Scout, release it, or infer the writer stopped from expiry; re-read and reconcile its owner/run first."
+    },
+    "handoffs": [
+      {
+        "item": 22347,
+        "artifact": "cif:handoff/22347",
+        "revision": 29,
+        "etag": "sa1-113f2599db9ffcd459728cbf4e7134d5b22f3ad2c5908ece6151d86717ed6ead",
+        "status": "running",
+        "holderPrefix": "6a5f7102",
+        "recordedSession": "5943b14b-49b6-4aaf-94ff-95d17018b4f0",
+        "reconciliation": "Effects marked reconciled; predecessor 267a8b02869372f6feb5d647498a53401f524c00dbf377bee45c9824f0fda58b yielded. The recorded session differs from the exact run receipt; ownership is unresolved. Target is PR 22348 at head 014fc591cafcd2f5fca46cdb80451db718482759.",
+        "action": "No takeover, duplicate editor, or release backport until the original owner/session is reconciled. Human review/merge remains required."
+      },
+      {
+        "item": 21665,
+        "artifact": "cif:handoff/21665",
+        "revision": 4,
+        "etag": "sa1-d6168a394a2531c40fc83bfe29e9d38bf4753c354e32f394a61a780962eff3f9",
+        "status": "ready",
+        "owner": null,
+        "cleanYield": true,
+        "unresolvedEffects": [],
+        "next": "Verify the exact Windows HTTPS-selection startup failure against current DCP; separate startup timeout from the 25-second runtime probe and retain HTTPS/port assertions."
+      },
+      {
+        "item": 22116,
+        "artifact": "cif:handoff/22116",
+        "revision": 8,
+        "etag": "sa1-785bd9f54b7f17e46a0995ea23d33b9d9b808401ac7137a5b6347e8d89072b63",
+        "status": "needs-human",
+        "owner": null,
+        "cleanYield": true,
+        "unresolvedEffects": [],
+        "humanAskSince": "2026-11-18T12:17:00Z",
+        "humanAsk": "Provide an authorized Windows VS Code extension-host test path or an exact-case baseline log. Root cause remains unknown; do not weaken termination assertions or dispatch a replacement."
+      },
+      {
+        "item": 20513,
+        "artifact": "cif:handoff/20513",
+        "revision": 4,
+        "etag": "sa1-a530abc18d731e2ffc1d3f2d10d3de5feb98904970a7426cf1f36b7b6791dd37",
+        "status": "ready",
+        "owner": null,
+        "cleanYield": true
+      },
+      {
+        "item": 21829,
+        "artifact": "cif:handoff/21829",
+        "revision": 4,
+        "etag": "sa1-5cf1e7f4953ae76d153cd2a1039823ab512fd64214fa13224c18b58e9bf3d3a8",
+        "status": "ready",
+        "owner": null,
+        "cleanYield": true
+      }
+    ],
+    "inventoryLimit": "This is a targeted current-state inventory, not proof that no other claims exist. Before dispatch or release, read the current bounded claims/handoffs with pagination and exact-name reads; retain cursors and ETags."
+  },
+  "openDecisionsAndBlockers": [
+    {
+      "id": "capacity-policy",
+      "since": "2026-11-18T09:54:00Z",
+      "decision": "Do in-PR review waits continue consuming both non-P0 work slots, or should humans review/merge to free those slots? Current Worker WIP rule blocks new work; maxConcurrentRuns=1 and a requested increase to 3 has no supported update control and would not remove this WIP limit.",
+      "status": "owner decision pending",
+      "source": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6975063846"
+    },
+    {
+      "id": "windows-test-access",
+      "since": "2026-11-18T12:17:00Z",
+      "decision": "Supply the authorized Windows VS Code extension-host test path or exact-case baseline log for #22116.",
+      "status": "owner input pending",
+      "source": "https://github.com/microsoft/aspire/issues/22116#issuecomment-6974717591"
+    },
+    {
+      "id": "pr-22347-ownership",
+      "status": "owner reconciliation pending",
+      "decision": "Resolve the running handoff's session mismatch against its exact run receipt before any pickup, readiness claim, or release backport."
+    },
+    {
+      "id": "publisher-original-read",
+      "run": "5d7c265df881c82c805544106835246a046b11a293f46258a475f36423d93e7e",
+      "session": "b9950647-7852-4f34-933f-156db781e85d",
+      "call": "call_bojcEqUiGvkNwaFq44pVH81v",
+      "status": "Original automation_get remained pending without captured output/error across 16:40, 17:40, and 18:40 captures; run ledger active at 16:30:56Z; live session lookup denied; input repository_id 12340904 did not match authorized repository ID 696529789.",
+      "action": "Owner inspection/reconciliation only. Do not replay the read, resume the run, or replace its writer; newer Publisher run 237cc34... completed a separate read-only inventory."
+    },
+    {
+      "id": "worker-command-delivery",
+      "runs": [
+        {
+          "run": "71792c1757b6f6d830b17576f5b41b36f7dd45868bc4516d89996b6fa93951ac",
+          "session": "0be96caf-0166-42f2-9c88-bfced63a846d"
+        },
+        {
+          "run": "514078fa9d49d6d84f90265049eda69b64ef673e933e6c5c6b673ce28306600b",
+          "session": "5b4f9c37-c061-46ec-9d4f-36c4f66e15e4"
+        }
+      ],
+      "status": "command_delivery_failed after session creation; no turn transcripts and effects not reconciled",
+      "action": "Reconcile original delivery and effects before any retry or replacement; platform cause unknown."
+    },
+    {
+      "id": "legacy-scout-recovery",
+      "run": "e338383dd84372a58705e9ba65a8615255bb3029eb80fd14c86cd8cff2eb29a1",
+      "session": "05983453-fc32-45e0-b166-ffb749571578",
+      "recoveryOperation": "07ffb82e-0903-4a9d-846e-aa7df63f23a8",
+      "status": "resume reply was restricted; no original completion/handoff verified",
+      "action": "Do not repeat resume or seek the restricted reply through another path; human recovery remains open."
+    },
+    {
+      "id": "historical-owner-approvals",
+      "status": "pending as retained in #22302",
+      "items": [
+        "Protected tracking issue ownership #22279/#22178 and queued historical runs 43098298773/43097526838",
+        "Safe issue filing/reuse approval; closed #22324/#22334/#22327 remain closed unless owner directs otherwise",
+        "Azure DevOps, expected-run, all-attempt-flake and historical PR/head association gaps"
+      ]
+    }
+  ],
+  "metrics": {
+    "fixedWindow": "2026-11-11T08:40:00Z/2026-11-18T08:40:00Z",
+    "prCi": "38 failures / 55 eligible linked historical-head pairs (69.09%); linked subset only, not the full PR rate or a representative estimate.",
+    "unknowns": [
+      "325/490 PR CI sources lack historical PR/head associations",
+      "full seven-day and Azure DevOps coverage",
+      "expected-run gaps",
+      "all-attempt flaky counts",
+      "14-day signature frequency",
+      "cause attribution"
+    ],
+    "nextRefreshDue": "2026-11-18T20:40:00Z",
+    "nextOwner": "Supervisor: refresh metrics and continue saved guardrail/history audits; owner: inspect original Publisher run/call. No duplicate discovery, probe, dispatch, or unchanged-ask ping."
+  },
+  "nextVerification": [
+    "Re-read this checkpoint's referenced artifacts at current ETags and live #22302, item, and PR state; read the legacy supervisor/state.json at its recorded ETag without overwriting it.",
+    "Reconcile the current Scout lease holder/session and #22347 running handoff against exact run receipts; enumerate live claims/handoffs with cursor exhaustion before any dispatch or ownership change.",
+    "Have the owner inspect the original Publisher call and failed worker deliveries through authorized paths; do not replay, resume, replace, or infer termination.",
+    "Wait for the owner decisions/access above. If #22116 access arrives, perform focused Windows verification without weakening assertions; do not change capacity or priorities on assumption.",
+    "At the next Supervisor pass, verify the 11/10 Scout job-log request audit, the 09:45 comparison, saved cursors and feedback continuation; report partial evidence as unknown and preserve all history."
+  ],
+  "authoritativeArtifactReferences": [
+    {
+      "tag": "cif",
+      "name": "supervisor/current.json",
+      "revision": 10,
+      "etag": "sa1-4fc775717cf7ff98959770c6d7c9623907bcb839791ae0e9d0266a89f6bc410a"
+    },
+    {
+      "tag": "cif",
+      "name": "supervisor/state.json",
+      "revision": 26,
+      "etag": "sa1-eb3c707d4e2fa499e9bcbc09a6cd6d78b38c7d16601a4174f5759b941da49984",
+      "note": "Historical state is preserved; do not migrate, truncate, reset, or replace it."
+    },
+    {
+      "tag": "cif",
+      "name": "assessment/2026-11-18/db97d66b3e83f5164538c1e4f771c2c459d15d992efde64820223370a2756342-1.json",
+      "etag": "sa1-17d2013eb0eef7f8195a13002f06827e09b344d487dab0232fd810df9a729ff2"
+    },
+    {
+      "tag": "cif",
+      "name": "supervisor/ledger/db97d66b3e83f5164538c1e4f771c2c459d15d992efde64820223370a2756342.json",
+      "etag": "sa1-cae556ff9d59bffbca72257675682593162c5a7a8186282603a39bf3de9bf967",
+      "note": "Five-row bounded scan was not exhausted; its continuation is saved, so do not claim historical absence."
+    },
+    {
+      "tag": "cif",
+      "name": "scout/cursor-v2.json",
+      "revision": 5,
+      "etag": "sa1-b2d2e6e24d038d3a0d165d244b21ff17ff70346fa8f7abf3e585756352c95473",
+      "note": "Legacy cursor/history remains untouched; no migration or transfer bypass."
+    },
+    {
+      "tag": "cif",
+      "name": "scout/continuations/c98f4d71f5ddd96aced5e5774b0c4e8890b8b7bd83dbdc63b4836c20885b3d12.json",
+      "etag": "sa1-b5fa21b9dfdadcbc9704105cba8618d508b28356f664e3523a12028f60ff83bf"
+    }
+  ],
+  "security": "No credentials, tokens, secrets, or private environment values are stored. Artifact and run identifiers are recovery references only; this file grants no authority."
+}
