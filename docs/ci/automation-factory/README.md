@@ -47,9 +47,9 @@ unverified runtime dependencies, not green.
 
 The exact pre-rollout prompt snapshots and their revision metadata are retained
 in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
-Current revisions are Scout generation 35, Worker generation 24, Supervisor
+Current revisions are Scout generation 36, Worker generation 25, Supervisor
 generation 24 (all enabled), and Work Queue publisher generation 3 (enabled).
-The current prompt candidates are 11,416, 11,969 and 11,848 characters,
+The current prompt candidates are 11,746, 11,965 and 11,848 characters,
 respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch alone does
@@ -81,8 +81,8 @@ The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
-| Scout | Enabled, generation 35 | Relevant issue events; every 15 minutes |
-| Worker | Enabled, generation 24 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
+| Scout | Enabled, generation 36 | Relevant issue events; every 15 minutes |
+| Worker | Enabled, generation 25 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
 | Supervisor | Enabled, generation 24 | Hourly at :40 |
 | Work Queue publisher | Enabled, generation 3 | Every 10 minutes all day |
 
@@ -111,10 +111,22 @@ conditionally rolled back without overwriting concurrent edits. Its change
 table in #22302 records old/new generations, evidence and observed effects;
 delivery counts are not outcome evidence.
 
-Worker's admission and claim boundary is unchanged. Its requested concurrency
-of three is **not applied**: the exposed update schemas do not accept that
-setting, so the owner must use a supported configuration control. Publication,
-human-only merge, new-issue approval and no-rolling-rerun safeguards remain.
+The owner clarified the work limits: at most three active items and two P0
+items, with actionable P0 work first and no unused P0 slot reserved. Waiting on
+CI, reproduction, PR review, a person or external access does not consume an
+active slot. The separate coordinator-owned review queue is capped at three
+non-P0 and ten P0 open PRs awaiting review; drafts are allowed but must not be
+marked ready above the applicable cap. Worker instructions now reflect these
+limits. The saved Worker automation still has a concurrency limit of one run
+at a time; this policy does not configure three parallel runs.
+
+Windows/macOS investigation uses existing Aspire CI infrastructure rather
+than local-machine access or a new workflow. For #22116, the existing
+`Tests / Run VS Code extension unit tests (Windows)` job in
+`.github/workflows/tests.yml` is the identified path; use its normal PR
+workflow and preserve termination assertions. This path has not yet produced
+a new baseline or established the failure's cause. Publication, human-only
+merge, new-issue approval and no-rolling-rerun safeguards remain.
 See the intake record for observed post-change execution, not configuration alone.
 
 The first generation-35 Scout pass actually scanned all four label sets and

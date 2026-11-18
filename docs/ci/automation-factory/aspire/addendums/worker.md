@@ -32,3 +32,14 @@ help rather than guessing.
   flaky classification and frequency evidence current as work is investigated.
   Do not lower another item's priority or close issues solely to reorder the
   list.
+
+## Windows and macOS reproduction
+
+Use an existing relevant Aspire CI job through its normal investigation-branch
+or PR path rather than requiring access to a developer's local Windows or macOS
+machine or adding a new workflow. For #22116, use the existing `Tests / Run VS
+Code extension unit tests (Windows)` job in `.github/workflows/tests.yml` to
+capture the exact-case baseline and reproduce the affected test. Preserve the
+termination assertions. Never dispatch, cancel, or rerun a `main` or
+`release/*` rolling workflow. If the existing job cannot exercise the exact
+case, report the limitation and keep the result unvalidated.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T19:57:56Z",
+  "recordedAt": "2026-11-18T20:38:15Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
@@ -23,18 +23,38 @@
       "No rolling workflow reruns, cancellations, or dispatches; no merges without a human.",
       "A new issue requires exact title/body review and explicit owner approval.",
       "Unknown or incomplete coverage is not success; preserve all prior effects and history."
-    ]
+    ],
+    "ownerWorkPolicy": {
+      "activeItemsMax": 3,
+      "activeP0Max": 2,
+      "priority": "Actionable P0 first; do not reserve an unused slot.",
+      "waitsNotConsumingActiveSlots": [
+        "CI",
+        "reproduction",
+        "PR review",
+        "human input",
+        "external access"
+      ],
+      "openCoordinatorPRReviewMax": {
+        "nonP0": 3,
+        "P0": 10,
+        "draftsAllowed": true,
+        "doNotMarkReadyAboveCap": true
+      },
+      "scoutIntakeWallClockBudgetMinutes": 30,
+      "windowsMacOSReproduction": "Use an existing relevant Aspire CI job through its normal investigation-branch or PR path; do not require a local machine or add a new workflow."
+    }
   },
   "automationRevisions": {
     "scout": {
-      "generation": 35,
-      "revisionId": "49f16e60-f9c5-4034-9ef2-0e9c1b5189c4",
+      "generation": 36,
+      "revisionId": "896acd4d-8810-45dd-89da-cacdc56d2043",
       "scheduleUtc": "*/15 * * * *",
       "enabled": true
     },
     "worker": {
-      "generation": 24,
-      "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+      "generation": 25,
+      "revisionId": "0b0ab18f-1974-4503-8f61-341421012e2f",
       "scheduleUtc": "5,25,45 * * * *",
       "enabled": true,
       "maxConcurrentRuns": 1
@@ -110,10 +130,10 @@
   "ownershipAndLeases": {
     "scoutLease": {
       "artifact": "cif:scout/lease",
-      "revision": 162,
-      "etag": "sa1-9ee0b28336dd03dedab5ec6fe785823d0fbbc995cbb30e5c439723cc7873718c",
-      "expiresAt": "2026-11-18T20:26:48Z",
-      "session": "unknown",
+      "revision": 166,
+      "etag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
+      "expiresAt": "2026-11-18T20:56:37.96686969Z",
+      "session": "e8e48e2a-5397-42c9-9224-45213bd56745",
       "action": "Treat as held. Do not start a duplicate Scout, release it, or infer the writer stopped from expiry; re-read and reconcile its owner/run first."
     },
     "handoffs": [
@@ -144,12 +164,14 @@
         "artifact": "cif:handoff/22116",
         "revision": 8,
         "etag": "sa1-785bd9f54b7f17e46a0995ea23d33b9d9b808401ac7137a5b6347e8d89072b63",
-        "status": "needs-human",
+        "status": "needs-human; Windows access path identified, exact-case baseline and cause remain unknown",
         "owner": null,
         "cleanYield": true,
         "unresolvedEffects": [],
         "humanAskSince": "2026-11-18T12:17:00Z",
-        "humanAsk": "Provide an authorized Windows VS Code extension-host test path or an exact-case baseline log. Root cause remains unknown; do not weaken termination assertions or dispatch a replacement."
+        "humanAsk": "Use the existing Windows VS Code unit-test job through the normal PR path to capture the exact-case baseline; root cause remains unknown. Preserve termination assertions.",
+        "ownerResolutionComment": "https://github.com/microsoft/aspire/issues/22116#issuecomment-6990794905",
+        "action": "The path is identified but not yet validated. Have the next Worker pass read the comment and verify the exact test using the existing CI job; do not claim a baseline result or root cause."
       },
       {
         "item": 20513,
@@ -172,20 +194,67 @@
     ],
     "inventoryLimit": "This is a targeted current-state inventory, not proof that no other claims exist. Before dispatch or release, read the current bounded claims/handoffs with pagination and exact-name reads; retain cursors and ETags."
   },
+  "latestManagerObservations": {
+    "observedAt": "2026-11-18T20:36:36Z",
+    "currentScoutRun": {
+      "runId": "556dcde0d6bb72e52ad97a63a7a19ca344ea99d649387183df4b5d6d00f43fac",
+      "sessionId": "e8e48e2a-5397-42c9-9224-45213bd56745",
+      "revisionId": "49f16e60-f9c5-4034-9ef2-0e9c1b5189c4",
+      "state": "prompt_delivered; not proof of completion",
+      "scheduledFor": "2026-11-18T20:30:00Z",
+      "inputs": "One cron input page, exhausted; no owner question or task input was present."
+    },
+    "scoutLease": {
+      "revision": 166,
+      "etag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
+      "expiresAt": "2026-11-18T20:56:37.96686969Z",
+      "sessionId": "e8e48e2a-5397-42c9-9224-45213bd56745"
+    },
+    "promptUpdates": {
+      "worker": {
+        "generation": 25,
+        "revisionId": "0b0ab18f-1974-4503-8f61-341421012e2f",
+        "maxConcurrentRuns": 1,
+        "readback": "Enabled; model, tools, triggers, routing and run concurrency preserved."
+      },
+      "scout": {
+        "generation": 36,
+        "revisionId": "896acd4d-8810-45dd-89da-cacdc56d2043",
+        "readback": "Enabled; model, tools, triggers and schedule preserved. The already-admitted 20:30 run remains pinned to generation 35."
+      }
+    },
+    "ownerDecisionComment": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6990800402",
+    "workerConfiguration": {
+      "generation": 24,
+      "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+      "maxConcurrentRuns": 1
+    },
+    "capacityRead": {
+      "observedAt": "2026-11-18T20:28:58.921Z",
+      "workerActive": 0,
+      "workerLimit": 1,
+      "queued": 0,
+      "waiting": 0,
+      "blocked": 0,
+      "complete": false
+    },
+    "reconciliationNote": "A concurrent automation_list read reported three running Worker sessions with an incomplete active-run traversal. Do not treat either result as proof of ownership or termination; reconcile exact runs, claims and handoffs before dispatch or takeover.",
+    "statusIssue": "The owner decision resolves whether PR review waits consume active-item slots. Current configured run concurrency remains one; no parallel-run increase is claimed."
+  },
   "openDecisionsAndBlockers": [
     {
       "id": "capacity-policy",
       "since": "2026-11-18T09:54:00Z",
-      "decision": "Do in-PR review waits continue consuming both non-P0 work slots, or should humans review/merge to free those slots? Current Worker WIP rule blocks new work; maxConcurrentRuns=1 and a requested increase to 3 has no supported update control and would not remove this WIP limit.",
-      "status": "owner decision pending",
-      "source": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6975063846"
+      "decision": "At most three active items and two P0; waits on CI, reproduction, PR review, human input or external access do not consume active slots. Separately cap coordinator-owned open PRs awaiting review at three non-P0 and ten P0; drafts are allowed but must not be marked ready above the cap.",
+      "status": "resolved by owner; run concurrency remains one",
+      "source": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6990800402"
     },
     {
       "id": "windows-test-access",
       "since": "2026-11-18T12:17:00Z",
-      "decision": "Supply the authorized Windows VS Code extension-host test path or exact-case baseline log for #22116.",
-      "status": "owner input pending",
-      "source": "https://github.com/microsoft/aspire/issues/22116#issuecomment-6974717591"
+      "decision": "Use the existing `Tests / Run VS Code extension unit tests (Windows)` job in `.github/workflows/tests.yml` through the normal PR path for #22116; preserve termination assertions.",
+      "status": "path identified; exact-case baseline and root cause remain unverified",
+      "source": "https://github.com/microsoft/aspire/issues/22116#issuecomment-6990794905"
     },
     {
       "id": "pr-22347-ownership",
@@ -251,7 +320,8 @@
     "Re-read this checkpoint's referenced artifacts at current ETags and live #22302, item, and PR state; read the legacy supervisor/state.json at its recorded ETag without overwriting it.",
     "Reconcile the current Scout lease holder/session and #22347 running handoff against exact run receipts; enumerate live claims/handoffs with cursor exhaustion before any dispatch or ownership change.",
     "Have the owner inspect the original Publisher call and failed worker deliveries through authorized paths; do not replay, resume, replace, or infer termination.",
-    "Wait for the owner decisions/access above. If #22116 access arrives, perform focused Windows verification without weakening assertions; do not change capacity or priorities on assumption.",
+    "The owner decisions are recorded in #22302 and the existing Windows test path in #22116; the next Worker must read that comment and verify the exact-case baseline without weakening assertions.",
+    "Reconcile the conflicting active-run counts before dispatch; current per-automation Worker concurrency remains one and no three-way run concurrency is claimed.",
     "At the next Supervisor pass, verify the 11/10 Scout job-log request audit, the 09:45 comparison, saved cursors and feedback continuation; report partial evidence as unknown and preserve all history."
   ],
   "authoritativeArtifactReferences": [

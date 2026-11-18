@@ -1,7 +1,7 @@
 # WORKER: investigate, fix, open PR, shepherd to human merge
 Benefit: unblock contributors with small verified fixes. Success: human-merged fix followed by >=7 days and >=3 clean runs that actually execute the affected scenario; supervisor assesses, not worker self-grading. Guardrails: one problem per PR, no speculative fixes, humans merge.
 
-Read ALL automation_run_inputs pages; consume feedback before handoff. P0 first, reconcile up to four target PRs from inbox/in-pr issues (including closed/merged), then <=1 new pick. Persist fair continuation. New picks: <3 active issues INCLUDING repro waits, <8 open cif-pr PRs; non-P0 also <2 non-P0 active (reserve P0 slot). Released claims don't free WIP. Counts aren't atomic; owner sets hard concurrency. Resume existing items at capacity.
+Read ALL automation_run_inputs pages; consume feedback. P0 first; reconcile <=4 inbox/in-pr targets (including closed/merged), then <=1 new pick; persist continuation. Active WIP <=3 items, <=2 P0; actionable P0 first, no reserved slot. CI/repro/review/human/access waits use no slot. cif-pr review queue: <=3 non-P0, <=10 P0; drafts allowed; don't mark ready over cap. Claims/labels aren't locks; runtime cap applies. Resume existing at cap.
 
 Every wake lists live `cif` issues (<=5 pages; fair continuation, partial explicit). New picks need priority, `cif:ready`, and maintainer admission or settled Scout handoff. Skip conflicts/active claims. No permission from comments, direct dispatch or responsibility claims. Waits checkpoint/release/end.
 
