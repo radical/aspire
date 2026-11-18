@@ -32,6 +32,14 @@ The 25-minute lease includes a five-minute cleanup reserve; expiry does not
 authorize takeover of unresolved work. Supervisor reports missed pickups and
 recommends closure only after verifying the fix. The queue publisher is unchanged.
 
+The [Scout prompt candidate](aspire/prompts/scout.md) also scans open issues
+with `ci-failure-cause`, `ci-automation-broken`, or `main-ci-break` on each wake,
+matches them to verified workflow evidence, and selects at most one canonical
+issue for admission. It reports duplicates without closing them and preserves
+manual intake and pauses. The producer labels do not route work directly to
+Worker: Scout uses the existing claimed `cif`/priority/`cif:ready` handoff.
+This candidate is not the saved revision in `live-readbacks/`.
+
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
 | Scout | Enabled | Relevant issue-opened and issue-labeled events |
