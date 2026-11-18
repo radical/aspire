@@ -50,6 +50,29 @@ coverage is unknown, not success.
 
 ## Sources and generation
 
+### Startup prompts
+
+`aspire/bootstraps/` contains the four paste-ready startup prompts. Each loads
+one Markdown runbook from a full commit SHA in this public fork and validates
+its exact size and SHA-256. Scout, Worker, and Supervisor use the corresponding
+generated files in `aspire/prompts/`; Work Queue publisher uses
+`aspire/publisher.md`. The fork is not a work target. Do not publish private
+instructions, credentials, or internal evidence in these runbooks.
+
+For changes, edit the runbook sources, regenerate the standalone files if
+needed, and commit and publish the reviewed runbooks first. Then run
+`python3 docs/ci/automation-factory/aspire/build_bootstraps.py <runbook-commit-sha>`
+and use the resulting startup prompts for prompt-only updates. Retain the old
+pins and prompts for rollback. Branch edits do not change a saved pin.
+
+The startup prompts are **not deployed**. Anonymous access from the authoring
+environment does not prove access from automation runtimes. These are prompt
+instructions, not runtime enforcement or a replacement for scoped grants.
+After a prompt-only rollout, check the next expected wake for `BOOTSTRAP_OK`
+and the expected pin, or investigate `BOOTSTRAP_BLOCKED` or missing evidence
+independently of Supervisor. A completed run alone proves neither successful
+startup nor useful work.
+
 `docs/ci/automation-factory/aspire/common.md` plus each lane fragment produces a
 standalone file under `docs/ci/automation-factory/aspire/prompts/`.
 The generator does not append the historical `self-audit.md` suffix. The
