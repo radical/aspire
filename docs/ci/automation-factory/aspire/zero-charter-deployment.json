@@ -1,6 +1,7 @@
 {
   "repository": "microsoft/aspire",
-  "sourceCommit": "71b93f6a6f1d43ea13d29344874c3263ee40929e",
+  "initialCharterSourceCommit": "71b93f6a6f1d43ea13d29344874c3263ee40929e",
+  "latestPublishedSourceCommit": "db0e726708cd48c4fb560091cab261f38b6803b2",
   "state": "applied_readback_verified",
   "proposals": [
     {
