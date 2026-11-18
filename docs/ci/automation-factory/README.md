@@ -25,8 +25,9 @@ an exact title/body preview and explicit approval before filing. Recovery may
 reuse stalled work only after a clean handoff or verified writer termination
 and reconciliation of prior effects; expiry alone never authorizes takeover.
 Models, grants, concurrency, responsibility routing and root settings are
-preserved. The [deployment record](aspire/zero-charter-deployment.json) contains
-the authoritative applied revisions, schedules and runtime-validation gaps.
+preserved. The [charter deployment record](aspire/zero-charter-deployment.json)
+retains the earlier rollout; the [intake correction record](aspire/intake-deployment.json)
+records the subsequent applied revisions and runtime-validation gaps.
 The zero-rolling-failure, zero-flake and PR first-attempt failure-rate
 target (<40%) prompts are applied and enabled.
 Two identical Scout proposals were created against the same base generation;
@@ -44,18 +45,18 @@ unverified runtime dependencies, not green.
 
 The exact pre-rollout prompt snapshots and their revision metadata are retained
 in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
-Current revisions are Scout generation 34, Worker generation 24, Supervisor
-generation 23 (all enabled), and Work Queue publisher generation 2 (enabled).
-The current prompt candidates are 11,337, 11,969 and 11,903 characters,
+Current revisions are Scout generation 35, Worker generation 24, Supervisor
+generation 24 (all enabled), and Work Queue publisher generation 3 (enabled).
+The current prompt candidates are 11,416, 11,969 and 11,848 characters,
 respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch alone does
 not change, enable, or run any automation; the current revisions were applied
-separately through owner-approved proposals.
+separately through the supported configuration flow.
 
 The current Scout schedule is `*/15 * * * *`, Worker is `5,25,45 * * * *`,
-Supervisor is `40 * * * *`, and the Publisher remains `*/10 0 * * *` (only
-during UTC hour 00). The Scout readback fetches its separately versioned-in-branch
+Supervisor is `40 * * * *`, and the Publisher is `*/10 * * * *` (all day,
+corrected from UTC hour 00 only). The Scout readback fetches its separately versioned-in-branch
 `addendums/scout.md` at runtime, so the snapshot does not include later changes
 to that fetched file.
 
@@ -69,18 +70,64 @@ recommends closure only after verifying the fix. The queue publisher is unchange
 
 The [Scout prompt candidate](aspire/prompts/scout.md) also scans open issues
 with `ci-failure-cause`, `ci-automation-broken`, or `main-ci-break` on each wake,
-matches them to verified workflow evidence, and selects at most one canonical
-issue for admission. It reports duplicates without closing them and preserves
+matches them to verified workflow evidence, and selects at most three canonical
+issues for admission. It may close verified duplicates with a canonical-link comment
+only after claim, ownership, equivalence and unresolved-effect checks; it preserves
 manual intake and pauses. The producer labels do not route work directly to
 Worker: Scout uses the existing claimed `cif`/priority/`cif:ready` handoff.
 The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
-| Scout | Enabled, generation 34 | Relevant issue events; every 15 minutes |
+| Scout | Enabled, generation 35 | Relevant issue events; every 15 minutes |
 | Worker | Enabled, generation 24 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
-| Supervisor | Enabled, generation 23 | Hourly at :40 |
-| Work Queue publisher | Enabled, generation 2 | Every 10 minutes during UTC hour 00 |
+| Supervisor | Enabled, generation 24 | Hourly at :40 |
+| Work Queue publisher | Enabled, generation 3 | Every 10 minutes all day |
+
+### Admission and supervised improvement
+
+Actual generation-34 Scout tool results queried all three producer labels plus
+`cif`; CIF-only discovery was not the failure. A denied legacy-cursor transfer
+targeted a different session's directory. The old prompt coupled unresolved
+publication handling to new effects, and completed passes did rate-heavy work
+without admissions. These are evidenced mechanisms, not proof that metrics alone
+caused every missed admission. Generation-24 Worker correctly found no ready work
+among its two admitted, already-in-PR issues.
+
+Scout now verifies and deduplicates individual candidates before optional source
+refresh, examines up to six candidates and admits up to three distinct canonical
+issues. Unverifiable items get individual reasons, not a global hold. A fresh,
+bounded `scout/cursor-v2.json` may be created under the Scout lease; legacy state,
+live claims and unresolved effects are not deleted or declared reconciled.
+Seven-day rate computation belongs to Supervisor, not Scout.
+
+Supervisor now inspects actual recent Scout, Worker and Publisher tool evidence
+before refreshing metrics. It may make one bounded, authorized prompt/cadence/
+concurrency correction per pass, persist it on this fork branch, and verify the
+next two comparable completed runs (up to two hours). Ineffective changes are
+conditionally rolled back without overwriting concurrent edits. Its change
+table in #22302 records old/new generations, evidence and observed effects;
+delivery counts are not outcome evidence.
+
+Worker's admission and claim boundary is unchanged. Its requested concurrency
+of three is **not applied**: the exposed update schemas do not accept that
+setting, so the owner must use a supported configuration control. Publication,
+human-only merge, new-issue approval and no-rolling-rerun safeguards remain.
+See the intake record for observed post-change execution, not configuration alone.
+
+The first generation-35 Scout pass actually scanned all four label sets and
+admitted #22116 with a settled, clean-yield handoff. Its ready-label event reached
+Worker generation 24, whose complete live query saw the item but whose final
+response declined investigation: both non-P0 slots were occupied by #22191 and
+#22347, already in PR. This is not a successful investigation pickup. Supervisor's
+first updated pass inspected actual tool evidence and [raised the precise
+capacity-policy decision](https://github.com/microsoft/aspire/issues/22302#issuecomment-6975063846):
+retain that interpretation and free capacity through human review/merge, or
+explicitly clarify whether review waits consume active-investigation slots.
+Raising execution concurrency alone does not remove that work limit. No priority
+was inflated, claim bypassed or guardrail silently relaxed. Scout also reported
+one job-log request above its cap; guardrail-clean sustained improvement and two
+comparable completed opportunities remain unverified.
 
 GitHub issues are the queue, one edited issue comment is each item's checkpoint,
 and expiring artifact claims coordinate cooperating writers. All lanes acquire

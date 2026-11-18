@@ -1,0 +1,156 @@
+{
+  "repository": "microsoft/aspire",
+  "publicationRepository": "radical/aspire",
+  "publicationBranch": "cif/aspire-ci-group",
+  "promptSourceCommit": "8c5d55478a07f639cc1eab36b3770086703cc3a6",
+  "state": "intake_verified_worker_start_blocked_by_capacity_policy",
+  "changes": [
+    {
+      "lane": "scout",
+      "automationId": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
+      "oldGeneration": 34,
+      "newGeneration": 35,
+      "revisionId": "49f16e60-f9c5-4034-9ef2-0e9c1b5189c4",
+      "appliedAt": "2026-11-18T09:22:32Z",
+      "promptSha256": "607191a7553b39e9de63d1df234752149d1882c56d1441daf883251ad35ab574",
+      "cronUtc": "*/15 * * * *",
+      "enabled": true,
+      "fieldsChanged": ["prompt"],
+      "expectedEffect": "Admission before metrics; verify at most six individual candidates and admit up to three canonical issues. Local exclusions do not block unrelated work. Fresh bounded cursor-v2 does not require legacy cursor migration.",
+      "postChangeExecution": {
+        "runId": "bac60da0e0dd4e018dbf1fbf2930c88f41952985c8352035c7e18c2eea5bae57",
+        "scheduledFor": "2026-11-18T09:30:00Z",
+        "inputs": "One cron input; pagination exhausted.",
+        "labelCounts": {
+          "ci-failure-cause": 75,
+          "ci-automation-broken": 0,
+          "main-ci-break": 11,
+          "cif": 2
+        },
+        "distinctOpenIssues": 76,
+        "candidatesExamined": 6,
+        "admitted": [22116],
+        "evidence": "Actual complete label-query tool input/output, source ledger write, fenced settled handoff write and item-claim release inspected. Live issue has cif, cif:p1 and cif:ready; state comment6974717591. No seven-day metrics computed; optional discovery skipped.",
+        "sourceRuns": ["42925038803/1/130211868868", "42937622671/1/130252348899", "43529725415/1/132244808745"],
+        "signature": "Windows VS Code unit: CLI process termination rejects when signaling a PID-less child throws; countTimers assertion 2 !== 0.",
+        "handoff": {
+          "tag": "cif",
+          "name": "handoff/22116",
+          "revision": 5,
+          "etag": "sa1-ff7872360a39fefcf1b0f442a7547d8f3898f014ef672118d68ceb60add52858",
+          "cleanYield": true,
+          "unresolvedEffects": [],
+          "commitOperationId": "296b730e-bbe4-5e33-9d2b-7e701470ea3f",
+          "claimReleaseOperationId": "01994d2f-51c5-555f-a59d-d824a08054c0"
+        },
+        "otherDispositions": {
+          "22120": "Exact matching signature; older22116 canonical. Left open, not closed without full duplicate-close checks.",
+          "21886,22062": "Scout found merged21922 covering the affected tests; no duplicate fix admitted.",
+          "22279": "Historical ARM64 archive failure verified; current Unzip change still needs comparable post-change result.",
+          "21698": "CS0103 precedes timeout; compare22289 before treating as the same cause.",
+          "22191,22347": "Already in PR; existing work preserved."
+        },
+        "guardrailFollowUp": "Scout reports11 job-log requests against cap10, including3 CLI-rejected requests. Not counted as guardrail-clean success; retain for Supervisor verification/correction."
+      }
+    },
+    {
+      "lane": "worker",
+      "automationId": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
+      "oldGeneration": 24,
+      "newGeneration": 24,
+      "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+      "cronUtc": "5,25,45 * * * *",
+      "enabled": true,
+      "fieldsChanged": [],
+      "maxConcurrentRuns": 1,
+      "requestedMaxConcurrentRuns": 3,
+      "concurrencyBlocker": "Neither exposed update schema accepts maxConcurrentRuns. Requires an owner-supported configuration control; no undocumented field or endpoint used.",
+      "postChangeHandoff": {
+        "runId": "b189106db8c7c8e4f154373fb9e4f779d2aff1f361d2750209b2eb771b0dc194",
+        "source": "ready-label webhook for22116 at2026-11-18T09:40:51Z",
+        "sessionId": "09730569-e1b7-4330-b914-41c4e0acb8e9",
+        "evidence": "Complete GraphQL tool result enumerated3 CIF issues, including ready22116, and3 open cif-pr PRs. Complete final response explicitly declined to start22116 because both non-P0 slots were occupied by in-PR items22191/22347.",
+        "startedInvestigation": false,
+        "interpretation": "Discovery, admission, settled handoff and event consumption verified. Investigation pickup is NOT verified. Do not equate event delivery with a claim or bypass WIP by changing priority.",
+        "humanDecision": "Retain the current interpretation and free capacity through human review/merge, or explicitly clarify whether in-PR review waits should consume non-P0 active-investigation slots.",
+        "supervisorAskUrl": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6975063846"
+      }
+    },
+    {
+      "lane": "supervisor",
+      "automationId": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
+      "oldGeneration": 23,
+      "newGeneration": 24,
+      "revisionId": "c7812ff8-42ab-4280-a4af-4933295550c4",
+      "appliedAt": "2026-11-18T09:23:11Z",
+      "promptSha256": "b392e8c79e1cebf532fd9675b356e28b9867317adb6f7a8aadac6e81165c0f0c",
+      "cronUtc": "40 * * * *",
+      "enabled": true,
+      "fieldsChanged": ["prompt"],
+      "expectedEffect": "Execution/tool-result inspection first; one evidence-backed configuration experiment per pass; verify following comparable runs, conditionally roll back ineffective changes, report attributed generations/evidence/effect in #22302.",
+      "postChangeExecution": {
+        "runId": "447d12953124cb2f6256d7c391daf453c625084a7b1a1eb4e1d28f3b96d1c267",
+        "scheduledFor": "2026-11-18T09:40:00Z",
+        "evidence": "Captured actual automation_run_inspect calls selected Scout and Publisher execution evidence and the exact Worker live GraphQL tool6WlDRwZVDiZCdOEOZ4jOeWX7. Supervisor independently identified non-P0 capacity as distinct from execution concurrency and published the specific human guardrail decision.",
+        "result": "Improvement loop is executing, not just configured. First admission observed; two comparable completed Scout opportunities and actual Worker investigation remain unverified.",
+        "humanAskUrl": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6975063846"
+      }
+    },
+    {
+      "lane": "publisher",
+      "automationId": "164fdd00-1201-40b1-b2c6-af24471acf19",
+      "oldGeneration": 2,
+      "newGeneration": 3,
+      "revisionId": "502ca13a-8923-46ae-960e-b56f0dad4d41",
+      "appliedAt": "2026-11-18T09:19:44Z",
+      "promptSha256": "596eaa815a07b53406ee2fefa27ac5fe9602d7f0f1931af89ba980ba2b2a17c7",
+      "oldCronUtc": "*/10 0 * * *",
+      "cronUtc": "*/10 * * * *",
+      "enabled": true,
+      "fieldsChanged": ["triggers"],
+      "postChangeExecution": {
+        "runId": "3874f2b601400efac0899dbd20dea2cd613ea232ee4147f71163416dd57c276a",
+        "scheduledFor": "2026-11-18T09:20:00Z",
+        "evidence": "Actual complete GraphQL tool result enumerated both CIF issues with hasNextPage=false and verified both PRs open/non-draft. Execution outside hour 00 confirms corrected cadence is being used. No new intake existed in this snapshot."
+      }
+    }
+  ],
+  "baselineEvidence": [
+    {
+      "runId": "3a1e734fa1d69091ad88fac859fca9de40ceae8d084281d8cb821695754306ee",
+      "lane": "scout",
+      "generation": 34,
+      "revisionId": "a29115fb-057e-4252-86a3-39858ce18ca4",
+      "scheduledFor": "2026-11-18T09:00:00Z",
+      "evidence": "Complete tool input/output queries ci-failure-cause, ci-automation-broken, main-ci-break and cif separately. Legacy cursor download to another session directory was denied with no effect (operation ee592a7e-5260-5159-9825-e81966da8cb1). Complete final text reports zero admissions, partial producer coverage, rate-heavy work and deferred source verification.",
+      "interpretation": "CIF-only discovery disproved. Metric starvation is supported by execution ordering, not established as the sole cause. Missing exact per-item verification is distinct from legitimate exclusions."
+    },
+    {
+      "runId": "9b6123d237ceb2f21d15aef09faddd6b40cb81117fd59027e62325b8095d2183",
+      "lane": "worker",
+      "generation": 24,
+      "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+      "scheduledFor": "2026-11-18T08:45:00Z",
+      "evidence": "Complete GraphQL result enumerated exactly two CIF issues (#22191/#22347), both in-pr, with no remaining pages and no ready work.",
+      "interpretation": "Worker's CIF admission boundary is correct. Neither an in-PR item nor an ambiguous prior handoff authorizes a duplicate editor."
+    }
+  ],
+  "preservedSafeguards": [
+    "Human-only merges and explicit title/body approval for every new issue",
+    "No rolling workflow reruns, cancellations or dispatches",
+    "Per-item claims, fenced effects, canonical deduplication and settled handoff before Worker pickup",
+    "No live claim, active ownership or unresolved effect deleted",
+    "Goals, tools, grants, models, responsibility routing and enabled states unchanged"
+  ],
+  "verification": {
+    "sourceMatchesDeployedScoutAndSupervisor": true,
+    "sourceHashCorrection": "Source initially omitted a deployed tie-break phrase. Commit 8c5d55478a07f639cc1eab36b3770086703cc3a6 aligns source without another live configuration mutation.",
+    "handoff": "Settled Scout handoff and subsequent Worker event consumption established for22116; no investigation started because Worker applies non-P0 WIP to both review-wait items.",
+    "humanBlockers": [
+      "Owner decision on whether in-PR review waits consume the two non-P0 work slots, or human review/merge to free those slots",
+      "Requested maxConcurrentRuns3 requires an owner-supported configuration control; increasing concurrency alone does not remove WIP"
+    ],
+    "reportUrl": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6974642858",
+    "coverageCaveat": "ci-automation-broken query returned zero in inspected baseline. A differently named automation-broken label is not evidence that the required query was skipped."
+  }
+}
