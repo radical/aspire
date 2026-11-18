@@ -1,0 +1,70 @@
+{
+  "repository": "microsoft/aspire",
+  "sourceCommit": "71b93f6a6f1d43ea13d29344874c3263ee40929e",
+  "state": "pending_owner_approval",
+  "approvalLocation": "Automation proposals / Apply proposal",
+  "proposals": [
+    {
+      "lane": "scout",
+      "automationId": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
+      "proposalId": "093a19d6-b8c9-52d2-916b-e025612a52d9",
+      "expectedGeneration": 32,
+      "effectiveChangedFields": ["prompt", "triggers"],
+      "addedCronUtc": "*/15 * * * *",
+      "savedEnabled": true
+    },
+    {
+      "lane": "worker",
+      "automationId": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
+      "proposalId": "6e2bec97-b71c-5d39-9b59-c1918c383aed",
+      "expectedGeneration": 22,
+      "effectiveChangedFields": ["prompt", "triggers"],
+      "addedCronUtc": "5,25,45 * * * *",
+      "savedEnabled": true
+    },
+    {
+      "lane": "supervisor",
+      "automationId": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
+      "proposalId": "39f8fdea-6dac-5f85-879b-006d4e78c008",
+      "expectedGeneration": 21,
+      "effectiveChangedFields": ["enabled", "prompt"],
+      "preservedCronUtc": "40 * * * *",
+      "savedEnabled": false,
+      "proposedEnabled": true
+    }
+  ],
+  "duplicateProposal": {
+    "proposalId": "08a602e8-8840-5d58-a2f1-a51c732f53bb",
+    "lane": "scout",
+    "cause": "Interrupted request persisted a proposal despite an aborted response; unchanged saved generation did not prove absence of a proposal.",
+    "verified": "Same base generation, effective changed fields, prompt digest and trigger digest as the selected Scout proposal.",
+    "action": "Dismiss this duplicate; apply only 093a19d6-b8c9-52d2-916b-e025612a52d9. No proposal-dismiss tool is available to this session."
+  },
+  "verification": {
+    "comparisonsComplete": true,
+    "candidatePromptsExactlyMatchPublishedFiles": true,
+    "scoutAndWorkerEnablementPreserved": true,
+    "unrelatedConfigurationPreserved": true,
+    "savedGenerationsUnchanged": true,
+    "runtimeBehavior": "unverified; no new run dispatched",
+    "futureRunAdoptionOnly": true
+  },
+  "coverage": {
+    "latestRelease": "release/17.0",
+    "executionGate": "enabled at final readback",
+    "githubEvents": "Configured; workflow_run delivery remains paused deployment-wide. Paused events are not replayed.",
+    "rollingCoverage": "Gap remains until scheduled discovery is approved and its source coverage is verified. Issue events alone are insufficient.",
+    "workerRecovery": "No periodic recovery until approval.",
+    "ongoingStatus": "Existing issue #22302; Supervisor remains disabled until approval.",
+    "publisher": "Unchanged generation 2; cron */10 0 * * * runs only during hour 00 UTC, not every ten minutes all day.",
+    "githubReadBinding": "credential_not_bound; existing authorized read credential is the supported fallback",
+    "azureDevOpsAndCiInsights": "unknown"
+  },
+  "preservedPolicies": [
+    "0% rolling failures and zero flaky-test failures; transient-network failures count but receive no fix attempts",
+    "Existing work is correlated and deduplicated; no duplicate editor or takeover without verified safe recovery",
+    "Existing status and queue issues reused; every new issue requires exact title/body approval before filing",
+    "Human-only merges; no root model, approval-mode or agent-mode changes"
+  ],
+  "nextVerification": "After owner application, reread authoritative revisions, enablement and schedules; inspect the next scheduled executions and source coverage before claiming restored continuous operation."
+}

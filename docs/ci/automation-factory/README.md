@@ -25,9 +25,15 @@ an exact title/body preview and explicit approval before filing. Recovery may
 reuse stalled work only after a clean handoff or verified writer termination
 and reconciliation of prior effects; expiry alone never authorizes takeover.
 Models, grants, concurrency, responsibility routing and root settings are
-preserved. Saved deployment results are recorded separately after readback.
+preserved. The [deployment record](aspire/zero-charter-deployment.json) contains
+the three pending owner-approval proposals and verified effective changes.
+None is applied: Scout and Worker still lack crons, and Supervisor is disabled.
+Apply the selected Scout, Worker and Supervisor proposals in Automation proposals;
+dismiss the duplicate Scout proposal identified in the record. The interrupted
+request created that duplicate even though the saved generation stayed unchanged.
 
-At the authoring readback, deployment-wide GitHub event delivery was paused.
+At final readback, GitHub event delivery was configured, but `workflow_run`
+delivery remained paused deployment-wide, with no replay of missed events.
 Cron/manual execution is separate; issue-event configuration alone is not
 continuous source coverage. The read credential binding, Azure DevOps and
 CI Insights availability remain unverified runtime dependencies, not green.
