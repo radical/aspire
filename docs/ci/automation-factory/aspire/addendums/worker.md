@@ -16,10 +16,12 @@ comparable passes can indicate a deterministic regression. If evidence is
 incomplete or conflicting, record the classification as unknown and ask for
 help rather than guessing.
 
-- Any unresolved rolling break inherits P0, including flaky failures.
-  Its tracking issues, fix/mitigation/quarantine/disable PRs and release
-  backports use P0 slots and review allowances. Reconcile stale priorities
-  under the item claim before counting capacity.
+- Critical rolling scope is only `ci.yml` and `tests-outerloop.yml` on `main`
+  and the latest numeric release. A first-seen test failure in this scope starts
+  P0; blocking non-test failures are P0. The owner is clarifying whether repeat
+  test hits or mitigation change priority. Do not automatically demote; preserve
+  the current human-approved priority. Linked PRs/backports inherit that current
+  priority. Other workflows remain separately tracked.
 - For a suspected or confirmed flaky test, use or update its canonical
   `flaky-test` work item and signature evidence; do not create a second queue or
   duplicate issue. Keep each occurrence tied to its source workflow, run,
@@ -28,10 +30,32 @@ help rather than guessing.
   run-attempts in the shared 14-day signature window. Count a run-attempt only
   once for the same signature; multiple SHAs in one attempt do not add hits.
   Break ties by the older work item. This frequency ordering applies within the
-  flaky-test list; it never outranks actionable rolling P0 work.
-- Flakiness does not lower an unresolved rolling break below P0. Keep the
-  classification and frequency evidence current; do not lower unrelated
+  flaky-test list; it never outranks actionable critical-scope P0 work.
+- Keep flakiness classification and frequency evidence current. Frequency
+  informs ordering, not automatic priority demotion; do not lower unrelated
   priorities or close issues merely to reorder the list.
+
+## One-day follow-up for P0 rolling fixes
+
+For an open, non-draft P0 PR fixing a `ci.yml` or `tests-outerloop.yml` issue
+on `main` or the latest numeric release, wait 24 hours after the latest
+ready-for-review handoff on the current head. Before a follow-up, reread the
+issue, PR state/head/checks, review requests, all conversation comments,
+reviews, and inline threads. If a human reviewer has responded, the PR is
+paused/closed, the head changed, or review is otherwise no longer pending, do
+not ping; reconcile the state instead.
+
+When overdue, select one requested reviewer who is a relevant CODEOWNER for
+the changed files. Do not ping the PR author if an appropriate requested
+reviewer is available. If no suitable reviewer can be identified, ask the
+owner rather than guessing. Under the issue claim, persist the follow-up intent
+and exact reviewer/head/request key before commenting. Search current comments
+for an existing ping for that same unanswered request before posting. Public
+automated comments must begin `[automated] `, mention only the selected person,
+and contain no internal tooling or session details. Record the resulting
+comment ID and timestamp in the item's state; reconcile an uncertain write
+before retrying. Never repeat a ping for the same head and outstanding review
+request. A new head or a new human review request starts a new 24-hour window.
 
 ## Windows and macOS reproduction
 

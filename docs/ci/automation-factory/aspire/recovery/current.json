@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T21:16:20Z",
+  "recordedAt": "2026-11-18T22:38:33Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
     "automationTarget": "microsoft/aspire",
     "publicationRepository": "radical/aspire",
     "publicationBranch": "cif/aspire-ci-group",
-    "branchTipBeforeCheckpoint": "142d59aee50ac0cb30a0fe9c8b55f70fec50400a",
+    "branchTipBeforeCheckpoint": "a08478c483e3c10f60e52ba6aba777356a1a5cd1",
     "sourcePromptCommit": "142d59aee50ac0cb30a0fe9c8b55f70fec50400a",
     "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
   },
   "charter": {
     "outcomes": [
-      "0% rolling-build failures on main and the latest numeric release branch",
+      "0% attempt-one failures in critical rolling ci.yml and tests-outerloop.yml on main and the latest numeric release branch",
       "zero flaky-test failures in rolling and PR CI",
       "PR first-attempt failure rate below 40%"
     ],
@@ -27,7 +27,7 @@
     "ownerWorkPolicy": {
       "activeItemsMax": 3,
       "activeP0Max": 2,
-      "priority": "Actionable main/latest-release push/scheduled and Outerloop P0 before ALL other work, including other P0. No reserved unused slot; no preemption of an active writer.",
+      "priority": "Only ci.yml and tests-outerloop.yml on main/latest numeric release are critical. First-seen test failures and blocking non-test failures start P0; repeated-test demotion is unresolved and must not be automated. Other workflows are tracked separately.",
       "waitsNotConsumingActiveSlots": [
         "CI",
         "reproduction",
@@ -42,13 +42,30 @@
         "doNotMarkReadyAboveCap": true
       },
       "scoutIntakeWallClockBudgetMinutes": 30,
-      "rollingFirst": "Every Scout run checks all push/scheduled workflows on main/latest numeric release before issue/label intake, including scheduled Outerloop and Quarantine.",
-      "rollingPriority": "All unresolved rolling breaks are P0, including flakes; tracking issues, fix/mitigation/quarantine/disable PRs and release backports inherit P0 slots and review allowances. Verified recovered transient-only failures are recorded, never fixed. Unknown cause is not transient.",
-      "rollingPersistence": "Last five eligible runs per workflow/branch, first/current attempts, red/green/unknown state and linked issues/PRs belong in #22302 and this checkpoint; preserve missing coverage and displaced history.",
-      "workflowFailureIntake": "For each verified actionable workflow failure, independently OR-search every known relevant label including automation-broken, plus label-free searches by actual signature/scope/evidence. Reuse eligible matches without requiring producer labels; apply cif/cif:p0 under safe claims. Incomplete or ambiguous search remains pending; distinct failures stay distinct.",
+      "rollingFirst": "Every Scout run checks only ci.yml and tests-outerloop.yml push/scheduled runs on main/latest numeric release before issue/label intake. Other workflows, including Quarantine, are tracked separately.",
+      "rollingPriority": "First-seen test failures and blocking non-test failures in critical scope start P0. No automatic demotion on repeat hits or mitigation while the owner clarifies the rule. Linked PRs inherit current issue priority. Recovered transient-only failures are recorded, never fixed. Unknown cause is not transient.",
+      "rollingPersistence": "Last five eligible critical runs per workflow/branch, first/current attempts, red/green/unknown state and linked issues/PRs belong in #22302 and this checkpoint; track other workflows separately and preserve missing coverage and displaced history.",
+      "workflowFailureIntake": "For each verified actionable workflow failure, independently OR-search every known relevant label including automation-broken, plus label-free searches by actual signature/scope/evidence. Reuse eligible matches without requiring producer labels; apply cif and the priority established by critical scope or existing human decision under safe claims. Incomplete or ambiguous search remains pending; distinct failures stay distinct.",
       "unmatchedFailureApproval": "Prepare exact public title/body and search evidence, show for explicit approval; no waiver. After exact-text approval refresh deduplication, pauses, ownership and prior filing effects before one create and safe labeling. Changed drafts need reapproval. No internal tool details.",
       "windowsMacOSReproduction": "Use an existing relevant Aspire CI job through its normal investigation-branch or PR path; do not require a local machine or add a new workflow."
     }
+  },
+  "scopeCorrection": {
+    "sourceRecordedAt": "2026-11-18T22:37:43Z",
+    "criticalWorkflows": ["ci.yml", "tests-outerloop.yml"],
+    "branches": ["main", "latest numeric release/x.y resolved from repository branches"],
+    "otherWorkflows": "Continue separate tracking; exclude from critical rolling rates and automatic critical P0 classification.",
+    "testFailurePriority": "First-seen critical test failure starts P0. Repeat-hit and mitigation demotion semantics await owner clarification; no automatic demotion.",
+    "publicQueue": "Issue #22406 was refreshed with the corrected critical scope and a bounded snapshot; automatic refresh at that issue is not verified.",
+    "liveDeploymentReadback": {
+      "checkedAt": "2026-11-18T22:37:43Z",
+      "status": "NOT DEPLOYED: live prompts still have the superseded broad workflow scope; the model catalog needed for a validated configuration update is unavailable in this session.",
+      "scout": {"generation": 38, "revisionId": "4af51da6-b16a-44db-8640-65c87b1b67ba"},
+      "worker": {"generation": 27, "revisionId": "eedb5459-dd40-4844-95fb-25ca58c41c57"},
+      "supervisor": {"generation": 26, "revisionId": "f8b3d374-472b-4f61-bfbf-f6ac0139e827"},
+      "publisher": {"generation": 3, "revisionId": "502ca13a-8923-46ae-960e-b56f0dad4d41", "targetIssue": 22369}
+    },
+    "historicalSnapshot": "rollingSnapshot remains the earlier broad discovery at 2026-11-18T21:03:30Z; it is not evidence that the superseded broad workflow scope remains critical."
   },
   "succession": {
     "status": "prior classification unverified and superseded; this checkpoint is recovery evidence, not an official procedure or authorization",
@@ -132,7 +149,7 @@
         ],
         "issueLinks": [],
         "pullRequestLinks": [],
-        "next": "Keep scheduled Quarantine in every rolling check; green run metadata does not prove zero flaky-test failures."
+        "next": "Track scheduled Quarantine separately; it is outside critical scope. Green run metadata does not prove zero flaky-test failures."
       },
       {
         "branch": "release/17.0",

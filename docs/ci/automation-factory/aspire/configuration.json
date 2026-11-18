@@ -72,7 +72,7 @@
         "artifact_list", "artifact_get", "artifact_put", "automation_run_inputs",
         "credentials_issue", "report_agent_output", "resolve_github_image"
       ],
-      "ownerConcurrencyRecommendation": 3
+      "ownerConcurrencyRecommendation": 1
     },
     "supervisor": {
       "id": "5afa0c55-1f55-4d64-950b-ce57deba34b5",

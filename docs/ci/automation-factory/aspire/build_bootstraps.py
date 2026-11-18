@@ -30,7 +30,7 @@ LANES = {
     "publisher": (
         "publisher.md",
         "Read live CIF issues and update only the existing managed dashboard block "
-        "in microsoft/aspire issue #22369. Do not create issues, change labels, "
+        "in microsoft/aspire issue #22406. Do not create issues, change labels, "
         "post comments, or dispatch work.",
     ),
 }
