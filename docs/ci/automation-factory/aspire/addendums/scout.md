@@ -19,3 +19,59 @@ If they conflict with the saved prompt, follow the saved prompt.
 - First inspect the last five eligible rolling runs per branch/workflow and save their current/first-attempt results, red/green/unknown state and linked issue/PR. Then continue intake within the 30-minute budget. Leave seven-day rate computation to Supervisor; persist continuation for incomplete coverage. Page by creation time with a two-hour overlap, refresh pending runs, and reconcile late retries. Reuse only verified provider/workflow/run/attempt evidence; receipts and coarse signatures cannot establish missing jobs or causes. Approval gates stay separate. Never cache mutable eligibility, ownership or PR heads.
 - Keep evidence completeness separate from severity: an observed unresolved rolling failure is P0 even before root cause is known. Missing evidence alone is unknown, not a failure or a pass.
 - CI Insights is optional and was unavailable in the audited session. If it becomes available, use it only for streams and attempts it demonstrably covers, behind its reported refresh watermark. The roughly 15-minute refresh interval is an expectation, not a measured guarantee. Use live GitHub for newer, missing, incomplete, or contradictory records and before decisions that depend on current state. Missing index data is never green; no CI Insights dependency or grant change is implied.
+
+## Private decision report (schema v1)
+
+Each run writes one private report so the owner can see what Scout considered,
+what it decided and why it stopped. It is evidence, not proof of success.
+Reuse what the run already verified; do not spend extra GitHub requests on it.
+
+- Tag `cif`. Name `scout/reports/<runId>.json`, where `<runId>` is the
+  64-hex automation run ID. Create-only and immutable; never rewrite it. Size
+  <=16384 UTF-8 bytes measured before the write; verify by readback.
+- Then update `scout/reports/latest.json`, a pointer <=1024 bytes:
+  `{"schemaVersion":1,"runId","name","status","finishedAt"}`. Create it
+  if absent, otherwise CAS with the read ETag. Advance it only when this
+  report's `finishedAt` is newer. On conflict reread; never overwrite a newer
+  pointer. Fence both writes with the Scout lease.
+- Report fields:
+  - `schemaVersion`: 1. `runId`; `sessionId` or null when unknown;
+    `automationId`; `revisionId`; `generation` (string).
+  - `reconstructed`: false for a live run. A report rebuilt later sets true,
+    adds `reconstruction` `{source,by,at,omissions[]}`, and states what is
+    unknown. Never invent details.
+  - `startedAt`, `finishedAt`: UTC ISO-8601.
+  - `status`: `completed` only when every planned scope was examined;
+    `partial` when stopped early with saved continuation; `blocked` when a
+    precondition (lease, ownership, access, storage) prevented the planned
+    scan; `failed` for an unexpected tool or run error.
+  - `coverage`: `{summary, scanned[], omitted[]}` in plain language. Name
+    every branch/workflow/label/search actually covered and each omission.
+  - `items[]`: one entry per candidate actually examined this run:
+    `{kind, title, url, priority, decision, reason, evidence[]?, issueUrl?,
+    prUrls[]?, nextAction?}`.
+    - `kind`: `rolling_run`, `workflow_failure`, `issue`, `pr`, `search` or
+      `draft`.
+    - `priority`: `P0`..`P3` or `unknown`.
+    - `decision`: `matched`, `admitted`, `draft_pending_approval`,
+      `duplicate`, `no_action`, `deferred`, `unverified`, `pending` or
+      `tracked_transient`.
+    - `reason`: one or two human-readable sentences with the concrete fact
+      that drove the decision. No internal tool names.
+    - Group identical-signature failures in one item only when every grouped
+      source run/job is listed in `evidence`.
+  - `truncated`: `{omittedItems, note}` when the size cap forces dropping
+    items; drop lowest-priority items first and keep counts. Absent otherwise.
+  - `stop`: `{reason, detail, continuation?}`. `reason` is one of
+    `exhausted` (normal end of planned scope), `budget` (time or request
+    budget), `rate_limit`, `evidence_unavailable`, `lease_or_ownership`,
+    `storage`, `tool_failure` or `other`. `continuation` names the
+    remaining scope in plain language.
+- Never list an item you did not examine. Unexamined scope belongs in
+  `coverage.omitted` or `stop.continuation`.
+- If either write fails or its outcome is unknown, record the exact error and
+  the unpublished name in the end log `blockers`; do not retry blindly, delete,
+  or move the report elsewhere. Reconcile an unknown outcome by reading the
+  name first.
+- Reports are private. Never copy them or tool details into public issues or
+  PRs.

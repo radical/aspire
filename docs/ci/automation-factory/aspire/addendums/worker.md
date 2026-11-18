@@ -35,11 +35,45 @@ help rather than guessing.
 
 ## Windows and macOS reproduction
 
-Use an existing relevant Aspire CI job through its normal investigation-branch
-or PR path rather than requiring access to a developer's local Windows or macOS
-machine or adding a new workflow. For #22116, use the existing `Tests / Run VS
-Code extension unit tests (Windows)` job in `.github/workflows/tests.yml` to
-capture the exact-case baseline and reproduce the affected test. Preserve the
-termination assertions. Never dispatch, cancel, or rerun a `main` or
-`release/*` rolling workflow. If the existing job cannot exercise the exact
-case, report the limitation and keep the result unvalidated.
+Unavailable local Windows or macOS is not by itself a reason to ask the owner.
+Use one of these authorized CI routes, checked against the repository first:
+
+1. `.github/workflows/reproduce-flaky-tests.yml` when it supports the case.
+   It is `workflow_dispatch` only, runs only in `microsoft/aspire`, and is
+   configured by editing its `env` block on an owned investigation branch:
+   `TEST_PROJECT`, `TEST_FILTER` (MTP filters after `--`), `TARGET_OSES`
+   (`ubuntu-latest`, `windows-latest`, `macos-latest`), `RUNNERS_PER_OS` and
+   `ITERATIONS_PER_RUNNER`. Read the current file on the target ref before
+   use; inputs may change. Use the `fix-flaky-test` skill.
+2. Otherwise a narrowly scoped `ci.yml` investigation. `ci.yml` has no manual
+   trigger; it runs on `pull_request` to `main`/`release/**`. Open a draft
+   investigation PR from an owned branch whose temporary commit restricts the
+   test selection to the needed test(s)/project(s) and one target OS. Follow
+   `.github/instructions/test-trigger-map.instructions.md` when touching
+   selection or routing. Title it as an investigation; never mark it ready,
+   and close it when done.
+
+Before dispatch, verify the workflow's actual inputs, filters, permissions and
+OS options, and that your identity can push the branch and dispatch or open
+the PR. If not, record the exact denial as a blocker and ask the owner; do not
+work around access.
+
+- This is investigation-branch work, not a rolling rerun. The ban on
+  rerunning, cancelling or dispatching `main`/`release/*` rolling workflows
+  is unchanged.
+- Keep temporary restrictions out of normal or final CI. A fix PR must not
+  carry repro edits to `reproduce-flaky-tests.yml` or narrowed `ci.yml`
+  selection, and must not weaken required validation.
+- Keep claims, fenced intents, uncertain-effect reconciliation and budgets.
+  Record each dispatch intent before the write; reconcile an unknown outcome
+  by listing runs on the ref before any retry.
+- Keep useful failure logs: link the run and failing job, and save the key
+  excerpt in the item evidence record.
+- Report the exact run URL, ref and head SHA, OS, test scope, iteration
+  count and result. A passing narrow repro is not a full-CI pass and does not
+  prove a fix.
+- For #22116, the existing `Tests / Run VS Code extension unit tests
+  (Windows)` job in `.github/workflows/tests.yml` remains the route for the
+  exact-case baseline; preserve the termination assertions. If no route can
+  exercise the exact case, report the limitation and keep the result
+  unvalidated.
