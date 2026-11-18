@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T20:38:15Z",
+  "recordedAt": "2026-11-18T20:40:40Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
@@ -9,7 +9,7 @@
     "publicationRepository": "radical/aspire",
     "publicationBranch": "cif/aspire-ci-group",
     "branchTipBeforeCheckpoint": "f1b4c52c89a4c593d96e2d2045d6abf47ea32e98",
-    "sourcePromptCommit": "8c5d55478a07f639cc1eab36b3770086703cc3a6",
+    "sourcePromptCommit": "1de0bfb42d3d49c44b6cc9df0af1f9e97ec10262",
     "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
   },
   "charter": {
@@ -130,11 +130,13 @@
   "ownershipAndLeases": {
     "scoutLease": {
       "artifact": "cif:scout/lease",
-      "revision": 166,
-      "etag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
-      "expiresAt": "2026-11-18T20:56:37.96686969Z",
+      "lastReadAt": "2026-11-18T20:40:40Z",
+      "status": "not found",
+      "lastKnownRevision": 166,
+      "lastKnownEtag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
+      "lastKnownExpiresAt": "2026-11-18T20:56:37.96686969Z",
       "session": "e8e48e2a-5397-42c9-9224-45213bd56745",
-      "action": "Treat as held. Do not start a duplicate Scout, release it, or infer the writer stopped from expiry; re-read and reconcile its owner/run first."
+      "action": "The missing lease does not prove the writer stopped. The exact run ledger remains prompt_delivered with keyed phase completed, not proof of completed work; reconcile its session and effects before any new Scout work."
     },
     "handoffs": [
       {
@@ -200,14 +202,17 @@
       "runId": "556dcde0d6bb72e52ad97a63a7a19ca344ea99d649387183df4b5d6d00f43fac",
       "sessionId": "e8e48e2a-5397-42c9-9224-45213bd56745",
       "revisionId": "49f16e60-f9c5-4034-9ef2-0e9c1b5189c4",
-      "state": "prompt_delivered; not proof of completion",
+      "state": "prompt_delivered; keyed phase completed; neither is live status or proof of completed work",
+      "updatedAt": "2026-11-18T20:38:00.125515663Z",
       "scheduledFor": "2026-11-18T20:30:00Z",
       "inputs": "One cron input page, exhausted; no owner question or task input was present."
     },
     "scoutLease": {
-      "revision": 166,
-      "etag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
-      "expiresAt": "2026-11-18T20:56:37.96686969Z",
+      "lastReadAt": "2026-11-18T20:40:40Z",
+      "status": "artifact_not_found",
+      "lastKnownRevision": 166,
+      "lastKnownEtag": "sa1-827abf72a1d73ae6eb0a1a0db662295ed67ddcff501f694cdc9ca8b8d0889806",
+      "lastKnownExpiresAt": "2026-11-18T20:56:37.96686969Z",
       "sessionId": "e8e48e2a-5397-42c9-9224-45213bd56745"
     },
     "promptUpdates": {
