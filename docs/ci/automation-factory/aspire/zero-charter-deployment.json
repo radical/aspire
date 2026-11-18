@@ -1,7 +1,8 @@
 {
   "repository": "microsoft/aspire",
   "initialCharterSourceCommit": "71b93f6a6f1d43ea13d29344874c3263ee40929e",
-  "latestPublishedSourceCommit": "db0e726708cd48c4fb560091cab261f38b6803b2",
+  "latestPromptSourceCommit": "db0e726708cd48c4fb560091cab261f38b6803b2",
+  "latestPublishedSourceCommit": "0b1d2a8a1ee5560c931f5f35a4e3618ea96d41ab",
   "state": "applied_readback_verified",
   "proposals": [
     {
@@ -21,7 +22,9 @@
         "runId": "8b56347c52a87043ef2f1260e892e0b9bc09dc524af0c175f0a83280369de571",
         "scheduledFor": "2026-11-18T07:45:00Z",
         "state": "prompt_delivered",
-        "executionPhase": "active"
+        "ledgerPhase": "completed",
+        "executionState": "prompt_delivered",
+        "interpretation": "Ledger phase completion is not proof of successful work."
       }
     },
     {
@@ -41,7 +44,9 @@
         "runId": "417d90609629b00fbcfa0366bbbf294eb6f7f622f2c393f8c310ff79e3e0df77",
         "scheduledFor": "2026-11-18T07:45:00Z",
         "state": "prompt_delivered",
-        "executionPhase": "active"
+        "ledgerPhase": "completed",
+        "executionState": "prompt_delivered",
+        "interpretation": "Ledger phase completion is not proof of successful work."
       }
     },
     {
@@ -74,12 +79,12 @@
     "scoutAndWorkerEnablementPreserved": true,
     "unrelatedConfigurationPreserved": true,
     "authoritativePromptHashesMatchPublishedCandidates": true,
-    "firstScheduledRuns": "Scout and Worker each have a cron-origin run for 07:45 UTC with prompt_delivered and active ledger phase; this is not evidence of completed or successful work.",
-    "supervisorRun": "Not yet due; next scheduled for 08:40 UTC."
+    "firstScheduledRuns": "Current Scout revision run 652531021d70584ed262717d77557722188127320d9dd6d823683f8b5957f7ed was scheduled 08:00 UTC; current Worker revision run 3b94167dff88d0d0efc30d9ae1b93cc8cd4110c3904eb544fcc27ea0bb7860cd was scheduled 08:05 UTC. Both persist prompt_delivered; captured response previews are incomplete and do not prove successful work.",
+    "supervisorRun": "Latest saved schedule says next due 08:40 UTC. The first ledger page for its current revision was empty with a continuation; a continuation attempt returned invalid_cursor, so the traversal is not exhausted."
   },
   "followUp": {
     "goal": "Preserve the original PR CI first-attempt failure-rate target below 40%, in addition to the applied zero-flake target.",
-    "state": "pending_owner_approval",
+    "state": "applied_readback_verified",
     "sourceFiles": "common.md, scout.md, supervisor.md and generated standalone prompts",
     "proposals": [
       {
@@ -87,6 +92,10 @@
         "proposalId": "bcbe264d-4ed9-5993-b694-76007297b0ce",
         "baseRevisionId": "b549f170-5b37-4880-87ed-76e05ab9a60a",
         "expectedGeneration": 33,
+        "state": "applied",
+        "savedGeneration": 34,
+        "revisionId": "a29115fb-057e-4252-86a3-39858ce18ca4",
+        "promptSha256": "61008aa78dfa088a949c90987288e044ba3f6d6d416aff1fe8393bd191e0034b",
         "effectiveChangedFields": ["prompt"],
         "candidateBytes": 11336,
         "candidateSha256": "61008aa78dfa088a949c90987288e044ba3f6d6d416aff1fe8393bd191e0034b"
@@ -96,6 +105,10 @@
         "proposalId": "9c33ece2-8c42-53eb-b301-71a94fb84eed",
         "baseRevisionId": "7bd12bf6-df84-4345-83a7-481f263107da",
         "expectedGeneration": 23,
+        "state": "applied",
+        "savedGeneration": 24,
+        "revisionId": "35a3ec0e-e7d2-4af6-8a82-7c516f3bb760",
+        "promptSha256": "a494e451a8e67960e3ac1aea22957412b7af6502b88ed1d22966d92e03e86744",
         "effectiveChangedFields": ["prompt"],
         "candidateBytes": 11968,
         "candidateSha256": "a494e451a8e67960e3ac1aea22957412b7af6502b88ed1d22966d92e03e86744"
@@ -105,6 +118,10 @@
         "proposalId": "ac799bee-2b17-559d-a769-f1763ecfec60",
         "baseRevisionId": "a0130e3d-9618-4abb-b387-10284abaf1ef",
         "expectedGeneration": 22,
+        "state": "applied",
+        "savedGeneration": 23,
+        "revisionId": "abeae99d-7642-4384-b86d-5188b245f698",
+        "promptSha256": "a03278db29a0ba6f5116aa1bd9961058b7a20c182f974eb6244c439bc87aebdd",
         "effectiveChangedFields": ["prompt"],
         "candidateBytes": 11902,
         "candidateSha256": "a03278db29a0ba6f5116aa1bd9961058b7a20c182f974eb6244c439bc87aebdd"
@@ -114,7 +131,7 @@
   "coverage": {
     "latestRelease": "release/17.0",
     "executionGate": "enabled at final readback",
-    "githubEvents": "Latest direct automation readback reports configured event delivery with no paused events; an earlier list read reported workflow_run paused, so confirm again during runtime verification.",
+    "githubEvents": "Latest direct readbacks for Scout, Worker and Supervisor report configured/ready event delivery. An earlier list read reported workflow_run paused; event completeness remains unverified pending reconciliation against live runs.",
     "rollingCoverage": "Scheduled discovery is active, but source coverage and zero-failure outcomes remain unverified. Confirm workflow_run availability and actual source scans.",
     "workerRecovery": "Periodic recovery schedule active; runtime recovery behavior unverified.",
     "ongoingStatus": "Existing issue #22302; Supervisor enabled on its existing hourly schedule.",
@@ -128,5 +145,5 @@
     "Existing status and queue issues reused; every new issue requires exact title/body approval before filing",
     "Human-only merges; no root model, approval-mode or agent-mode changes"
   ],
-  "nextVerification": "Inspect the in-progress Scout and Worker runs and the first Supervisor run; verify their source coverage and outcomes. Confirm event readiness because successive reads differed on workflow_run delivery."
+  "nextVerification": "Inspect complete captured outputs and source evidence for the current-revision Scout/Worker runs; confirm the first Supervisor run after its next due time. Reconcile workflow_run delivery status before claiming event coverage or zero-failure outcomes."
 }

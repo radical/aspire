@@ -27,34 +27,35 @@ and reconciliation of prior effects; expiry alone never authorizes takeover.
 Models, grants, concurrency, responsibility routing and root settings are
 preserved. The [deployment record](aspire/zero-charter-deployment.json) contains
 the authoritative applied revisions, schedules and runtime-validation gaps.
-The zero-rolling-failure and zero-flake prompts/schedules are applied and
-enabled. A follow-up carries forward the original PR CI first-attempt failure
-rate target of <40%; its prompt-only updates are pending owner approval.
+The zero-rolling-failure, zero-flake and PR first-attempt failure-rate
+target (<40%) prompts are applied and enabled.
 Two identical Scout proposals were created against the same base generation;
 the proposal that applied is recorded there, and the other conflicted after
 the generation advanced. The resulting saved prompt and trigger digests match
 the published Scout candidate.
 
-Latest direct automation readback reports GitHub event delivery configured
-without paused events, while an earlier list read reported `workflow_run`
-paused. This discrepancy needs runtime confirmation; scheduled discovery is
-active independently, and missed events are not known to be replayed.
+Latest direct readbacks for all three CI lanes report GitHub event delivery
+configured and ready, while an earlier list read reported `workflow_run`
+paused. Treat event completeness as unverified until reconciled against live
+runs; scheduled discovery is active independently, and missed events are not
+known to be replayed.
 The read credential binding, Azure DevOps and CI Insights availability remain
 unverified runtime dependencies, not green.
 
-The exact current prompt readbacks and their authoritative revision metadata are
-in [`aspire/live-readbacks/`](aspire/live-readbacks/). The original snapshots
-predate this rollout; current revisions are Scout generation 33, Worker
-generation 23, Supervisor generation 22 (all enabled), and Work Queue publisher
-generation 2 (enabled). The older
+The exact pre-rollout prompt snapshots and their revision metadata are retained
+in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
+Current revisions are Scout generation 34, Worker generation 24, Supervisor
+generation 23 (all enabled), and Work Queue publisher generation 2 (enabled).
+The current prompt candidates are 11,337, 11,969 and 11,903 characters,
+respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
-and is not the current configuration. Publishing this source branch does not
-change, enable, or run any automation.
+and is not the current configuration. Publishing this source branch alone does
+not change, enable, or run any automation; the current revisions were applied
+separately through owner-approved proposals.
 
-The three latest CI-lane prompt readbacks exceed the stated 12,000-character
-authoring budget. Their exact bodies are retained for audit; use the modular
-sources and generator for a compact candidate before applying another prompt
-change. The Scout readback fetches its separately versioned-in-branch
+The current Scout schedule is `*/15 * * * *`, Worker is `5,25,45 * * * *`,
+Supervisor is `40 * * * *`, and the Publisher remains `*/10 0 * * *` (only
+during UTC hour 00). The Scout readback fetches its separately versioned-in-branch
 `addendums/scout.md` at runtime, so the snapshot does not include later changes
 to that fetched file.
 
@@ -76,10 +77,10 @@ The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
-| Scout | Enabled | Relevant issue-opened and issue-labeled events |
-| Worker | Enabled | `cif:ready` and scoped PR follow-up events |
-| Supervisor | Disabled | Hourly cron |
-| Work Queue publisher | Enabled | Scheduled |
+| Scout | Enabled, generation 34 | Relevant issue events; every 15 minutes |
+| Worker | Enabled, generation 24 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
+| Supervisor | Enabled, generation 23 | Hourly at :40 |
+| Work Queue publisher | Enabled, generation 2 | Every 10 minutes during UTC hour 00 |
 
 GitHub issues are the queue, one edited issue comment is each item's checkpoint,
 and expiring artifact claims coordinate cooperating writers. All lanes acquire
