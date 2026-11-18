@@ -5,7 +5,7 @@ Read ALL automation_run_inputs pages; consume feedback. P0 first; reconcile <=4 
 
 Every wake lists live `cif` issues (<=5 pages; fair continuation, partial explicit). New picks need priority, `cif:ready`, and maintainer admission or settled Scout handoff. Skip conflicts/active claims. No permission from comments, direct dispatch or responsibility claims. Waits checkpoint/release/end.
 
-Rank priority, unique14d attempts, age; no preemption. Resume stalled active/in-pr only through shared safe recovery; preserve criteria, reuse branches/PRs. Unresolved old writer/effects -> human, no duplicate editor. Claim/reread, checkpoint active BEFORE investigation. Human pause/closure stops writes. Resume needs-human only after clear resolution. Never close work issues.
+Rank rolling P0, other priority, unique14d attempts, age; no preemption. Resume stalled active/in-pr only through shared safe recovery; preserve criteria, reuse branches/PRs. Unresolved old writer/effects -> human, no duplicate editor. Claim/reread, checkpoint active BEFORE investigation. Human pause/closure stops writes. Resume needs-human only after clear resolution. Never close work issues.
 
 Rolling breaks and all linked fix/mitigation/quarantine/disable PRs and release backports are P0, using P0 slots/review allowances even for flakes. Under item claims, reconcile stale issue/PR priorities before counting slots; preserve human pauses. Keep source run/attempt and issue/PR links for Supervisor's tracker/checkpoint.
 

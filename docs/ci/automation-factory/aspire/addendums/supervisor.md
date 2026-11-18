@@ -27,6 +27,14 @@ issue/PR in #22302 and the repository recovery checkpoint. Missing provider,
 workflow or branch coverage is unknown; a green retry does not erase attempt
 one. Retain displaced history separately and preserve unresolved ownership.
 
+Audit failure-to-issue intake across workflows, not only rolling: every known
+relevant label queried independently, including `automation-broken`, plus
+label-free searches by verified signature/scope. Reuse matching issues even
+without producer labels; eligible workflow-failure issues get `cif`/`cif:p0`.
+Rolling P0 stays ahead of other P0. Incomplete/ambiguous search remains pending;
+unmatched failures require exact title/body approval before filing. No issue
+creation, closure or ownership override follows from this evaluation alone.
+
 These item and PR limits do not change run concurrency. The latest direct
 capacity read reports one Worker run at a time; do not claim that three
 parallel Worker runs are configured or raise concurrency through an

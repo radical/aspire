@@ -47,9 +47,9 @@ unverified runtime dependencies, not green.
 
 The exact pre-rollout prompt snapshots and their revision metadata are retained
 in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
-Last verified revisions before the rolling-first rollout are Scout generation 36, Worker generation 25, Supervisor
-generation 24 (all enabled), and Work Queue publisher generation 3 (enabled).
-The rolling-first candidates are not yet deployed. Their lengths are 11,231, 11,962 and 11,861 characters,
+Last verified revisions are Scout generation 37, Worker generation 26, Supervisor
+generation 25 (all enabled), and Work Queue publisher generation 3 (enabled).
+The failure-to-issue follow-up candidates are not yet deployed. Their lengths are 11,961, 11,992 and 11,934 characters,
 respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch alone does
@@ -71,7 +71,8 @@ authorize takeover of unresolved work. Supervisor reports missed pickups and
 recommends closure only after verifying the fix. The queue publisher is unchanged.
 
 The [Scout prompt candidate](aspire/prompts/scout.md) also scans open issues
-with `ci-failure-cause`, `ci-automation-broken`, or `main-ci-break` on each wake,
+with `ci-failure-cause`, `ci-automation-broken`, `automation-broken`, `main-ci-break`,
+`cif` and other known relevant failure labels independently on each wake,
 matches them to verified workflow evidence, and selects at most three canonical
 issues for admission. It may close verified duplicates with a canonical-link comment
 only after claim, ownership, equivalence and unresolved-effect checks; it preserves
@@ -81,9 +82,9 @@ The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
-| Scout | Enabled, generation 36 | Relevant issue events; every 15 minutes |
-| Worker | Enabled, generation 25 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
-| Supervisor | Enabled, generation 24 | Hourly at :40 |
+| Scout | Enabled, generation 37 | Relevant issue events; every 15 minutes |
+| Worker | Enabled, generation 26 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
+| Supervisor | Enabled, generation 25 | Hourly at :40 |
 | Work Queue publisher | Enabled, generation 3 | Every 10 minutes all day |
 
 ### Admission and supervised improvement
@@ -106,6 +107,19 @@ is not a seven-day rate or proof that a previously failing scenario is fixed.
 
 Scout then verifies and deduplicates individual candidates, examines up to six
 and admits up to three distinct canonical issues, with rolling P0 work first.
+All actionable workflow failures are eligible for `cif`/`cif:p0`, but
+main/latest-release push/scheduled and Outerloop P0 work precedes every other
+P0. Label searches are OR, never AND; label-free searches by verified failure
+signature and scope prevent missing a matching unlabeled issue. Titles alone
+are not matches, and different failures stay separate. Incomplete or ambiguous
+searches stay pending, not "no match." Reuse an eligible canonical issue; do not
+relabel paused, externally owned or unresolved-effect work.
+
+For unmatched failures, Scout saves and shows an exact title/body draft for
+approval. The instruction to open issues does not waive this approval rule.
+After approval of that exact text, refresh deduplication and reconcile prior
+filing effects before creating once, then label and hand off safely. Changed
+drafts need reapproval. This configuration change files no public issue.
 Unverifiable items get individual reasons, not a global hold. A fresh,
 bounded `scout/cursor-v2.json` may be created under the Scout lease; legacy state,
 live claims and unresolved effects are not deleted or declared reconciled.

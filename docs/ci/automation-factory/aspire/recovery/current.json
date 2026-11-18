@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T21:03:30Z",
+  "recordedAt": "2026-11-18T21:11:06Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
     "automationTarget": "microsoft/aspire",
     "publicationRepository": "radical/aspire",
     "publicationBranch": "cif/aspire-ci-group",
-    "branchTipBeforeCheckpoint": "eb105ab53a593ed1a3d42b3ffad60c2a772a1a92",
-    "sourcePromptCommit": "1de0bfb42d3d49c44b6cc9df0af1f9e97ec10262",
+    "branchTipBeforeCheckpoint": "3529b1d02e1309998cb6d78b8c1305c7f1c2f7cf",
+    "sourcePromptCommit": "3529b1d02e1309998cb6d78b8c1305c7f1c2f7cf",
     "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
   },
   "charter": {
@@ -27,7 +27,7 @@
     "ownerWorkPolicy": {
       "activeItemsMax": 3,
       "activeP0Max": 2,
-      "priority": "Actionable P0 first; do not reserve an unused slot.",
+      "priority": "Actionable main/latest-release push/scheduled and Outerloop P0 before ALL other work, including other P0. No reserved unused slot; no preemption of an active writer.",
       "waitsNotConsumingActiveSlots": [
         "CI",
         "reproduction",
@@ -45,14 +45,17 @@
       "rollingFirst": "Every Scout run checks all push/scheduled workflows on main/latest numeric release before issue/label intake, including scheduled Outerloop and Quarantine.",
       "rollingPriority": "All unresolved rolling breaks are P0, including flakes; tracking issues, fix/mitigation/quarantine/disable PRs and release backports inherit P0 slots and review allowances. Verified recovered transient-only failures are recorded, never fixed. Unknown cause is not transient.",
       "rollingPersistence": "Last five eligible runs per workflow/branch, first/current attempts, red/green/unknown state and linked issues/PRs belong in #22302 and this checkpoint; preserve missing coverage and displaced history.",
+      "workflowFailureIntake": "For each verified actionable workflow failure, independently OR-search every known relevant label including automation-broken, plus label-free searches by actual signature/scope/evidence. Reuse eligible matches without requiring producer labels; apply cif/cif:p0 under safe claims. Incomplete or ambiguous search remains pending; distinct failures stay distinct.",
+      "unmatchedFailureApproval": "Prepare exact public title/body and search evidence, show for explicit approval; no waiver. After exact-text approval refresh deduplication, pauses, ownership and prior filing effects before one create and safe labeling. Changed drafts need reapproval. No internal tool details.",
       "windowsMacOSReproduction": "Use an existing relevant Aspire CI job through its normal investigation-branch or PR path; do not require a local machine or add a new workflow."
     }
   },
   "succession": {
-    "status": "resolved clarification; no owner action",
+    "status": "prior classification unverified and superseded; this checkpoint is recovery evidence, not an official procedure or authorization",
     "failedRoot": "1db763e6-f87c-4129-82be-35e29450db41",
     "successorRoot": "d92f56f8-3aaa-41d6-81a0-88aa197139ea",
-    "ownerClarification": "Late restatement, not a new takeover. The hosted-orchestrator procedure belongs to the platform, not Aspire; stop searching. Recover from this checkpoint and the restored charter, reconciling receipts, outputs and claims. Never replay uncertain writes or resume failed-root sessions."
+    "supersededUnverifiedClaim": "Earlier text called the notice a late restatement, assigned the procedure to the platform, and declared succession resolved. The owner has explicitly NOT verified those claims.",
+    "currentRule": "Do not substitute this checkpoint for the official succession procedure. Reconcile uncertain ownership and effects before action; no replay, resume or replacement based on this record. Unresolved succession details are reported privately in Work Insights. Newly explicit configuration changes use fresh CAS/readback, not a claim takeover."
   },
   "rollingSnapshot": {
     "recordedAt": "2026-11-18T21:03:30Z",
@@ -154,25 +157,27 @@
     ],
     "coverage": "Recent metadata seed, not a complete rolling population or cause audit. Branch/workflow first100 filtered to push/schedule yielded last5 where populated; historical pages not exhausted. Other push/scheduled workflows, Azure DevOps, expected-run gaps, job-level failures, and complete issue/PR associations remain uninspected here. Empty PR links mean unknown, not absence.",
     "continuation": "Next Scout: refresh recent eligible runs, finish workflow inventory (including smoke/deployment), verify jobs/signatures and existing ownership/fixes before label intake. Supervisor mirrors last-N state into #22302 and this checkpoint without erasing other owners/history.",
-    "deployment": "Source candidates validated; rolling-first prompt rollout not yet applied."
+    "deployment": "Rolling-first sources in 3529b1d02 applied/read back as Scout37, Worker26, Supervisor25. Failure-to-issue follow-up candidates validated, not yet applied.",
+    "trackerComment": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6991707482",
+    "trackerWrite": "Exact comment body independently verified; effect cif:manager-effects/rolling-20261118T210330Z.json rev2 settled. Own append-only item claim clean-yielded with expiry1, never deleted. No Supervisor body takeover."
   },
   "automationRevisions": {
     "scout": {
-      "generation": 36,
-      "revisionId": "896acd4d-8810-45dd-89da-cacdc56d2043",
+      "generation": 37,
+      "revisionId": "6d8fcf5e-b9a1-40a0-bce8-0c5ea0b0a0e1",
       "scheduleUtc": "*/15 * * * *",
       "enabled": true
     },
     "worker": {
-      "generation": 25,
-      "revisionId": "0b0ab18f-1974-4503-8f61-341421012e2f",
+      "generation": 26,
+      "revisionId": "757b319e-83be-438e-a602-de3316407739",
       "scheduleUtc": "5,25,45 * * * *",
       "enabled": true,
       "maxConcurrentRuns": 1
     },
     "supervisor": {
-      "generation": 24,
-      "revisionId": "c7812ff8-42ab-4280-a4af-4933295550c4",
+      "generation": 25,
+      "revisionId": "267c8025-e75f-4205-ab76-14836f6d8a8d",
       "scheduleUtc": "40 * * * *",
       "enabled": true
     },
