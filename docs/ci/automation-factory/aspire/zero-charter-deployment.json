@@ -1,61 +1,122 @@
 {
   "repository": "microsoft/aspire",
   "sourceCommit": "71b93f6a6f1d43ea13d29344874c3263ee40929e",
-  "state": "pending_owner_approval",
-  "approvalLocation": "Automation proposals / Apply proposal",
+  "state": "applied_readback_verified",
   "proposals": [
     {
       "lane": "scout",
       "automationId": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
-      "proposalId": "093a19d6-b8c9-52d2-916b-e025612a52d9",
+      "proposalId": "08a602e8-8840-5d58-a2f1-a51c732f53bb",
+      "state": "applied",
       "expectedGeneration": 32,
+      "savedGeneration": 33,
+      "revisionId": "b549f170-5b37-4880-87ed-76e05ab9a60a",
+      "promptSha256": "47d35ce5398735238dcde6586837d4f710c00794d0bacd68807fd55821b68f1b",
       "effectiveChangedFields": ["prompt", "triggers"],
       "addedCronUtc": "*/15 * * * *",
-      "savedEnabled": true
+      "savedEnabled": true,
+      "scheduleHealth": "healthy",
+      "firstScheduledRun": {
+        "runId": "8b56347c52a87043ef2f1260e892e0b9bc09dc524af0c175f0a83280369de571",
+        "scheduledFor": "2026-11-18T07:45:00Z",
+        "state": "prompt_delivered",
+        "executionPhase": "active"
+      }
     },
     {
       "lane": "worker",
       "automationId": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
       "proposalId": "6e2bec97-b71c-5d39-9b59-c1918c383aed",
+      "state": "applied",
       "expectedGeneration": 22,
+      "savedGeneration": 23,
+      "revisionId": "7bd12bf6-df84-4345-83a7-481f263107da",
+      "promptSha256": "73a93de745596b26a9c51dfa0ec272a39ee12a2dc7b129a3fcf3489cb5dbffcf",
       "effectiveChangedFields": ["prompt", "triggers"],
       "addedCronUtc": "5,25,45 * * * *",
-      "savedEnabled": true
+      "savedEnabled": true,
+      "scheduleHealth": "healthy",
+      "firstScheduledRun": {
+        "runId": "417d90609629b00fbcfa0366bbbf294eb6f7f622f2c393f8c310ff79e3e0df77",
+        "scheduledFor": "2026-11-18T07:45:00Z",
+        "state": "prompt_delivered",
+        "executionPhase": "active"
+      }
     },
     {
       "lane": "supervisor",
       "automationId": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
       "proposalId": "39f8fdea-6dac-5f85-879b-006d4e78c008",
+      "state": "applied",
       "expectedGeneration": 21,
+      "savedGeneration": 22,
+      "revisionId": "a0130e3d-9618-4abb-b387-10284abaf1ef",
+      "promptSha256": "97e33710e0a1f77c0b6b0c7bc7bdefc2827389d2eac567acab97837001356bc8",
       "effectiveChangedFields": ["enabled", "prompt"],
       "preservedCronUtc": "40 * * * *",
-      "savedEnabled": false,
-      "proposedEnabled": true
+      "baseEnabled": false,
+      "proposedEnabled": true,
+      "effectiveEnabled": true,
+      "nextScheduledFor": "2026-11-18T08:40:00Z"
     }
   ],
-  "duplicateProposal": {
-    "proposalId": "08a602e8-8840-5d58-a2f1-a51c732f53bb",
+  "supersededConflict": {
+    "proposalId": "093a19d6-b8c9-52d2-916b-e025612a52d9",
     "lane": "scout",
-    "cause": "Interrupted request persisted a proposal despite an aborted response; unchanged saved generation did not prove absence of a proposal.",
-    "verified": "Same base generation, effective changed fields, prompt digest and trigger digest as the selected Scout proposal.",
-    "action": "Dismiss this duplicate; apply only 093a19d6-b8c9-52d2-916b-e025612a52d9. No proposal-dismiss tool is available to this session."
+    "state": "conflict",
+    "conflictCode": "automation_generation_conflict",
+    "reason": "The alternate Scout proposal was created against generation 32; the equivalent proposal 08a602e8-8840-5d58-a2f1-a51c732f53bb was applied first. Current generation 33 matches the intended prompt and trigger digests."
   },
   "verification": {
     "comparisonsComplete": true,
     "candidatePromptsExactlyMatchPublishedFiles": true,
     "scoutAndWorkerEnablementPreserved": true,
     "unrelatedConfigurationPreserved": true,
-    "savedGenerationsUnchanged": true,
-    "runtimeBehavior": "unverified; no new run dispatched",
-    "futureRunAdoptionOnly": true
+    "authoritativePromptHashesMatchPublishedCandidates": true,
+    "firstScheduledRuns": "Scout and Worker each have a cron-origin run for 07:45 UTC with prompt_delivered and active ledger phase; this is not evidence of completed or successful work.",
+    "supervisorRun": "Not yet due; next scheduled for 08:40 UTC."
+  },
+  "followUp": {
+    "goal": "Preserve the original PR CI first-attempt failure-rate target below 40%, in addition to the applied zero-flake target.",
+    "state": "pending_owner_approval",
+    "sourceFiles": "common.md, scout.md, supervisor.md and generated standalone prompts",
+    "proposals": [
+      {
+        "lane": "scout",
+        "proposalId": "bcbe264d-4ed9-5993-b694-76007297b0ce",
+        "baseRevisionId": "b549f170-5b37-4880-87ed-76e05ab9a60a",
+        "expectedGeneration": 33,
+        "effectiveChangedFields": ["prompt"],
+        "candidateBytes": 11336,
+        "candidateSha256": "61008aa78dfa088a949c90987288e044ba3f6d6d416aff1fe8393bd191e0034b"
+      },
+      {
+        "lane": "worker",
+        "proposalId": "9c33ece2-8c42-53eb-b301-71a94fb84eed",
+        "baseRevisionId": "7bd12bf6-df84-4345-83a7-481f263107da",
+        "expectedGeneration": 23,
+        "effectiveChangedFields": ["prompt"],
+        "candidateBytes": 11968,
+        "candidateSha256": "a494e451a8e67960e3ac1aea22957412b7af6502b88ed1d22966d92e03e86744"
+      },
+      {
+        "lane": "supervisor",
+        "proposalId": "ac799bee-2b17-559d-a769-f1763ecfec60",
+        "baseRevisionId": "a0130e3d-9618-4abb-b387-10284abaf1ef",
+        "expectedGeneration": 22,
+        "effectiveChangedFields": ["prompt"],
+        "candidateBytes": 11902,
+        "candidateSha256": "a03278db29a0ba6f5116aa1bd9961058b7a20c182f974eb6244c439bc87aebdd"
+      }
+    ]
   },
   "coverage": {
     "latestRelease": "release/17.0",
     "executionGate": "enabled at final readback",
-    "githubEvents": "Configured; workflow_run delivery remains paused deployment-wide. Paused events are not replayed.",
-    "rollingCoverage": "Gap remains until scheduled discovery is approved and its source coverage is verified. Issue events alone are insufficient.",
-    "workerRecovery": "No periodic recovery until approval.",
-    "ongoingStatus": "Existing issue #22302; Supervisor remains disabled until approval.",
+    "githubEvents": "Latest direct automation readback reports configured event delivery with no paused events; an earlier list read reported workflow_run paused, so confirm again during runtime verification.",
+    "rollingCoverage": "Scheduled discovery is active, but source coverage and zero-failure outcomes remain unverified. Confirm workflow_run availability and actual source scans.",
+    "workerRecovery": "Periodic recovery schedule active; runtime recovery behavior unverified.",
+    "ongoingStatus": "Existing issue #22302; Supervisor enabled on its existing hourly schedule.",
     "publisher": "Unchanged generation 2; cron */10 0 * * * runs only during hour 00 UTC, not every ten minutes all day.",
     "githubReadBinding": "credential_not_bound; existing authorized read credential is the supported fallback",
     "azureDevOpsAndCiInsights": "unknown"
@@ -66,5 +127,5 @@
     "Existing status and queue issues reused; every new issue requires exact title/body approval before filing",
     "Human-only merges; no root model, approval-mode or agent-mode changes"
   ],
-  "nextVerification": "After owner application, reread authoritative revisions, enablement and schedules; inspect the next scheduled executions and source coverage before claiming restored continuous operation."
+  "nextVerification": "Inspect the in-progress Scout and Worker runs and the first Supervisor run; verify their source coverage and outcomes. Confirm event readiness because successive reads differed on workflow_run delivery."
 }

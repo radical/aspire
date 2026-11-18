@@ -26,22 +26,27 @@ reuse stalled work only after a clean handoff or verified writer termination
 and reconciliation of prior effects; expiry alone never authorizes takeover.
 Models, grants, concurrency, responsibility routing and root settings are
 preserved. The [deployment record](aspire/zero-charter-deployment.json) contains
-the three pending owner-approval proposals and verified effective changes.
-None is applied: Scout and Worker still lack crons, and Supervisor is disabled.
-Apply the selected Scout, Worker and Supervisor proposals in Automation proposals;
-dismiss the duplicate Scout proposal identified in the record. The interrupted
-request created that duplicate even though the saved generation stayed unchanged.
+the authoritative applied revisions, schedules and runtime-validation gaps.
+The zero-rolling-failure and zero-flake prompts/schedules are applied and
+enabled. A follow-up carries forward the original PR CI first-attempt failure
+rate target of <40%; its prompt-only updates are pending owner approval.
+Two identical Scout proposals were created against the same base generation;
+the proposal that applied is recorded there, and the other conflicted after
+the generation advanced. The resulting saved prompt and trigger digests match
+the published Scout candidate.
 
-At final readback, GitHub event delivery was configured, but `workflow_run`
-delivery remained paused deployment-wide, with no replay of missed events.
-Cron/manual execution is separate; issue-event configuration alone is not
-continuous source coverage. The read credential binding, Azure DevOps and
-CI Insights availability remain unverified runtime dependencies, not green.
+Latest direct automation readback reports GitHub event delivery configured
+without paused events, while an earlier list read reported `workflow_run`
+paused. This discrepancy needs runtime confirmation; scheduled discovery is
+active independently, and missed events are not known to be replayed.
+The read credential binding, Azure DevOps and CI Insights availability remain
+unverified runtime dependencies, not green.
 
 The exact current prompt readbacks and their authoritative revision metadata are
-in [`aspire/live-readbacks/`](aspire/live-readbacks/). They record Scout
-generation 32 (enabled), Worker generation 22 (enabled), Supervisor generation
-21 (disabled), and Work Queue publisher generation 2 (enabled). The older
+in [`aspire/live-readbacks/`](aspire/live-readbacks/). The original snapshots
+predate this rollout; current revisions are Scout generation 33, Worker
+generation 23, Supervisor generation 22 (all enabled), and Work Queue publisher
+generation 2 (enabled). The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch does not
 change, enable, or run any automation.
