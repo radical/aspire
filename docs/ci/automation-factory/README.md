@@ -7,7 +7,7 @@ not an Aspire product/runtime change or an executable deployment tool. The autom
 remains `microsoft/aspire`; the fork's repository identity must not be substituted
 in automation configuration.
 
-## Issue-first pilot
+## CI-health pilot
 
 ### Zero-failure charter update
 
@@ -47,9 +47,9 @@ unverified runtime dependencies, not green.
 
 The exact pre-rollout prompt snapshots and their revision metadata are retained
 in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
-Current revisions are Scout generation 36, Worker generation 25, Supervisor
+Last verified revisions before the rolling-first rollout are Scout generation 36, Worker generation 25, Supervisor
 generation 24 (all enabled), and Work Queue publisher generation 3 (enabled).
-The current prompt candidates are 11,746, 11,965 and 11,848 characters,
+The rolling-first candidates are not yet deployed. Their lengths are 11,231, 11,962 and 11,861 characters,
 respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch alone does
@@ -96,9 +96,17 @@ without admissions. These are evidenced mechanisms, not proof that metrics alone
 caused every missed admission. Generation-24 Worker correctly found no ready work
 among its two admitted, already-in-PR issues.
 
-Scout now verifies and deduplicates individual candidates before optional source
-refresh, examines up to six candidates and admits up to three distinct canonical
-issues. Unverifiable items get individual reasons, not a global hold. A fresh,
+Scout checks rolling builds **first on every run**, before issue/label intake:
+push and scheduled runs on main and the latest numeric release branch, explicitly
+including scheduled Outerloop and Quarantine. It saves the last five eligible
+runs per workflow/branch, separating first and current attempts, red/green/unknown
+state, issue/PR links and incomplete coverage. Supervisor mirrors this into
+#22302 and the bounded repository recovery checkpoint. This recent-run snapshot
+is not a seven-day rate or proof that a previously failing scenario is fixed.
+
+Scout then verifies and deduplicates individual candidates, examines up to six
+and admits up to three distinct canonical issues, with rolling P0 work first.
+Unverifiable items get individual reasons, not a global hold. A fresh,
 bounded `scout/cursor-v2.json` may be created under the Scout lease; legacy state,
 live claims and unresolved effects are not deleted or declared reconciled.
 Seven-day rate computation belongs to Supervisor, not Scout.
@@ -107,9 +115,11 @@ Supervisor now inspects actual recent Scout, Worker and Publisher tool evidence
 before refreshing metrics. It may make one bounded, authorized prompt/cadence/
 concurrency correction per pass, persist it on this fork branch, and verify the
 next two comparable completed runs (up to two hours). Ineffective changes are
-conditionally rolled back without overwriting concurrent edits. Its change
-table in #22302 records old/new generations, evidence and observed effects;
-delivery counts are not outcome evidence.
+conditionally rolled back without overwriting concurrent edits or owner
+directives. Generation-level configuration evidence stays in private reports
+and the recovery checkpoint; public issue updates describe CI impact, evidence
+and remaining work, without internal platform/tool details. Delivery counts
+are not outcome evidence.
 
 The owner clarified the work limits: at most three active items and two P0
 items, with actionable P0 work first and no unused P0 slot reserved. Waiting on
@@ -150,12 +160,16 @@ or make GitHub effects atomic. Waits checkpoint and end; later wakes resume.
 Expired claims and missing end logs do not establish that an old writer stopped.
 Ambiguous predecessors and unknown mutation outcomes require human recovery.
 
-P0 includes deterministic rolling outerloop failures and widespread unrelated PR
-breaks. Intermittent network failures are recorded, not fixed. Rolling workflow
+P0 includes **every unresolved rolling break**, including flakes and scheduled
+Outerloop/Quarantine breaks, as well as widespread unrelated PR breaks. Related
+tracking issues, fix/mitigation/quarantine/disable PRs and release backports
+inherit the P0 slot and review allowances. Verified recovered transient-only
+failures are recorded, not fixed; unknown cause is not proof of transience. Rolling workflow
 reruns, cancellations and dispatches are forbidden; repository auto-rerun owns
 them. Human review and merge remain required. Release work checks main first,
 tracks each target and uses backports. Quarantine is a mitigation phase, followed
-by a distinct P3 real-fix phase that removes quarantine.
+by a real-fix phase that removes quarantine: retain P0 while rolling remains
+broken, otherwise use P3. A green retry never erases a first-attempt failure.
 
 The supervisor reports human asks first, then goals, work and a UTC timeline.
 Only it sends consolidated status-issue notifications. It independently checks

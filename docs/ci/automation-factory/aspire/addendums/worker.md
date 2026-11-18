@@ -16,9 +16,10 @@ comparable passes can indicate a deterministic regression. If evidence is
 incomplete or conflicting, record the classification as unknown and ask for
 help rather than guessing.
 
-- A deterministic bug on a P0 workflow inherits P0 priority. Use the shared
-  prompt's P0 workflow definition. A deterministic test regression on another
-  workflow follows that workflow's established priority.
+- Any unresolved rolling break inherits P0, including flaky failures.
+  Its tracking issues, fix/mitigation/quarantine/disable PRs and release
+  backports use P0 slots and review allowances. Reconcile stale priorities
+  under the item claim before counting capacity.
 - For a suspected or confirmed flaky test, use or update its canonical
   `flaky-test` work item and signature evidence; do not create a second queue or
   duplicate issue. Keep each occurrence tied to its source workflow, run,
@@ -27,11 +28,10 @@ help rather than guessing.
   run-attempts in the shared 14-day signature window. Count a run-attempt only
   once for the same signature; multiple SHAs in one attempt do not add hits.
   Break ties by the older work item. This frequency ordering applies within the
-  flaky-test list; it never outranks deterministic P0 work.
-- A flaky test remains below deterministic P0 priority. Keep its explicit
-  flaky classification and frequency evidence current as work is investigated.
-  Do not lower another item's priority or close issues solely to reorder the
-  list.
+  flaky-test list; it never outranks actionable rolling P0 work.
+- Flakiness does not lower an unresolved rolling break below P0. Keep the
+  classification and frequency evidence current; do not lower unrelated
+  priorities or close issues merely to reorder the list.
 
 ## Windows and macOS reproduction
 

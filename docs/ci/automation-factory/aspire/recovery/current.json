@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T20:40:40Z",
+  "recordedAt": "2026-11-18T21:03:30Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
     "automationTarget": "microsoft/aspire",
     "publicationRepository": "radical/aspire",
     "publicationBranch": "cif/aspire-ci-group",
-    "branchTipBeforeCheckpoint": "f1b4c52c89a4c593d96e2d2045d6abf47ea32e98",
+    "branchTipBeforeCheckpoint": "eb105ab53a593ed1a3d42b3ffad60c2a772a1a92",
     "sourcePromptCommit": "1de0bfb42d3d49c44b6cc9df0af1f9e97ec10262",
     "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
   },
@@ -42,8 +42,119 @@
         "doNotMarkReadyAboveCap": true
       },
       "scoutIntakeWallClockBudgetMinutes": 30,
+      "rollingFirst": "Every Scout run checks all push/scheduled workflows on main/latest numeric release before issue/label intake, including scheduled Outerloop and Quarantine.",
+      "rollingPriority": "All unresolved rolling breaks are P0, including flakes; tracking issues, fix/mitigation/quarantine/disable PRs and release backports inherit P0 slots and review allowances. Verified recovered transient-only failures are recorded, never fixed. Unknown cause is not transient.",
+      "rollingPersistence": "Last five eligible runs per workflow/branch, first/current attempts, red/green/unknown state and linked issues/PRs belong in #22302 and this checkpoint; preserve missing coverage and displaced history.",
       "windowsMacOSReproduction": "Use an existing relevant Aspire CI job through its normal investigation-branch or PR path; do not require a local machine or add a new workflow."
     }
+  },
+  "succession": {
+    "status": "resolved clarification; no owner action",
+    "failedRoot": "1db763e6-f87c-4129-82be-35e29450db41",
+    "successorRoot": "d92f56f8-3aaa-41d6-81a0-88aa197139ea",
+    "ownerClarification": "Late restatement, not a new takeover. The hosted-orchestrator procedure belongs to the platform, not Aspire; stop searching. Recover from this checkpoint and the restored charter, reconciling receipts, outputs and claims. Never replay uncertain writes or resume failed-root sessions."
+  },
+  "rollingSnapshot": {
+    "recordedAt": "2026-11-18T21:03:30Z",
+    "N": 5,
+    "provider": "GitHub Actions",
+    "latestNumericRelease": "release/17.0",
+    "branchResolution": "Full branch enumeration; numeric release comparison, not a hardcoded selection.",
+    "eligibility": "push or schedule on main/latest numeric release; newest five per workflow/branch",
+    "runUrlTemplate": "https://github.com/microsoft/aspire/actions/runs/{id}",
+    "columns": ["id", "currentAttempt", "firstAttemptConclusion", "currentConclusion"],
+    "streams": [
+      {
+        "branch": "main",
+        "workflow": ".github/workflows/ci.yml",
+        "workflowId": 137649006,
+        "latestRunColor": "red",
+        "runs": [
+          [44372012012, 1, "failure", "failure"],
+          [44225442795, 1, "success", "success"],
+          [44203018447, 1, "failure", "failure"],
+          [44203003459, 1, "cancelled", "cancelled"],
+          [44202991578, 1, "success", "success"]
+        ],
+        "issueLinks": ["https://github.com/microsoft/aspire/issues/19737", "https://github.com/microsoft/aspire/issues/18608"],
+        "pullRequestLinks": [],
+        "linkEvidence": "Typed GitHub issue search for 44372012012 returned both issues; this establishes a run-link correlation, not equivalent causes or fix coverage.",
+        "next": "P0 investigation: verify exact failed jobs/signatures and existing ownership/fixes; classify recovered transients before any fix attempt."
+      },
+      {
+        "branch": "release/17.0",
+        "workflow": ".github/workflows/ci.yml",
+        "workflowId": 137649006,
+        "latestRunColor": "red",
+        "runs": [
+          [44387718601, 1, "failure", "failure"],
+          [44387669746, 1, "cancelled", "cancelled"],
+          [44203911604, 1, "failure", "failure"],
+          [43987140032, 1, "failure", "failure"],
+          [43986422461, 1, "cancelled", "cancelled"]
+        ],
+        "issueLinks": ["https://github.com/microsoft/aspire/issues/20038"],
+        "pullRequestLinks": [],
+        "linkEvidence": "Typed issue search for 44387718601 returned the existing branch tracker; dedicated issue/fix scope not established.",
+        "next": "P0 investigation: correlate exact signature and main fix first; recurring tracker is a signal, not automatically admitted work."
+      },
+      {
+        "branch": "main",
+        "workflow": ".github/workflows/tests-outerloop.yml",
+        "workflowId": 153453759,
+        "latestRunColor": "green",
+        "runs": [
+          [44220852955, 1, "success", "success"],
+          [44000604467, 1, "success", "success"],
+          [43790230091, 4, "failure", "failure"],
+          [43666219423, 3, "failure", "success"],
+          [43544467662, 4, "failure", "failure"]
+        ],
+        "issueLinks": [],
+        "pullRequestLinks": [],
+        "firstAttemptEvidence": "Exact /actions/runs/{id}/attempts/1 reads for all three retried runs returned failure at 21:03 UTC.",
+        "next": "Correlate failing scenarios/issues/PRs. Latest green run alone does not establish recovery or remove earlier failures."
+      },
+      {
+        "branch": "main",
+        "workflow": ".github/workflows/tests-quarantine.yml",
+        "workflowId": 186980373,
+        "latestRunColor": "green",
+        "runs": [
+          [44386882895, 1, "success", "success"],
+          [44365414204, 1, "success", "success"],
+          [44342648478, 1, "success", "success"],
+          [44319993103, 1, "success", "success"],
+          [44300473138, 1, "success", "success"]
+        ],
+        "issueLinks": [],
+        "pullRequestLinks": [],
+        "next": "Keep scheduled Quarantine in every rolling check; green run metadata does not prove zero flaky-test failures."
+      },
+      {
+        "branch": "release/17.0",
+        "workflow": ".github/workflows/tests-outerloop.yml",
+        "workflowId": 153453759,
+        "latestRunColor": "unknown",
+        "runs": [],
+        "issueLinks": [],
+        "pullRequestLinks": [],
+        "coverage": "Exact branch/workflow query returned total_count=0; expected coverage unknown, not green."
+      },
+      {
+        "branch": "release/17.0",
+        "workflow": ".github/workflows/tests-quarantine.yml",
+        "workflowId": 186980373,
+        "latestRunColor": "unknown",
+        "runs": [],
+        "issueLinks": [],
+        "pullRequestLinks": [],
+        "coverage": "Exact branch/workflow query returned total_count=0; expected coverage unknown, not green."
+      }
+    ],
+    "coverage": "Recent metadata seed, not a complete rolling population or cause audit. Branch/workflow first100 filtered to push/schedule yielded last5 where populated; historical pages not exhausted. Other push/scheduled workflows, Azure DevOps, expected-run gaps, job-level failures, and complete issue/PR associations remain uninspected here. Empty PR links mean unknown, not absence.",
+    "continuation": "Next Scout: refresh recent eligible runs, finish workflow inventory (including smoke/deployment), verify jobs/signatures and existing ownership/fixes before label intake. Supervisor mirrors last-N state into #22302 and this checkpoint without erasing other owners/history.",
+    "deployment": "Source candidates validated; rolling-first prompt rollout not yet applied."
   },
   "automationRevisions": {
     "scout": {
@@ -309,7 +420,7 @@
   ],
   "metrics": {
     "fixedWindow": "2026-11-11T08:40:00Z/2026-11-18T08:40:00Z",
-    "prCi": "38 failures / 55 eligible linked historical-head pairs (69.09%); linked subset only, not the full PR rate or a representative estimate.",
+    "prCi": "Unknown. The earlier 38/55 (69.09%) estimate is withdrawn: #22302 at20:40 records mutable linked PR head fields for identical historical runs. Preserve old receipts, reconstruct actual historical heads, and never treat changed mappings as improvement.",
     "unknowns": [
       "325/490 PR CI sources lack historical PR/head associations",
       "full seven-day and Azure DevOps coverage",
