@@ -9,9 +9,20 @@ in automation configuration.
 
 ## Issue-first pilot
 
-The [deployment record](aspire/issue-first-deployment.json) identifies the saved
-prompt revisions. Scout and Supervisor remain paused; future Worker runs use
-the approved prompt. Publishing these files does not enable or run any automation.
+The exact current prompt readbacks and their authoritative revision metadata are
+in [`aspire/live-readbacks/`](aspire/live-readbacks/). They record Scout
+generation 32 (enabled), Worker generation 22 (enabled), Supervisor generation
+21 (disabled), and Work Queue publisher generation 2 (enabled). The older
+[`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
+and is not the current configuration. Publishing this source branch does not
+change, enable, or run any automation.
+
+The three latest CI-lane prompt readbacks exceed the stated 12,000-character
+authoring budget. Their exact bodies are retained for audit; use the modular
+sources and generator for a compact candidate before applying another prompt
+change. The Scout readback fetches its separately versioned-in-branch
+`addendums/scout.md` at runtime, so the snapshot does not include later changes
+to that fetched file.
 
 A maintainer adds `cif` to route the original issue. Scout verifies intake and
 adds `cif:ready` after triage; recurring CI trackers remain signals unless
@@ -21,11 +32,12 @@ The 25-minute lease includes a five-minute cleanup reserve; expiry does not
 authorize takeover of unresolved work. Supervisor reports missed pickups and
 recommends closure only after verifying the fix. The queue publisher is unchanged.
 
-| Lane | Contribution | Saved triggers | Saved concurrency |
-|---|---|---|---|
-| Scout | Screen failures, triage maintainer-labeled issues | Every 15 minutes plus issue-open and label-added filters | 1 run |
-| Worker | Investigate, fix, open drafts, address feedback and backports | `cif:ready` added and scoped PR events | 1 run |
-| Supervisor | Check missed work, liveness and later results; report human asks | Hourly | 1 run |
+| Lane | Current saved state | Trigger overview |
+|---|---|---|
+| Scout | Enabled | Relevant issue-opened and issue-labeled events |
+| Worker | Enabled | `cif:ready` and scoped PR follow-up events |
+| Supervisor | Disabled | Hourly cron |
+| Work Queue publisher | Enabled | Scheduled |
 
 GitHub issues are the queue, one edited issue comment is each item's checkpoint,
 and expiring artifact claims coordinate cooperating writers. All lanes acquire
@@ -93,7 +105,8 @@ generation 3, preserving tools, triggers and responsibility targets. The owner
 applied the three enablement proposals, producing enabled generation-4 revisions
 on 2026-11-16 at 05:56 UTC. The original disabled baseline is retained separately.
 
-These checks validate authoring mechanics, not automation behavior.
+These checks validate authoring mechanics, not automation behavior or exact
+live readback contents. `aspire/live-readbacks/` preserves the latter separately.
 
 ## Historical validation and activation
 

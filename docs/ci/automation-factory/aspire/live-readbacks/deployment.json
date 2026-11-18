@@ -1,0 +1,43 @@
+{
+  "repository": "microsoft/aspire",
+  "repositoryId": "696529789",
+  "source": "Owner-scoped automation_get readbacks; prompt hashes match the server promptSha256.",
+  "automations": {
+    "scout": {
+      "id": "652117e2-83da-4695-bdfc-fd16db2b9ffc",
+      "generation": 32,
+      "revisionId": "9d5e0301-1e92-4e9f-9df8-a8209bd34778",
+      "enabled": true,
+      "updatedAt": "2026-11-18T02:57:27.689893525Z",
+      "prompt": "scout.md",
+      "promptSha256": "bd869fc2c73f0a40f6577bc12bf3f5c90a59bfd99480ed5fb4f12dc290bac56d"
+    },
+    "worker": {
+      "id": "c5a59a67-c2b8-4bda-81a0-a3f13e59d371",
+      "generation": 22,
+      "revisionId": "ed4383dc-5afa-443f-8fc1-f6a68175e278",
+      "enabled": true,
+      "updatedAt": "2026-11-18T02:57:35.018905571Z",
+      "prompt": "worker.md",
+      "promptSha256": "a3fa71f5f24d427e82dbe3c81b9b01af37f8b6c6c2d76501994b308a1c572de6"
+    },
+    "supervisor": {
+      "id": "5afa0c55-1f55-4d64-950b-ce57deba34b5",
+      "generation": 21,
+      "revisionId": "b98ffe52-c693-435c-a901-db73565947a8",
+      "enabled": false,
+      "updatedAt": "2026-11-18T01:52:31.107494233Z",
+      "prompt": "supervisor.md",
+      "promptSha256": "73c829f5325f664744bdd99bc804e6512f8d8492b152860927283d959b08c68b"
+    },
+    "publisher": {
+      "id": "164fdd00-1201-40b1-b2c6-af24471acf19",
+      "generation": 2,
+      "revisionId": "3ace8448-9bc2-49db-b8c0-ecfbae650eaf",
+      "enabled": true,
+      "updatedAt": "2026-11-17T21:36:34.410700861Z",
+      "prompt": "publisher.md",
+      "promptSha256": "596eaa815a07b53406ee2fefa27ac5fe9602d7f0f1931af89ba980ba2b2a17c7"
+    }
+  }
+}
