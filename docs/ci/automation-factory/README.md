@@ -9,6 +9,29 @@ in automation configuration.
 
 ## Issue-first pilot
 
+### Zero-failure charter update
+
+The editable prompt sources target **0% rolling-build failures** on main and the
+latest numeric release branch, and **zero flaky-test failures** in rolling and
+PR CI. Transient-network failures count in reported totals but receive no fix
+attempts. Approval gates, missing sources and partial coverage stay explicit;
+green retries do not erase earlier failures. Old deployment snapshots below
+retain their original goals for audit, not as the current charter.
+
+The update retains Scout, Worker, Supervisor and the independent queue Publisher.
+It prepares periodic Scout discovery and Worker recovery, with Supervisor
+reporting into existing #22302; #22369 remains Publisher-owned. New issues need
+an exact title/body preview and explicit approval before filing. Recovery may
+reuse stalled work only after a clean handoff or verified writer termination
+and reconciliation of prior effects; expiry alone never authorizes takeover.
+Models, grants, concurrency, responsibility routing and root settings are
+preserved. Saved deployment results are recorded separately after readback.
+
+At the authoring readback, deployment-wide GitHub event delivery was paused.
+Cron/manual execution is separate; issue-event configuration alone is not
+continuous source coverage. The read credential binding, Azure DevOps and
+CI Insights availability remain unverified runtime dependencies, not green.
+
 The exact current prompt readbacks and their authoritative revision metadata are
 in [`aspire/live-readbacks/`](aspire/live-readbacks/). They record Scout
 generation 32 (enabled), Worker generation 22 (enabled), Supervisor generation
@@ -38,7 +61,7 @@ matches them to verified workflow evidence, and selects at most one canonical
 issue for admission. It reports duplicates without closing them and preserves
 manual intake and pauses. The producer labels do not route work directly to
 Worker: Scout uses the existing claimed `cif`/priority/`cif:ready` handoff.
-This candidate is not the saved revision in `live-readbacks/`.
+The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
