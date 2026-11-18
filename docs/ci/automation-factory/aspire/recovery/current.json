@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "recordType": "current-recovery-checkpoint",
-  "recordedAt": "2026-11-18T21:11:06Z",
+  "recordedAt": "2026-11-18T21:16:20Z",
   "recoveryLocation": "docs/ci/automation-factory/aspire/recovery/current.json",
   "recoveryRule": "Read this bounded current-state file first, then re-read each referenced owner-scoped artifact at its current ETag and the live issue/PR state before acting. Preserve prior history and unresolved effects; never replay an uncertain write, resume a session, or start a replacement worker based only on this record or lease expiry.",
   "repository": {
     "automationTarget": "microsoft/aspire",
     "publicationRepository": "radical/aspire",
     "publicationBranch": "cif/aspire-ci-group",
-    "branchTipBeforeCheckpoint": "3529b1d02e1309998cb6d78b8c1305c7f1c2f7cf",
-    "sourcePromptCommit": "3529b1d02e1309998cb6d78b8c1305c7f1c2f7cf",
+    "branchTipBeforeCheckpoint": "142d59aee50ac0cb30a0fe9c8b55f70fec50400a",
+    "sourcePromptCommit": "142d59aee50ac0cb30a0fe9c8b55f70fec50400a",
     "statusIssue": "https://github.com/microsoft/aspire/issues/22302"
   },
   "charter": {
@@ -157,27 +157,30 @@
     ],
     "coverage": "Recent metadata seed, not a complete rolling population or cause audit. Branch/workflow first100 filtered to push/schedule yielded last5 where populated; historical pages not exhausted. Other push/scheduled workflows, Azure DevOps, expected-run gaps, job-level failures, and complete issue/PR associations remain uninspected here. Empty PR links mean unknown, not absence.",
     "continuation": "Next Scout: refresh recent eligible runs, finish workflow inventory (including smoke/deployment), verify jobs/signatures and existing ownership/fixes before label intake. Supervisor mirrors last-N state into #22302 and this checkpoint without erasing other owners/history.",
-    "deployment": "Rolling-first sources in 3529b1d02 applied/read back as Scout37, Worker26, Supervisor25. Failure-to-issue follow-up candidates validated, not yet applied.",
+    "deployment": "Rolling-first 3529b1d02 applied as Scout37/Worker26/Supervisor25. Failure-to-issue follow-up 142d59aee applied/read back as Scout38/Worker27/Supervisor26; exact source bytes match live prompt integrity digests. Execution outcome remains pending.",
     "trackerComment": "https://github.com/microsoft/aspire/issues/22302#issuecomment-6991707482",
     "trackerWrite": "Exact comment body independently verified; effect cif:manager-effects/rolling-20261118T210330Z.json rev2 settled. Own append-only item claim clean-yielded with expiry1, never deleted. No Supervisor body takeover."
   },
   "automationRevisions": {
     "scout": {
-      "generation": 37,
-      "revisionId": "6d8fcf5e-b9a1-40a0-bce8-0c5ea0b0a0e1",
+      "generation": 38,
+      "revisionId": "4af51da6-b16a-44db-8640-65c87b1b67ba",
+      "promptBytes": 11961,
       "scheduleUtc": "*/15 * * * *",
       "enabled": true
     },
     "worker": {
-      "generation": 26,
-      "revisionId": "757b319e-83be-438e-a602-de3316407739",
+      "generation": 27,
+      "revisionId": "eedb5459-dd40-4844-95fb-25ca58c41c57",
+      "promptBytes": 11992,
       "scheduleUtc": "5,25,45 * * * *",
       "enabled": true,
       "maxConcurrentRuns": 1
     },
     "supervisor": {
-      "generation": 25,
-      "revisionId": "267c8025-e75f-4205-ab76-14836f6d8a8d",
+      "generation": 26,
+      "revisionId": "f8b3d374-472b-4f61-bfbf-f6ac0139e827",
+      "promptBytes": 11934,
       "scheduleUtc": "40 * * * *",
       "enabled": true
     },
@@ -187,6 +190,13 @@
       "scheduleUtc": "*/10 * * * *",
       "enabled": true
     }
+  },
+  "intakeRollout": {
+    "readbackAt": "2026-11-18T21:16:20Z",
+    "preserved": "models, tools:null plus persistent additions, triggers, schedules, responsibilityTargets, enabled state, concurrency1",
+    "adoption": "Prospective admissions only; already-admitted runs remain pinned. Scout pending run c23d2367b68e499649b98e226f2661b44e1647c60052e52f55d1e51af5945fd8 was session_requested at readback, not proof of execution or completion.",
+    "issueApproval": "No new public issue filed or exact-draft approval requested by this configuration change; historical drafts not inventoried. Future unmatched failures wait for exact title/body approval.",
+    "nextAssessment": "By23:15 UTC inspect next two comparable completed runs pinned to Scout38/Worker27/Supervisor26: rolling-first, independent labels including automation-broken, label-free signature matching, safe cif/p0 admission, exact-draft gate. Pending or absent evidence is unknown."
   },
   "lastVerifiedPass": {
     "supervisorRun": "db97d66b3e83f5164538c1e4f771c2c459d15d992efde64820223370a2756342",

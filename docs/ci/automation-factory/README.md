@@ -47,9 +47,9 @@ unverified runtime dependencies, not green.
 
 The exact pre-rollout prompt snapshots and their revision metadata are retained
 in [`aspire/live-readbacks/`](aspire/live-readbacks/); they are historical.
-Last verified revisions are Scout generation 37, Worker generation 26, Supervisor
-generation 25 (all enabled), and Work Queue publisher generation 3 (enabled).
-The failure-to-issue follow-up candidates are not yet deployed. Their lengths are 11,961, 11,992 and 11,934 characters,
+Current verified revisions are Scout generation 38, Worker generation 27, Supervisor
+generation 26 (all enabled), and Work Queue publisher generation 3 (unchanged).
+The failure-to-issue prompts are applied and independently read back. Their lengths are 11,961, 11,992 and 11,934 characters,
 respectively, below the 12,000-character limit. The older
 [`issue-first-deployment.json`](aspire/issue-first-deployment.json) is historical
 and is not the current configuration. Publishing this source branch alone does
@@ -82,9 +82,9 @@ The historical `live-readbacks/` snapshots are not these updated sources.
 
 | Lane | Current saved state | Trigger overview |
 |---|---|---|
-| Scout | Enabled, generation 37 | Relevant issue events; every 15 minutes |
-| Worker | Enabled, generation 26 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
-| Supervisor | Enabled, generation 25 | Hourly at :40 |
+| Scout | Enabled, generation 38 | Relevant issue events; every 15 minutes |
+| Worker | Enabled, generation 27 | `cif:ready` and scoped PR follow-up; at :05, :25 and :45 |
+| Supervisor | Enabled, generation 26 | Hourly at :40 |
 | Work Queue publisher | Enabled, generation 3 | Every 10 minutes all day |
 
 ### Admission and supervised improvement
@@ -120,6 +120,12 @@ approval. The instruction to open issues does not waive this approval rule.
 After approval of that exact text, refresh deduplication and reconcile prior
 filing effects before creating once, then label and hand off safely. Changed
 drafts need reapproval. This configuration change files no public issue.
+The published prompt bytes match authoritative live readback integrity digests.
+Worker shares the rolling-before-other-P0 ordering and Supervisor audits the
+new search/approval behavior. Models, tools, triggers, routing, enabled state
+and concurrency were preserved. Existing admitted runs keep their pinned
+revisions; effective intake and guardrail behavior remain pending execution
+evidence from the next two comparable completed runs.
 Unverifiable items get individual reasons, not a global hold. A fresh,
 bounded `scout/cursor-v2.json` may be created under the Scout lease; legacy state,
 live claims and unresolved effects are not deleted or declared reconciled.
