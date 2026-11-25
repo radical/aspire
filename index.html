@@ -15,6 +15,8 @@
       --notice: #fff8c5;
       --notice-border: #d4a72c;
       --link: #0969da;
+      --passed: #1a7f37;
+      --failed: #cf222e;
       font-family: system-ui, sans-serif;
       color: var(--ink);
       background: var(--background);
@@ -29,6 +31,8 @@
         --notice: #3b2e00;
         --notice-border: #9e6a03;
         --link: #79c0ff;
+        --passed: #3fb950;
+        --failed: #f85149;
       }
     }
     body { max-width: 1280px; padding: 2rem 1rem; margin: auto; line-height: 1.55; }
@@ -39,8 +43,12 @@
     section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; margin-top: 1rem; }
     /* Saved PNG charts retain their original white panels in both themes. */
     img { display: block; width: 100%; height: auto; background: white; }
-    table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-    th, td { border: 1px solid var(--border); padding: .6rem; text-align: left; }
+    table { border-collapse: collapse; width: 100%; font-size: 18px; }
+    th, td { border: 1px solid var(--border); padding: .8rem; text-align: left; }
+    .passed { color: var(--passed); }
+    .failed { color: var(--failed); }
+    .counts { display: block; white-space: nowrap; }
+    .rate { font-size: 20px; }
     th { background: var(--background); }
     .table-wrap { overflow-x: auto; }
     summary { cursor: pointer; font-weight: 600; }
@@ -64,38 +72,42 @@
       <h2>Delivery CI</h2>
       <p>GitHub and internal Azure DevOps main-branch CI are shown together.
         Daily bars show the number of builds; lines show the trailing seven-date initial-green rate.</p>
-      <img src="delivery-preview.png" alt="Delivery CI table and charts. GitHub CI: 7 of 16 builds passed in the last 48 hours; internal Azure DevOps CI: 5 of 9 passed. The text table below contains all values.">
-      <details>
-        <summary>Show delivery CI table as text</summary>
+      <p>The green numerator is passed builds; the normal-color denominator is all evaluated builds,
+        not failed builds. The percentage is bold; the failed count is separately labeled.
+        Azure DevOps failed/non-green counts include failed and partiallySucceeded builds.
+        A run still in progress is neither a pass nor a failure.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
             <tbody>
-              <tr><td>GitHub CI - main</td><td>7/16 (43.8%)</td><td>12/40 (30.0%)</td><td>20/49 (40.8%)</td><td>In progress, Nov 24 22:18 UTC</td></tr>
-              <tr><td>AzDO internal - main</td><td>5/9 (55.6%)</td><td>11/26 (42.3%)</td><td>29/32 (90.6%)</td><td>In progress, Nov 24 21:12 UTC</td></tr>
+              <tr><td>GitHub CI - main</td><td><span class="rate"><span class="passed" aria-label="7 passed builds">7</span>/16 <strong>(43.8%)</strong></span><span class="counts"><span class="failed">9 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="12 passed builds">12</span>/40 <strong>(30.0%)</strong></span><span class="counts"><span class="failed">28 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="20 passed builds">20</span>/49 <strong>(40.8%)</strong></span><span class="counts"><span class="failed">29 failed builds</span></span></td><td>Observed: in progress<br>Triggered Nov 24 22:18 UTC<br>Not evaluated</td></tr>
+              <tr><td>AzDO internal - main</td><td><span class="rate"><span class="passed" aria-label="5 passed builds">5</span>/9 <strong>(55.6%)</strong></span><span class="counts"><span class="failed">4 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="11 passed builds">11</span>/26 <strong>(42.3%)</strong></span><span class="counts"><span class="failed">15 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="29 passed builds">29</span>/32 <strong>(90.6%)</strong></span><span class="counts"><span class="failed">3 failed builds</span></span></td><td>Observed: in progress<br>Triggered Nov 24 21:12 UTC<br>Not evaluated</td></tr>
             </tbody>
           </table>
         </div>
-      </details>
+      <h3>GitHub CI - main: daily outcomes and trailing-seven-date trend</h3>
+      <img src="github-delivery-charts.png" alt="Historical GitHub CI daily passed/failed build counts and separate seven-date initial-green trend.">
+      <h3>Azure DevOps CI - main: daily outcomes and trailing-seven-date trend</h3>
+      <img src="azure-delivery-charts.png" alt="Historical Azure CI daily passed/failed build counts and separate seven-date initial-green trend.">
     </section>
     <section>
       <h2>Lower-cadence checks</h2>
       <details>
         <summary>Show lower-cadence charts and results</summary>
         <p>Outerloop and source index are separate from delivery CI.</p>
-        <img src="scheduled-preview.png" alt="Outerloop and source-index table and daily outcome and seven-date trend charts. Both had 2 of 2 builds pass in the last 48 hours. The text table below contains all values.">
-        <details>
-          <summary>Show lower-cadence table as text</summary>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
               <tbody>
-                <tr><td>GitHub outerloop - main</td><td>2/2 (100.0%)</td><td>6/7 (85.7%)</td><td>4/7 (57.1%)</td><td>Success, Nov 24 02:07 UTC</td></tr>
-                <tr><td>AzDO source index - main</td><td>2/2 (100.0%)</td><td>5/7 (71.4%)</td><td>5/7 (71.4%)</td><td>Success, Nov 24 00:00 UTC</td></tr>
+                <tr><td>GitHub outerloop - main</td><td><span class="rate"><span class="passed" aria-label="2 passed builds">2</span>/2 <strong>(100.0%)</strong></span><span class="counts"><span class="failed">0 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="6 passed builds">6</span>/7 <strong>(85.7%)</strong></span><span class="counts"><span class="failed">1 failed build</span></span></td><td><span class="rate"><span class="passed" aria-label="4 passed builds">4</span>/7 <strong>(57.1%)</strong></span><span class="counts"><span class="failed">3 failed builds</span></span></td><td><span class="passed">Observed: success</span><br>Nov 24 02:07 UTC</td></tr>
+                <tr><td>AzDO source index - main</td><td><span class="rate"><span class="passed" aria-label="2 passed builds">2</span>/2 <strong>(100.0%)</strong></span><span class="counts"><span class="failed">0 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="5 passed builds">5</span>/7 <strong>(71.4%)</strong></span><span class="counts"><span class="failed">2 failed builds</span></span></td><td><span class="rate"><span class="passed" aria-label="5 passed builds">5</span>/7 <strong>(71.4%)</strong></span><span class="counts"><span class="failed">2 failed builds</span></span></td><td><span class="passed">Observed: succeeded</span><br>Nov 24 00:00 UTC</td></tr>
               </tbody>
             </table>
           </div>
-        </details>
+        <h3>GitHub outerloop - main: daily outcomes and trailing-seven-date trend</h3>
+        <img src="outerloop-charts.png" alt="Historical outerloop daily passed/failed build counts and separate seven-date initial-green trend.">
+        <h3>Azure source index - main: daily outcomes and trailing-seven-date trend</h3>
+        <img src="source-index-charts.png" alt="Historical source-index daily passed/failed build counts and separate seven-date initial-green trend.">
       </details>
     </section>
     <section>
@@ -119,12 +131,13 @@
         Cells show passed/evaluated builds. Today's date was partial at collection time.</p>
       <p>The data is a saved collection, including cached dates that were not freshly verified.
         Outcomes were observed during collection, not reconstructed historical statuses.
-        CI Insights was not used for this preview. The production renderer has not yet been updated
-        to generate this format.</p>
+        CI Insights was not used for this preview. A fresh production report has not yet
+        been generated.</p>
       <p>This public page serves static HTML and images from the
         <a href="https://github.com/radical/aspire/tree/ci-health-pages">ci-health-pages branch</a>;
-        it does not fetch CI data. The separately maintained
-        <a href="https://github.com/microsoft/aspire/issues/18231">rolling report</a> may be newer.</p>
+        it does not fetch CI data. The
+        <a href="https://github.com/microsoft/aspire/issues/18231">tracking issue</a>
+        points to this page; recurring report runs do not update the issue.</p>
     </section>
   </main>
 </body>
