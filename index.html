@@ -5,20 +5,47 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aspire CI health - Option B preview</title>
   <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #1f2328; background: #f6f8fa; }
+    :root {
+      color-scheme: light dark;
+      --ink: #1f2328;
+      --muted: #59636e;
+      --background: #f6f8fa;
+      --panel: #fff;
+      --border: #d1d9e0;
+      --notice: #fff8c5;
+      --notice-border: #d4a72c;
+      --link: #0969da;
+      font-family: system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--background);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #f0f6fc;
+        --muted: #b1bac4;
+        --background: #0d1117;
+        --panel: #161b22;
+        --border: #59636e;
+        --notice: #3b2e00;
+        --notice-border: #9e6a03;
+        --link: #79c0ff;
+      }
+    }
     body { max-width: 1280px; padding: 2rem 1rem; margin: auto; line-height: 1.55; }
     h1 { margin-bottom: .2rem; }
     h2 { margin-top: 0; }
-    .muted { color: #59636e; }
-    .notice { background: #fff8c5; border: 1px solid #d4a72c; border-radius: 8px; padding: 1rem; }
-    section { background: white; border: 1px solid #d1d9e0; border-radius: 10px; padding: 1.5rem; margin-top: 1rem; }
-    img { display: block; width: 100%; height: auto; }
+    .muted { color: var(--muted); }
+    .notice { background: var(--notice); border: 1px solid var(--notice-border); border-radius: 8px; padding: 1rem; }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; margin-top: 1rem; }
+    /* Saved PNG charts retain their original white panels in both themes. */
+    img { display: block; width: 100%; height: auto; background: white; }
     table { border-collapse: collapse; width: 100%; font-size: .9rem; }
-    th, td { border: 1px solid #d1d9e0; padding: .6rem; text-align: left; }
-    th { background: #f6f8fa; }
+    th, td { border: 1px solid var(--border); padding: .6rem; text-align: left; }
+    th { background: var(--background); }
     .table-wrap { overflow-x: auto; }
     summary { cursor: pointer; font-weight: 600; }
-    a { color: #0969da; }
+    summary:focus-visible, a:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; }
+    a { color: var(--link); }
   </style>
 </head>
 <body>
@@ -53,19 +80,22 @@
     </section>
     <section>
       <h2>Lower-cadence checks</h2>
-      <p>Outerloop and source index are separate from delivery CI.</p>
-      <img src="scheduled-preview.png" alt="Outerloop and source-index table and daily outcome and seven-date trend charts. Both had 2 of 2 builds pass in the last 48 hours. The text table below contains all values.">
       <details>
-        <summary>Show lower-cadence table as text</summary>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
-            <tbody>
-              <tr><td>GitHub outerloop - main</td><td>2/2 (100.0%)</td><td>6/7 (85.7%)</td><td>4/7 (57.1%)</td><td>Success, Nov 24 02:07 UTC</td></tr>
-              <tr><td>AzDO source index - main</td><td>2/2 (100.0%)</td><td>5/7 (71.4%)</td><td>5/7 (71.4%)</td><td>Success, Nov 24 00:00 UTC</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <summary>Show lower-cadence charts and results</summary>
+        <p>Outerloop and source index are separate from delivery CI.</p>
+        <img src="scheduled-preview.png" alt="Outerloop and source-index table and daily outcome and seven-date trend charts. Both had 2 of 2 builds pass in the last 48 hours. The text table below contains all values.">
+        <details>
+          <summary>Show lower-cadence table as text</summary>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
+              <tbody>
+                <tr><td>GitHub outerloop - main</td><td>2/2 (100.0%)</td><td>6/7 (85.7%)</td><td>4/7 (57.1%)</td><td>Success, Nov 24 02:07 UTC</td></tr>
+                <tr><td>AzDO source index - main</td><td>2/2 (100.0%)</td><td>5/7 (71.4%)</td><td>5/7 (71.4%)</td><td>Success, Nov 24 00:00 UTC</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </details>
     </section>
     <section>
