@@ -3,58 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CI health - GitHub Pages demo</title>
+  <title>Aspire CI health - Option B preview</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, sans-serif; color: #1f2328; background: #f6f8fa; }
-    body { max-width: 860px; padding: 2rem 1rem; margin: auto; }
-    h1 { margin-bottom: .3rem; }
-    .card { background: white; border: 1px solid #d1d9e0; border-radius: 12px; padding: 1.5rem; margin-top: 1rem; }
-    .notice { background: #fff8c5; border: 1px solid #d4a72c; border-radius: 8px; padding: 1rem; }
+    body { max-width: 1280px; padding: 2rem 1rem; margin: auto; line-height: 1.55; }
+    h1 { margin-bottom: .2rem; }
+    h2 { margin-top: 0; }
     .muted { color: #59636e; }
-    .controls { display: flex; gap: .5rem; margin: 1rem 0; }
-    button { font: inherit; border: 1px solid #8c959f; border-radius: 6px; background: white; padding: .5rem 1rem; cursor: pointer; }
-    button[aria-pressed="true"] { background: #0969da; border-color: #0969da; color: white; }
-    .metric { font-size: 2.5rem; font-weight: 700; margin: .5rem 0; }
-    .bar { display: flex; height: 2rem; overflow: hidden; border-radius: 5px; background: #f6f8fa; }
-    .passed { background: #1a7f37; }
-    .failed { background: #cf222e; }
+    .notice { background: #fff8c5; border: 1px solid #d4a72c; border-radius: 8px; padding: 1rem; }
+    section { background: white; border: 1px solid #d1d9e0; border-radius: 10px; padding: 1.5rem; margin-top: 1rem; }
+    img { display: block; width: 100%; height: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+    th, td { border: 1px solid #d1d9e0; padding: .6rem; text-align: left; }
+    th { background: #f6f8fa; }
+    .table-wrap { overflow-x: auto; }
+    summary { cursor: pointer; font-weight: 600; }
+    a { color: #0969da; }
   </style>
 </head>
 <body>
-  <h1>CI health</h1>
-  <p class="muted">A small interactive GitHub Pages experiment.</p>
-  <p class="notice"><strong>Synthetic example only.</strong> These numbers are invented; this page is not a CI report and contains no internal data.</p>
-  <main class="card">
-    <h2>Example build outcomes</h2>
-    <div class="controls" aria-label="Example time window">
-      <button type="button" data-window="today" aria-pressed="true">Today</button>
-      <button type="button" data-window="week" aria-pressed="false">7 days</button>
-    </div>
-    <div id="result" aria-live="polite">
-      <div class="metric" id="rate">70%</div>
-      <p id="counts">7 passed / 3 failed - 10 builds</p>
-      <div class="bar" role="img" aria-label="7 passed and 3 failed">
-        <div class="passed" style="width: 70%"></div><div class="failed" style="width: 30%"></div>
+  <header>
+    <h1>Aspire CI health</h1>
+    <p class="muted">Option B: recent build outcomes and seven-day reliability trends</p>
+    <p class="notice"><strong>Historical preview, not live.</strong> Data was collected through
+      November 24, 2026 at 22:22 UTC. This page does not refresh automatically.
+      Release branches are not included. Do not use these results as today's CI status.</p>
+    <p>Last 48 hours: November 22, 22:22:35 through November 24, 22:22:35 UTC.
+      Current seven dates: November 18-24 (November 24 partial).
+      Prior seven full dates: November 11-17.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Delivery CI</h2>
+      <p>GitHub and internal Azure DevOps main-branch CI are shown together.
+        Daily bars show the number of builds; lines show the trailing seven-date initial-green rate.</p>
+      <img src="delivery-preview.png" alt="Delivery CI table and charts. GitHub CI: 7 of 16 builds passed in the last 48 hours; internal Azure DevOps CI: 5 of 9 passed. The text table below contains all values.">
+      <details>
+        <summary>Show delivery CI table as text</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
+            <tbody>
+              <tr><td>GitHub CI - main</td><td>7/16 (43.8%)</td><td>12/40 (30.0%)</td><td>20/49 (40.8%)</td><td>In progress, Nov 24 22:18 UTC</td></tr>
+              <tr><td>AzDO internal - main</td><td>5/9 (55.6%)</td><td>11/26 (42.3%)</td><td>29/32 (90.6%)</td><td>In progress, Nov 24 21:12 UTC</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+    <section>
+      <h2>Lower-cadence checks</h2>
+      <p>Outerloop and source index are separate from delivery CI.</p>
+      <img src="scheduled-preview.png" alt="Outerloop and source-index table and daily outcome and seven-date trend charts. Both had 2 of 2 builds pass in the last 48 hours. The text table below contains all values.">
+      <details>
+        <summary>Show lower-cadence table as text</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Lane</th><th>Last 48 hours</th><th>Current 7 dates</th><th>Prior 7 dates</th><th>Latest observed</th></tr></thead>
+            <tbody>
+              <tr><td>GitHub outerloop - main</td><td>2/2 (100.0%)</td><td>6/7 (85.7%)</td><td>4/7 (57.1%)</td><td>Success, Nov 24 02:07 UTC</td></tr>
+              <tr><td>AzDO source index - main</td><td>2/2 (100.0%)</td><td>5/7 (71.4%)</td><td>5/7 (71.4%)</td><td>Success, Nov 24 00:00 UTC</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+    <section>
+      <h2>PR CI</h2>
+      <p>PR runs are a separate population. Later successful reruns do not erase initial failures.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Window</th><th>Initial green</th><th>Final green</th><th>Recovered on rerun</th><th>Attempt-one p50 / p90</th></tr></thead>
+          <tbody>
+            <tr><td>Current 7 dates (partial)</td><td>69/264 (26.1%)</td><td>150/264 (56.8%)</td><td>81</td><td>34.2 / 54.2 min (n=260)</td></tr>
+            <tr><td>Prior 7 full dates</td><td>83/320 (25.9%)</td><td>197/320 (61.6%)</td><td>114</td><td>37.7 / 53.9 min (n=317)</td></tr>
+          </tbody>
+        </table>
       </div>
-    </div>
-    <p class="muted">Green = passed; red = failed. Toggle the time window to try the interaction.</p>
+      <img src="pr-preview.png" alt="PR CI seven-date initial and final green rates and attempt-one duration percentiles.">
+    </section>
+    <section>
+      <h2>How to read this preview</h2>
+      <p>Counts are builds, not test cases. GitHub reliability uses the first completed success or
+        failure; Azure DevOps treats succeeded as green and failed or partially succeeded as non-green.
+        Cells show passed/evaluated builds. Today's date was partial at collection time.</p>
+      <p>The data is a saved collection, including cached dates that were not freshly verified.
+        Outcomes were observed during collection, not reconstructed historical statuses.
+        CI Insights was not used for this preview. The production renderer has not yet been updated
+        to generate this format.</p>
+      <p>This public page serves static HTML and images from the
+        <a href="https://github.com/radical/aspire/tree/ci-health-pages">ci-health-pages branch</a>;
+        it does not fetch CI data. The separately maintained
+        <a href="https://github.com/microsoft/aspire/issues/18231">rolling report</a> may be newer.</p>
+    </section>
   </main>
-  <script>
-    const examples = { today: [7, 3], week: [43, 7] };
-    document.querySelectorAll("button[data-window]").forEach(button => {
-      button.addEventListener("click", () => {
-        const [passed, failed] = examples[button.dataset.window];
-        const percent = passed / (passed + failed) * 100;
-        document.querySelectorAll("button[data-window]").forEach(item => {
-          item.setAttribute("aria-pressed", String(item === button));
-        });
-        document.querySelector("#rate").textContent = `${percent}%`;
-        document.querySelector("#counts").textContent = `${passed} passed / ${failed} failed - ${passed + failed} builds`;
-        document.querySelector(".bar").setAttribute("aria-label", `${passed} passed and ${failed} failed`);
-        document.querySelector(".passed").style.width = `${percent}%`;
-        document.querySelector(".failed").style.width = `${100 - percent}%`;
-      });
-    });
-  </script>
 </body>
 </html>
