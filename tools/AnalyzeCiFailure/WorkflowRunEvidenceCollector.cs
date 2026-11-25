@@ -159,6 +159,16 @@ internal sealed partial class WorkflowRunEvidenceCollector
         var failedJobs = new JsonArray(allJobs.OfType<JsonObject>().Where(job =>
                 IsFailedOrInterrupted(job["conclusion"]) && !_workflow.IsAggregationJob(job))
             .Select(job => job.DeepClone()).ToArray());
+        if (request.SelectedJobIds is { } selected)
+        {
+            if (selected.IsDefaultOrEmpty || selected.Distinct().Count() != selected.Length ||
+                selected.Any(id => !failedJobs.Any(job => GitHubJson.ReadRequiredId(job!["id"]) == id)))
+            {
+                throw new ValidationException("Selected job IDs must identify actionable failures in the requested run attempt.");
+            }
+            failedJobs = new JsonArray(failedJobs.Where(job => selected.Contains(GitHubJson.ReadRequiredId(job!["id"])))
+                .Select(job => job!.DeepClone()).ToArray());
+        }
         CaptureDiagnostic("failed-jobs.json", failedJobs);
         progress.Diagnostics.Record(
             "jobs",
@@ -312,7 +322,8 @@ internal sealed partial class WorkflowRunEvidenceCollector
         ct.ThrowIfCancellationRequested();
         progress.Stage = "projection";
         var prior = PriorCauseCatalogue.BuildIndex(_attachments.ToImmutableDictionary(), failures);
-        var evidence = CollectionProjection.CreateBundle(request.Repository, progress, run, jobs, failures, _testState, prior, _prMetadata, _mainContext);
+        var evidence = CollectionProjection.CreateBundle(request.Repository, progress, run, jobs, failures, _testState, prior, _prMetadata, _mainContext)
+            with { SelectedJobIds = request.SelectedJobIds };
         progress.Diagnostics.Record("test-evidence", EnumText(_testState), new { failures = failures.Length, acquired_artifacts = _selectedArtifacts.Count });
         _capture.Bundle = evidence;
         AnalysisValidator.ValidateBundle(evidence, request.Repository);

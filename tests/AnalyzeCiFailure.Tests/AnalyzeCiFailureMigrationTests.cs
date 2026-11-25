@@ -304,6 +304,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
             invocation,
             "123",
             "1",
+            jobIdsText: null,
             CreateGitHubClient(),
             cancellation.Token));
         var outcome = TransientJson.Read<AnalysisOutcome>(await File.ReadAllTextAsync(paths.Outcome));

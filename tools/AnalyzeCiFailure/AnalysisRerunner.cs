@@ -56,6 +56,10 @@ internal static class AnalysisRerunner
         var analysis = EvidencePackageStore.ReadAndValidate(paths, analysisDirectory, repository);
         ct.ThrowIfCancellationRequested();
         var bundle = analysis.Bundle;
+        if (bundle.SelectedJobIds is not null)
+        {
+            throw new ValidationException("Job-scoped evidence cannot authorize whole-run reruns.");
+        }
         var expectedPr = bundle.SubjectPr?.Number.ToString(CultureInfo.InvariantCulture) ?? "";
         if (request.RunId != bundle.Run.Id || (request.PrNumbers ?? "") != expectedPr ||
             analysis.Report.Verdict != AnalysisVerdict.TransientInfrastructure || analysis.Report.Tests.Length != 0)

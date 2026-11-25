@@ -9,6 +9,8 @@ namespace AnalyzeCiFailure;
 /// <summary>Authoritative, versioned collection facts transferred independently of the agent's proposal.</summary>
 internal sealed record EvidenceBundle
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<long>? SelectedJobIds { get; init; }
     public required int SchemaVersion { get; init; }
     public required CollectedWorkflowRun Run { get; init; }
     public required CollectedSubjectPr? SubjectPr { get; init; }

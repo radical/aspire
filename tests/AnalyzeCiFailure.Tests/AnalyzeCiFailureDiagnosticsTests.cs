@@ -114,6 +114,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
             invocation,
             "invalid",
             "2",
+            jobIdsText: null,
             CreateGitHubClient(),
             CancellationToken.None));
 

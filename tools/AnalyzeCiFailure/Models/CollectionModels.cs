@@ -9,7 +9,10 @@ using System.Text.Json.Serialization;
 namespace AnalyzeCiFailure;
 
 /// <summary>Selects the repository, workflow run and optional pinned attempt to acquire.</summary>
-internal sealed record EvidenceCollectionRequest(string Repository, long RunId, int? Attempt);
+internal sealed record EvidenceCollectionRequest(string Repository, long RunId, int? Attempt)
+{
+    internal ImmutableArray<long>? SelectedJobIds { get; init; }
+}
 
 /// <summary>Distinguishes optional-context issues, missing test evidence and fatal invocation failures.</summary>
 internal enum AnalysisProblemCategory { OptionalContext, TestEvidence, Fatal }

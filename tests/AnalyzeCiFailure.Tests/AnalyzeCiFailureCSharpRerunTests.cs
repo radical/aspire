@@ -25,6 +25,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
     [InlineData("9007199254740993", "wrong-run", false)]
     [InlineData("9007199254740993", "wrong-pr", false)]
     [InlineData("9007199254740993", "unavailable", false)]
+    [InlineData("9007199254740993", "job-scoped", false)]
     [InlineData("9007199254740993", "infrastructure-tests", false)]
     [InlineData("9007199254740993", "code-issue", false)]
     [InlineData("9007199254740993", "closed", false)]
@@ -52,6 +53,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
         var evidence = AnalyzeCiFailureFixtures.CreateEvidence(scenario == "main" ? RunScope.Main : RunScope.PullRequest);
         evidence = evidence with
         {
+            SelectedJobIds = scenario == "job-scoped" ? [123] : null,
             Run = evidence.Run with { Id = parsedId, Url = $"https://github.com/microsoft/aspire/actions/runs/{parsedId}" },
             SubjectPr = evidence.SubjectPr is { } pr ? pr with { Number = 9007199254740993 } : null,
             TestEvidence = evidence.TestEvidence with { State = scenario == "unavailable" ? EvidenceState.Unavailable : EvidenceState.Complete },

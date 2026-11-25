@@ -25,6 +25,9 @@ internal static class AnalysisCommands
         var runIdOption = CreateSingleUseStringOption("--run-id", "Workflow run to collect.");
         runIdOption.Required = true;
         var runAttemptOption = CreateSingleUseStringOption("--run-attempt", "Pinned run attempt. Omit to collect the latest attempt.");
+        var jobIdsOption = CreateSingleUseStringOption("--job-ids", "Comma-separated actionable job IDs for issue maintenance only. Scoped evidence cannot authorize ordinary publication or reruns.");
+        var regenerateIssueOption = CreateSingleUseStringOption("--regenerate-issue", "JSON snapshot containing number, updated_at and body of the existing flaky-test issue to regenerate. Only that cause's history and issue body are updated.");
+        var issueFooterOption = CreateSingleUseStringOption("--issue-footer", "Attribution footer for canonical issue regeneration; requires --regenerate-issue.");
 
         var repositoryOption = CreateSingleUseStringOption("--repo", "Repository in owner/name form.");
         repositoryOption.Required = true;
@@ -47,6 +50,7 @@ internal static class AnalysisCommands
         collectCommand.Options.Add(repositoryOption);
         collectCommand.Options.Add(runIdOption);
         collectCommand.Options.Add(runAttemptOption);
+        collectCommand.Options.Add(jobIdsOption);
         collectCommand.Options.Add(githubOutputOption);
         replayCommand.Options.Add(evidenceDirectoryOption);
         replayCommand.Options.Add(githubOutputOption);
@@ -61,6 +65,8 @@ internal static class AnalysisCommands
         publishCommand.Options.Add(historyDirectoryOption);
         publishCommand.Options.Add(repositoryOption);
         publishCommand.Options.Add(observedAtOption);
+        publishCommand.Options.Add(regenerateIssueOption);
+        publishCommand.Options.Add(issueFooterOption);
 
         collectCommand.SetAction((parseResult, ct) => ExecuteAsync(
             parseResult.GetValue(workingDirectoryOption),
@@ -87,6 +93,7 @@ internal static class AnalysisCommands
                 invocation,
                 parseResult.GetValue(runIdOption),
                 parseResult.GetValue(runAttemptOption),
+                parseResult.GetValue(jobIdsOption),
                 output,
                 createGitHubClient,
                 ct);
@@ -153,6 +160,14 @@ internal static class AnalysisCommands
                 progress.SubjectPrNumber = analysis.Bundle.SubjectPr?.Number;
                 progress.HasRelevantFailures = true;
                 progress.Stage = "publication";
+                var regenerationPath = parseResult.GetValue(regenerateIssueOption);
+                var footer = parseResult.GetValue(issueFooterOption);
+                if (footer is not null && regenerationPath is null)
+                {
+                    throw new ValidationException("--issue-footer requires --regenerate-issue.");
+                }
+                var regeneration = regenerationPath is null ? null :
+                    TransientJson.ReadUtf8<IssueRegeneration>(await File.ReadAllBytesAsync(GetAbsolutePath(regenerationPath, workingDirectory), ct));
                 await new AnalysisPublisher(
                     workingDirectory,
                     scratch.Requests,
@@ -162,6 +177,10 @@ internal static class AnalysisCommands
                         DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
                     progress.Diagnostics,
                     github)
+                    {
+                        Regeneration = regeneration,
+                        IssueFooter = footer,
+                    }
                     .PublishAsync(analysis, ct);
                 await invocation.WriteDiagnosticsAsync("published");
             }

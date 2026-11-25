@@ -289,6 +289,12 @@ internal sealed partial class AnalysisValidator
         {
             throw new ValidationException("Evidence jobs must be a nonempty array with unique positive IDs, names, and complete step arrays.");
         }
+        if (evidence.SelectedJobIds is { } selected &&
+            (selected.IsDefaultOrEmpty || selected.Distinct().Count() != selected.Length ||
+             selected.Length != evidence.Jobs.Length || selected.Any(id => !evidence.Jobs.Any(job => job.Id == id))))
+        {
+            throw new ValidationException("Selected job scope must exactly match the captured jobs.");
+        }
         if (evidence.TestEvidence is not { } tests || !Enum.IsDefined(tests.State) ||
             tests.Failures.IsDefault || tests.Problems.IsDefault || tests.Problems.Any(problem => problem is null || problem.Stage is null || problem.Message is null) ||
             tests.State == EvidenceState.NotApplicable && tests.Failures.Length != 0 ||

@@ -643,7 +643,8 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
         IReadOnlyDictionary<string, string>? environment = null,
         string runId = "123",
         string? runAttempt = "2",
-        bool useWorkflowAdapter = false)
+        bool useWorkflowAdapter = false,
+        string[]? extraArguments = null)
     {
         var responses = Directory.CreateDirectory(Path.Combine(_workspace.Path, "responses")).FullName;
         var runnerFailure = scenario.StartsWith("runner-", StringComparison.Ordinal);
@@ -1009,6 +1010,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
         }
         command.AddRange(["collect", "--repo", "microsoft/aspire", "--run-id", runId,
             "--github-output", variables["INVOCATION_PATHS"]]);
+        command.AddRange(extraArguments ?? []);
         if (scenario != "manual" && runAttempt is not null)
         {
             command.AddRange(["--run-attempt", runAttempt]);

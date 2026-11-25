@@ -121,6 +121,40 @@ internal static partial class CauseIssueRenderer
             + OccurrenceSection(rows, total) + suffix;
     }
 
+    internal static string? RegenerateIssue(string canonical, JsonObject history, string? footer)
+    {
+        var parts = OccurrenceParts(canonical);
+        var observations = (JsonArray)history["occurrences"]!;
+        var rows = observations.Select(observation =>
+        {
+            var date = Text(observation!["observed_at"])!.Split('T')[0];
+            var job = DiagnosticTextSanitizer.Sanitize(Text(observation["job"]) ?? "");
+            var pr = GetValueText(observation["pr_number"]);
+            // Legacy pr_number=0 also represents unresolved PRs, not just main.
+            var context = pr != "0" ? $"#{pr}" : Text(observation["run_scope"]) == "main" ? "main" : "unavailable";
+            return $"| {date} | [{GetValueText(observation["run_id"])}]({Text(observation["run_url"])}) | " +
+                $"{MarkdownFormatting.CodeSpan(job.Replace("|", "\\|", StringComparison.Ordinal))} | {context} |";
+        }).ToArray();
+        var header = parts.Prefix.IndexOf("\n\n## Build Information\n", StringComparison.Ordinal);
+        if (header < 0)
+        {
+            throw new ValidationException("Canonical issue is missing its build-information header.");
+        }
+        var prefix = parts.Prefix.Insert(header, "\n\n[automated] CI failure report.");
+        var body = prefix.TrimEnd('\r', '\n') + "\n\n" + OccurrenceSection(rows, rows.Length);
+        if (footer is not null)
+        {
+            if (string.IsNullOrWhiteSpace(footer) || footer.Contains('\n') || footer.Contains('\r') ||
+                DiagnosticTextSanitizer.Sanitize(footer, limit: 500) != footer)
+            {
+                throw new ValidationException("Issue footer must be a single safe attribution line of at most 500 characters.");
+            }
+            body = body.TrimEnd('\n') + "\n\n" + footer + "\n";
+        }
+
+        return FitIssue(body, Observations(history));
+    }
+
     internal static bool HasOccurrence(string body, string runId)
     {
         var parts = OccurrenceParts(body);

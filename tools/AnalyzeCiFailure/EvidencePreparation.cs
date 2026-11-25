@@ -18,6 +18,7 @@ internal static class EvidencePreparation
         AnalysisInvocation invocation,
         string? runIdText,
         string? runAttemptText,
+        string? jobIdsText,
         string? githubOutput,
         Func<GitHubApiClient> createGitHubClient,
         CancellationToken ct)
@@ -32,6 +33,7 @@ internal static class EvidencePreparation
                 invocation,
                 runIdText,
                 runAttemptText,
+                jobIdsText,
                 github,
                 ct);
         }
@@ -69,6 +71,7 @@ internal static class EvidencePreparation
         AnalysisInvocation invocation,
         string? runIdText,
         string? runAttemptText,
+        string? jobIdsText,
         GitHubApiClient github,
         CancellationToken ct)
     {
@@ -100,7 +103,11 @@ internal static class EvidencePreparation
             }
 
             // Acquire evidence first; a legitimate no-work result needs no diagnostic views.
-            var result = await collector.CollectAsync(new(repository, runId, runAttempt), progress, ct);
+            var result = await collector.CollectAsync(new(repository, runId, runAttempt)
+            {
+                SelectedJobIds = jobIdsText is null ? null :
+                    jobIdsText.Split(',').Select(TransientJson.ParseId).ToImmutableArray(),
+            }, progress, ct);
             if (!result.HasRelevantFailures)
             {
                 var noWork = progress.CreateOutcome("no-work");

@@ -879,7 +879,8 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
         JsonObject? history = null,
         string? body = null,
         string state = "open",
-        bool useTypedProposal = false)
+        bool useTypedProposal = false,
+        string[]? extraArguments = null)
     {
         await RunProcessAsync("git", ["--no-pager", "init", "--bare", "remote.git"]);
         await RunProcessAsync("git", ["--no-pager", "clone", "remote.git", "memory-repo"]);
@@ -905,6 +906,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
                     ["state"] = state,
                     ["body"] = body,
                     ["html_url"] = "https://github.com/microsoft/aspire/issues/77",
+                    ["updated_at"] = "2026-10-21T00:00:00Z",
                     ["labels"] = new JsonArray(new JsonObject { ["name"] = "ci-failure-cause" }),
                 }).ToJsonString());
         }
@@ -989,7 +991,11 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
               exit 1
             fi
             """);
-        return useTypedProposal ? await RunTypedPublicationCommandAsync(fakeGh, "2026-10-21T01:00:00Z") : await RunPublicationCommandAsync(fakeGh);
+        if (!useTypedProposal)
+        {
+            AnalyzeCiFailureFixtures.Write(_workspace.Path);
+        }
+        return await RunTypedPublicationCommandAsync(fakeGh, "2026-10-21T01:00:00Z", extraArguments);
     }
 
     private Task<CommandResult> RunPublicationCommandAsync(string fakeGh)
@@ -1001,7 +1007,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
         return RunTypedPublicationCommandAsync(fakeGh, observedAt);
     }
 
-    private async Task<CommandResult> RunTypedPublicationCommandAsync(string fakeGh, string observedAt)
+    private async Task<CommandResult> RunTypedPublicationCommandAsync(string fakeGh, string observedAt, string[]? extraArguments = null)
     {
         await PrepareFreshPublicationCheckoutAsync();
         _publicationHistoryBefore = await RunProcessAsync(
@@ -1014,7 +1020,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
                 typeof(AnalyzeCiFailure.Program).Assembly.Location, "publish", "--working-dir", _workspace.Path,
                 "--evidence-dir", EvidenceDirectory, "--analysis-dir", Path.Combine(_workspace.Path, "ci-analysis-output"),
                 "--history-dir", Path.Combine(_workspace.Path, "memory-repo"), "--repo", "microsoft/aspire",
-                "--observed-at", observedAt],
+                "--observed-at", observedAt, .. extraArguments ?? []],
             new Dictionary<string, string>
             {
                 ["PATH"] = $"{Path.GetDirectoryName(fakeGh)}{Path.PathSeparator}{Environment.GetEnvironmentVariable("PATH")}",

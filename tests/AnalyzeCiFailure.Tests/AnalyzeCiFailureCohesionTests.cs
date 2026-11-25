@@ -26,6 +26,7 @@ public sealed partial class AnalyzeCiFailureWorkflowTests
             invocation,
             "123",
             runAttemptText: null,
+            jobIdsText: null,
             output,
             () => throw error,
             CancellationToken.None);

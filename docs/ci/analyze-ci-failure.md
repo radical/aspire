@@ -550,6 +550,45 @@ or run-selection options. Missing required options fail before acquisition.
 `validate` remains a local, no-effect validator. Obsolete `--scripts-dir`,
 `--result-file` and the old transient layout are not supported.
 
+### Regenerating an existing flaky-test issue
+
+For operator-authorized maintenance, `publish --regenerate-issue SNAPSHOT.json`
+replaces the entire body of one open, unlocked issue with the canonical report.
+The snapshot contains its `number` as a decimal **string**, `updated_at`, and
+exact `body`, read from GitHub before publication. The issue's cause marker and
+type must match exactly one validated flaky-test cause. An optional
+`--issue-footer` supplies one safe attribution line; generated reports include
+`[automated] CI failure report.` below the identity markers.
+
+The maintenance path in `AnalysisPublisher.Regeneration.cs` renders all retained
+distinct-run occurrences, persists only the selected cause record, patches only
+the issue body, and then saves its issue association. It does not overwrite run
+summaries, create issues, change labels or state, or publish PR comments.
+Ordinary publication retains its existing operator-note preservation behavior.
+Explicit regeneration replaces operator text, so retain the snapshot if needed.
+
+`collect --job-ids ID,ID` can acquire complete evidence for explicit actionable
+jobs in a pinned run attempt. This is useful when unrelated jobs lack results:
+it does not claim those other jobs were analyzed. The bundle's
+`selected_job_ids` records the exact scope. Such evidence cannot authorize
+ordinary publication or whole-run reruns; it is accepted only for this
+issue-maintenance publication path. Every captured job and test still requires
+normal proposal coverage and validation.
+
+For historical registration, pass an explicit `--observed-at` timestamp from the
+verified run rather than using today's default observation time. First-writer
+per-cause/run history retains the original date on replay. Maintenance records
+the captured `run_scope`; older zero-PR rows without it render `unavailable`
+rather than guessing that the run occurred on main.
+
+Snapshot body and timestamp are rechecked before history writes and immediately
+before issue PATCH. GitHub issue PATCH is not an atomic compare-and-swap;
+exclusive ownership of the issue-body write is still required. If the issue
+changes after the history push, publication fails without overwriting it and
+the retained occurrence allows a deliberate retry with a fresh snapshot.
+Future normal analyses must independently match the stored cause; registration
+does not schedule analysis or guarantee a future match.
+
 Commands that produce outputs print their paths as `workspace_dir`,
 `evidence_dir`, `replay_dir`, `recovery_dir` and `diagnostics_dir`. Pass the saved or downloaded
 evidence directory explicitly with `--evidence-dir` for replay, validation,

@@ -18,6 +18,8 @@ namespace AnalyzeCiFailure;
 /// </summary>
 internal sealed partial class AnalysisPublisher
 {
+    internal IssueRegeneration? Regeneration { get; init; }
+    internal string? IssueFooter { get; init; }
     private readonly string _requestDirectory;
     private readonly string _historyDirectory;
     private readonly string _repository;
@@ -76,6 +78,15 @@ internal sealed partial class AnalysisPublisher
         _github = new AnalysisGitHubClient(_githubApi, cancellationToken);
         Directory.CreateDirectory(_requestDirectory);
 
+        if (Regeneration is not null)
+        {
+            await RegenerateIssueAsync(analysis, Regeneration);
+            return;
+        }
+        if (analysis.Bundle.SelectedJobIds is not null)
+        {
+            throw new ValidationException("Job-scoped evidence requires --regenerate-issue; ordinary publication is not authorized.");
+        }
         // Deterministic PR failures produce a comment, not recurring cause-history records.
         if (analysis.Report.Verdict == AnalysisVerdict.CodeIssue)
         {
