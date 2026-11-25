@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI health - GitHub Pages demo</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #1f2328; background: #f6f8fa; }
+    body { max-width: 860px; padding: 2rem 1rem; margin: auto; }
+    h1 { margin-bottom: .3rem; }
+    .card { background: white; border: 1px solid #d1d9e0; border-radius: 12px; padding: 1.5rem; margin-top: 1rem; }
+    .notice { background: #fff8c5; border: 1px solid #d4a72c; border-radius: 8px; padding: 1rem; }
+    .muted { color: #59636e; }
+    .controls { display: flex; gap: .5rem; margin: 1rem 0; }
+    button { font: inherit; border: 1px solid #8c959f; border-radius: 6px; background: white; padding: .5rem 1rem; cursor: pointer; }
+    button[aria-pressed="true"] { background: #0969da; border-color: #0969da; color: white; }
+    .metric { font-size: 2.5rem; font-weight: 700; margin: .5rem 0; }
+    .bar { display: flex; height: 2rem; overflow: hidden; border-radius: 5px; background: #f6f8fa; }
+    .passed { background: #1a7f37; }
+    .failed { background: #cf222e; }
+  </style>
+</head>
+<body>
+  <h1>CI health</h1>
+  <p class="muted">A small interactive GitHub Pages experiment.</p>
+  <p class="notice"><strong>Synthetic example only.</strong> These numbers are invented; this page is not a CI report and contains no internal data.</p>
+  <main class="card">
+    <h2>Example build outcomes</h2>
+    <div class="controls" aria-label="Example time window">
+      <button type="button" data-window="today" aria-pressed="true">Today</button>
+      <button type="button" data-window="week" aria-pressed="false">7 days</button>
+    </div>
+    <div id="result" aria-live="polite">
+      <div class="metric" id="rate">70%</div>
+      <p id="counts">7 passed / 3 failed - 10 builds</p>
+      <div class="bar" role="img" aria-label="7 passed and 3 failed">
+        <div class="passed" style="width: 70%"></div><div class="failed" style="width: 30%"></div>
+      </div>
+    </div>
+    <p class="muted">Green = passed; red = failed. Toggle the time window to try the interaction.</p>
+  </main>
+  <script>
+    const examples = { today: [7, 3], week: [43, 7] };
+    document.querySelectorAll("button[data-window]").forEach(button => {
+      button.addEventListener("click", () => {
+        const [passed, failed] = examples[button.dataset.window];
+        const percent = passed / (passed + failed) * 100;
+        document.querySelectorAll("button[data-window]").forEach(item => {
+          item.setAttribute("aria-pressed", String(item === button));
+        });
+        document.querySelector("#rate").textContent = `${percent}%`;
+        document.querySelector("#counts").textContent = `${passed} passed / ${failed} failed - ${passed + failed} builds`;
+        document.querySelector(".bar").setAttribute("aria-label", `${passed} passed and ${failed} failed`);
+        document.querySelector(".passed").style.width = `${percent}%`;
+        document.querySelector(".failed").style.width = `${100 - percent}%`;
+      });
+    });
+  </script>
+</body>
+</html>
